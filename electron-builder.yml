@@ -1,0 +1,23 @@
+appId: com.nocturne.desktop
+productName: Nocturne
+directories:
+  output: dist
+  buildResources: build
+files:
+  - "out/**/*"
+extraResources:
+  - from: resources/mpv/
+    to: mpv/
+    filter:
+      - "**/*"
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico

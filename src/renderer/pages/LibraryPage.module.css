@@ -1,0 +1,193 @@
+.page {
+  padding: 32px;
+  min-height: 100vh;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.title {
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+
+.count {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.sortGroup {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.sortBtn {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  border-radius: var(--radius);
+  transition: all 150ms ease;
+}
+
+.sortBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sortActive {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+
+.sortArrow {
+  font-size: 0.65rem;
+}
+
+.viewToggle {
+  display: flex;
+  gap: 4px;
+}
+
+.viewBtn {
+  padding: 6px 10px;
+  font-size: 1rem;
+  color: var(--text-muted);
+  border-radius: var(--radius);
+  transition: all 150ms ease;
+}
+
+.viewBtn:hover {
+  color: var(--text-primary);
+}
+
+.viewActive {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+
+/* Grid */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 20px 16px;
+  padding: 12px 0;
+}
+
+/* List */
+.list {
+  display: flex;
+  flex-direction: column;
+}
+
+.listRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.listRow:hover {
+  background: var(--bg-hover);
+}
+
+.listRowEven {
+  background: var(--bg-secondary);
+}
+
+.listRowEven:hover {
+  background: var(--bg-hover);
+}
+
+.listThumb {
+  width: 60px;
+  height: 34px;
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--bg-tertiary);
+}
+
+.listThumbImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.listThumbFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.listInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.listName {
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.listMeta {
+  display: flex;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.listPlayed {
+  color: var(--success);
+  font-size: 0.9rem;
+}
+
+/* Empty */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 0;
+  color: var(--text-muted);
+}
+
+.emptyIcon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+}
+
+/* Loading more */
+.loadingMore {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.sentinel {
+  height: 1px;
+}

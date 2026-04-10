@@ -1,0 +1,44 @@
+{
+  "name": "nocturne",
+  "version": "1.0.0",
+  "description": "Desktop Emby media client",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "start": "electron-vite dev",
+    "build": "electron-vite build",
+    "package:win": "electron-vite build && electron-builder --win",
+    "download-mpv": "node scripts/download-mpv.js",
+    "download-modernz": "node scripts/download-modernz.js",
+    "generate-icons": "node scripts/generate-icons.js",
+    "lint": "eslint src/",
+    "setup": "node scripts/setup-dev.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@rollup/rollup-linux-x64-gnu": "^4.60.1",
+    "axios": "^1.15.0",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^1.8.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.14.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^33.4.11",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
+    "eslint": "^10.2.0",
+    "prettier": "^3.8.1",
+    "sharp": "^0.34.5",
+    "typescript": "^6.0.2",
+    "vite": "^7.3.2"
+  },
+  "optionalDependencies": {
+    "@esbuild/linux-x64": "^0.28.0"
+  }
+}

@@ -1,0 +1,105 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: linear-gradient(
+    to right,
+    rgba(0, 0, 0, 0.95) 0%,
+    rgba(0, 0, 0, 0.85) 250px,
+    rgba(0, 0, 0, 0.4) 350px,
+    transparent 500px
+  );
+  animation: overlayIn 250ms ease both;
+}
+
+.overlayOut {
+  animation: overlayOut 200ms ease both;
+}
+
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes overlayOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.nav {
+  position: absolute;
+  top: 60px;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-5) 0;
+  overflow-y: auto;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.nav::-webkit-scrollbar {
+  display: none;
+}
+
+.logo {
+  font-size: var(--text-lg);
+  font-weight: 300;
+  letter-spacing: 3px;
+  color: var(--accent);
+  padding: 0 var(--space-5) var(--space-5);
+}
+
+.divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: var(--space-2) var(--space-5);
+}
+
+.navList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  border-left: 3px solid transparent;
+  transition: all 150ms ease;
+  cursor: pointer;
+  text-decoration: none;
+  background: none;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  width: 100%;
+  text-align: left;
+}
+
+.navItem:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.active {
+  border-left-color: var(--accent);
+  background: rgba(229, 160, 13, 0.1);
+  color: var(--accent);
+}
+
+.navIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex-shrink: 0;
+  color: inherit;
+}

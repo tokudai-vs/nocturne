@@ -1,0 +1,390 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1775760043450,
+  "projectRoot": "/mnt/d/Projects/Nocturne",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "react",
+        "version": "19.2.5",
+        "category": "frontend"
+      },
+      {
+        "name": "react-dom",
+        "version": "19.2.5",
+        "category": "frontend"
+      },
+      {
+        "name": "vite",
+        "version": "7.3.2",
+        "category": "build"
+      }
+    ],
+    "packageManager": "npm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "npm run build",
+    "testCommand": null,
+    "lintCommand": "npm run lint",
+    "devCommand": "npm run start",
+    "scripts": {
+      "start": "electron-vite dev",
+      "build": "electron-vite build",
+      "package:win": "electron-vite build && electron-builder --win",
+      "lint": "eslint src/"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "src"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "out": {
+      "path": "out",
+      "purpose": "Build output",
+      "fileCount": 0,
+      "lastAccessed": 1775760043431,
+      "keyFiles": []
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 0,
+      "lastAccessed": 1775760043437,
+      "keyFiles": []
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "src/main/ipc-handlers.ts",
+      "accessCount": 65,
+      "lastAccessed": 1775825077727,
+      "type": "file"
+    },
+    {
+      "path": "src/main/mpv-manager.ts",
+      "accessCount": 40,
+      "lastAccessed": 1775825043281,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 31,
+      "lastAccessed": 1775825246873,
+      "type": "directory"
+    },
+    {
+      "path": "src/preload/index.ts",
+      "accessCount": 23,
+      "lastAccessed": 1775825034573,
+      "type": "file"
+    },
+    {
+      "path": "src/main/window.ts",
+      "accessCount": 23,
+      "lastAccessed": 1775825060836,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/App.tsx",
+      "accessCount": 21,
+      "lastAccessed": 1775824243973,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/api/types.ts",
+      "accessCount": 20,
+      "lastAccessed": 1775825034923,
+      "type": "file"
+    },
+    {
+      "path": "src/main/index.ts",
+      "accessCount": 19,
+      "lastAccessed": 1775825046935,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 15,
+      "lastAccessed": 1775824325531,
+      "type": "directory"
+    },
+    {
+      "path": "src/renderer/stores/player-store.ts",
+      "accessCount": 11,
+      "lastAccessed": 1775824320733,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 11,
+      "lastAccessed": 1775825252542,
+      "type": "file"
+    },
+    {
+      "path": "src/main/emby-client.ts",
+      "accessCount": 9,
+      "lastAccessed": 1775825031442,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/pages/LibraryPage.tsx",
+      "accessCount": 8,
+      "lastAccessed": 1775800101835,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/pages/DetailPage.module.css",
+      "accessCount": 7,
+      "lastAccessed": 1775764125098,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/ui/MediaCard.module.css",
+      "accessCount": 7,
+      "lastAccessed": 1775764128621,
+      "type": "file"
+    },
+    {
+      "path": "src/main",
+      "accessCount": 7,
+      "lastAccessed": 1775824324119,
+      "type": "directory"
+    },
+    {
+      "path": "src/renderer/pages/HomePage.tsx",
+      "accessCount": 6,
+      "lastAccessed": 1775809942752,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/layout/UserMenu.tsx",
+      "accessCount": 6,
+      "lastAccessed": 1775811098532,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/ui/MediaRow.module.css",
+      "accessCount": 5,
+      "lastAccessed": 1775764127824,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/pages/DetailPage.tsx",
+      "accessCount": 5,
+      "lastAccessed": 1775799455100,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/pages/SearchPage.tsx",
+      "accessCount": 5,
+      "lastAccessed": 1775800102713,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/ui/MpvErrorModal.tsx",
+      "accessCount": 5,
+      "lastAccessed": 1775824310801,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/utils/format.ts",
+      "accessCount": 4,
+      "lastAccessed": 1775799380008,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/layout/TopBar.tsx",
+      "accessCount": 4,
+      "lastAccessed": 1775811086672,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/layout/TopBar.module.css",
+      "accessCount": 4,
+      "lastAccessed": 1775811091078,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/SplashScreen.tsx",
+      "accessCount": 4,
+      "lastAccessed": 1775824239269,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/stores/auth-store.ts",
+      "accessCount": 4,
+      "lastAccessed": 1775824295902,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/pages/HomePage.module.css",
+      "accessCount": 3,
+      "lastAccessed": 1775762287954,
+      "type": "file"
+    },
+    {
+      "path": "electron.vite.config.ts",
+      "accessCount": 3,
+      "lastAccessed": 1775762367413,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/ui/MediaRow.tsx",
+      "accessCount": 3,
+      "lastAccessed": 1775763696668,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/stores/ui-store.ts",
+      "accessCount": 3,
+      "lastAccessed": 1775824263463,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer",
+      "accessCount": 3,
+      "lastAccessed": 1775825264558,
+      "type": "directory"
+    },
+    {
+      "path": "src/renderer/pages/LibraryPage.module.css",
+      "accessCount": 2,
+      "lastAccessed": 1775760102531,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/ui/MediaCard.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1775762231528,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/utils/stream-url.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775763689980,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/stores/library-store.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775810016119,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/pages/SearchPage.module.css",
+      "accessCount": 1,
+      "lastAccessed": 1775760079922,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/splash.html",
+      "accessCount": 1,
+      "lastAccessed": 1775760177548,
+      "type": "file"
+    },
+    {
+      "path": "src/main/splash.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775761806061,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/styles/global.css",
+      "accessCount": 1,
+      "lastAccessed": 1775761823606,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/main.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1775761824030,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/SplashScreen.module.css",
+      "accessCount": 1,
+      "lastAccessed": 1775762056601,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/ui/MediaSourcePicker.module.css",
+      "accessCount": 1,
+      "lastAccessed": 1775762071063,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/ui/MediaSourcePicker.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1775762077400,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/ui/MpvErrorModal.module.css",
+      "accessCount": 1,
+      "lastAccessed": 1775762082386,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/layout/SidebarOverlay.module.css",
+      "accessCount": 1,
+      "lastAccessed": 1775762156381,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/layout/SidebarOverlay.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1775762167012,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/layout/UserMenu.module.css",
+      "accessCount": 1,
+      "lastAccessed": 1775762172672,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/layout/AppShell.module.css",
+      "accessCount": 1,
+      "lastAccessed": 1775762180950,
+      "type": "file"
+    },
+    {
+      "path": "src/renderer/components/layout/AppShell.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1775762185232,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

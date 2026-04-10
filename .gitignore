@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+dist/
+
+# Bundled mpv (large binary, users download separately or we attach to release)
+resources/mpv/
+build/mpv/portable_config/scripts/
+build/mpv/portable_config/fonts/
+
+# Keep config templates but not downloaded binaries
+!build/mpv/portable_config/mpv.conf
+!build/mpv/portable_config/input.conf
+!build/mpv/portable_config/script-opts/modernz.conf
+
+# Electron
+.electron-vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sharp build artifacts
+.sharp/
+
+# TypeScript
+*.tsbuildinfo
