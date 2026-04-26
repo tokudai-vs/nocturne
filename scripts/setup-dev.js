@@ -30,6 +30,14 @@ try {
   console.warn('⚠ ModernZ download failed. Download manually from https://github.com/Samillion/ModernZ');
 }
 
+// Mirror our custom mpv scripts/configs from build/ → resources/
+console.log('\nMirroring mpv portable_config to resources/...');
+try {
+  execSync('node scripts/mirror-mpv-config.js', { stdio: 'inherit' });
+} catch {
+  console.warn('⚠ mpv config mirror failed.');
+}
+
 // Generate icons
 console.log('\nGenerating icons...');
 try {

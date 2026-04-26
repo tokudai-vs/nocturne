@@ -462,6 +462,7 @@ export default function DetailPage() {
                       <span className={styles.versionPillMeta}>
                         {serverLabel ? `[${serverLabel}] ` : ''}{libLabel}
                       </span>
+                      {!isSeries && <Play size={12} className={styles.versionPillPlayIcon} aria-hidden />}
                     </button>
                   );
                 })}

@@ -1,0 +1,72 @@
+.bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  animation: slideUp 200ms ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.message {
+  flex: 1;
+}
+
+.version {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.progressBar {
+  width: 120px;
+  height: 4px;
+  background: var(--bg-secondary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 200ms ease;
+}
+
+.btn {
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: background 150ms ease;
+}
+
+.primaryBtn {
+  composes: btn;
+  background: var(--accent);
+  color: #111;
+}
+
+.primaryBtn:hover {
+  background: var(--accent-hover);
+}
+
+.dismissBtn {
+  composes: btn;
+  color: var(--text-muted);
+}
+
+.dismissBtn:hover {
+  color: var(--text-secondary);
+}

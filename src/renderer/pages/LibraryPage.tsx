@@ -2,10 +2,12 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { FolderOpen, Check, Star } from 'lucide-react';
 import { useLibraryStore } from '../stores/library-store';
+import { useSyncStore } from '../stores/sync-store';
 import { buildImageUrl } from '../utils/image-url';
+import { cachedToBaseItems } from '../utils/cache-adapter';
 import MediaCard from '../components/ui/MediaCard';
 import MediaCardSkeleton from '../components/ui/MediaCardSkeleton';
-import type { BaseItemDto, ItemsResult } from '../api/types';
+import type { BaseItemDto, CachedItem, ItemsResult } from '../api/types';
 import styles from './LibraryPage.module.css';
 
 const SORT_OPTIONS = [
@@ -21,7 +23,8 @@ const PAGE_SIZE = 40;
 export default function LibraryPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { views } = useLibraryStore();
+  const { virtualLibraries, vlibsLoaded, views } = useLibraryStore();
+  const { completed: syncCompleted } = useSyncStore();
 
   const [items, setItems] = useState<BaseItemDto[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -30,11 +33,25 @@ export default function LibraryPage() {
   const [sortBy, setSortBy] = useState('DateCreated');
   const [sortOrder, setSortOrder] = useState<'Descending' | 'Ascending'>('Descending');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [usingCache, setUsingCache] = useState(false);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   const hasMore = items.length < totalCount;
 
-  const libraryName = views.find((v) => v.Id === id)?.Name ?? 'Library';
+  // Resolve library name
+  const vlib = virtualLibraries.find((v) => v.id === id);
+  const viewLib = views.find((v) => v.Id === id);
+  const libraryName = vlib?.name ?? viewLib?.Name ?? 'Library';
+
+  // Orphan vlib URL guard: if vlibs have loaded and the id resolves to neither
+  // a virtual library nor a raw Emby view, the group or library was deleted —
+  // bounce to home instead of rendering an empty page.
+  useEffect(() => {
+    if (!vlibsLoaded) return;
+    if (!id) return;
+    if (vlib || viewLib) return;
+    navigate('/', { replace: true });
+  }, [vlibsLoaded, id, vlib, viewLib, navigate]);
 
   const fetchPage = useCallback(
     async (startIndex: number, replace: boolean) => {
@@ -42,6 +59,29 @@ export default function LibraryPage() {
       if (replace) setLoading(true);
       else setLoadingMore(true);
 
+      // Try vlib (SQLite) first
+      const vlibRes = await window.api.vlib.getItems(id, {
+        startIndex,
+        limit: PAGE_SIZE,
+        sortBy,
+        sortOrder: sortOrder === 'Descending' ? 'desc' : 'asc',
+      });
+
+      if (vlibRes.success) {
+        const data = vlibRes.data as { items: CachedItem[]; total: number };
+        if (data.total > 0 || startIndex > 0) {
+          const converted = cachedToBaseItems(data.items);
+          setItems((prev) => (replace ? converted : [...prev, ...converted]));
+          setTotalCount(data.total);
+          setUsingCache(true);
+          if (replace) setLoading(false);
+          else setLoadingMore(false);
+          return;
+        }
+      }
+
+      // Fallback: Emby API (raw library ID)
+      setUsingCache(false);
       const res = await window.api.library.getItems(id, {
         StartIndex: startIndex,
         Limit: PAGE_SIZE,
@@ -70,6 +110,15 @@ export default function LibraryPage() {
     setTotalCount(0);
     fetchPage(0, true);
   }, [fetchPage]);
+
+  // Refresh when sync completes
+  useEffect(() => {
+    if (syncCompleted) {
+      setItems([]);
+      setTotalCount(0);
+      fetchPage(0, true);
+    }
+  }, [syncCompleted]);
 
   // Infinite scroll via IntersectionObserver
   useEffect(() => {

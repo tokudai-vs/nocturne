@@ -70,6 +70,10 @@ class SyncEngine extends EventEmitter {
   private dedupRunning = false;
   private currentProgress: SyncProgress | null = null;
   private currentPhase: string | null = null;
+  // Handle for the pending background dedup rebuild scheduled by checkDedupDrift.
+  // Tracked so a manual runDedup (or a second drift check) can cancel it before
+  // it fires, avoiding duplicate dedup runs racing each other.
+  private driftTimer: ReturnType<typeof setTimeout> | null = null;
 
   getStatus(): SyncStatus {
     const raw = getSyncState('syncStatus');
@@ -102,6 +106,11 @@ class SyncEngine extends EventEmitter {
     if (this.dedupRunning) {
       log('runDedup: already running');
       return { success: false, error: 'Dedup is already running' };
+    }
+    // If a drift-triggered rebuild was pending, cancel it — this run supersedes it.
+    if (this.driftTimer) {
+      clearTimeout(this.driftTimer);
+      this.driftTimer = null;
     }
     this.dedupRunning = true;
     const prevPhase = this.currentPhase;
@@ -143,8 +152,13 @@ class SyncEngine extends EventEmitter {
     if (!last) return;
     const ageDays = (Date.now() - new Date(last).getTime()) / (1000 * 60 * 60 * 24);
     if (ageDays > maxAgeDays) {
+      // Clear any prior pending rebuild so repeated checks don't queue multiple.
+      if (this.driftTimer) clearTimeout(this.driftTimer);
       log(`checkDedupDrift: last dedup was ${ageDays.toFixed(1)} days ago — scheduling background rebuild`);
-      setTimeout(() => { void this.runDedup(); }, 30000);
+      this.driftTimer = setTimeout(() => {
+        this.driftTimer = null;
+        void this.runDedup();
+      }, 30000);
     }
   }
 
@@ -696,6 +710,9 @@ class SyncEngine extends EventEmitter {
   private async precacheHomepageImages(libraries: LibraryView[]): Promise<void> {
     this.emitProgress('images', 0, 1, 'Caching homepage images...');
 
+    // Image URLs embed the api_key for the HTTP GET; image-cache.ts strips it
+    // before using the URL as the SQLite cache key, so the token never lands
+    // on disk even though we include it here for fetch.
     const imageUrls: string[] = [];
     const serverUrl = embyClient.baseUrl;
     const token = embyClient.token;

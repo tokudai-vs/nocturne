@@ -1,32 +1,58 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Home, Film, Tv, Music, BookOpen, Archive, Folder, Settings } from 'lucide-react';
+import { Home, Film, Tv, Music, BookOpen, Archive, Folder, Star, Settings } from 'lucide-react';
 import { useLibraryStore } from '../../stores/library-store';
+import { useSettingsStore } from '../../stores/settings-store';
+import { useSyncStore } from '../../stores/sync-store';
 import { useUiStore } from '../../stores/ui-store';
+import type { VirtualLibrary } from '../../api/types';
 import styles from './SidebarOverlay.module.css';
 
 const ICON_MAP: Record<string, React.ReactNode> = {
-  home: <Home size={18} />,
-  movies: <Film size={18} />,
-  tvshows: <Tv size={18} />,
-  music: <Music size={18} />,
-  books: <BookOpen size={18} />,
-  boxsets: <Archive size={18} />,
+  Film: <Film size={18} />,
+  Tv: <Tv size={18} />,
+  Music: <Music size={18} />,
+  BookOpen: <BookOpen size={18} />,
+  Archive: <Archive size={18} />,
+  Folder: <Folder size={18} />,
+  Star: <Star size={18} />,
 };
+
+function iconForVlib(vlib: VirtualLibrary): React.ReactNode {
+  return ICON_MAP[vlib.icon] ?? <Folder size={18} />;
+}
 
 function iconForCollection(name: string): React.ReactNode {
   const key = name.toLowerCase().replace(/\s/g, '');
-  return ICON_MAP[key] ?? <Folder size={18} />;
+  if (key.includes('movie')) return <Film size={18} />;
+  if (key.includes('tv') || key.includes('show') || key.includes('series')) return <Tv size={18} />;
+  if (key.includes('music')) return <Music size={18} />;
+  if (key.includes('book')) return <BookOpen size={18} />;
+  if (key.includes('boxset') || key.includes('collection')) return <Archive size={18} />;
+  return <Folder size={18} />;
 }
 
 export default function SidebarOverlay() {
   const { sidebarOpen, closeSidebar } = useUiStore();
-  const { views, fetchViews } = useLibraryStore();
+  const { virtualLibraries, vlibsLoaded, fetchVirtualLibraries, views, fetchViews } = useLibraryStore();
+  const settings = useSettingsStore((s) => s.settings);
+  const { completed: syncCompleted } = useSyncStore();
+  const isCombined = settings?.libraryMode === 'combined';
   const [closing, setClosing] = useState(false);
 
   useEffect(() => {
-    if (sidebarOpen && views.length === 0) fetchViews();
-  }, [sidebarOpen, views.length, fetchViews]);
+    if (sidebarOpen) {
+      fetchVirtualLibraries();
+      if (!isCombined && views.length === 0) fetchViews();
+    }
+  }, [sidebarOpen, fetchVirtualLibraries, views.length, fetchViews, isCombined]);
+
+  // Refresh virtual libraries when sync completes
+  useEffect(() => {
+    if (syncCompleted) {
+      fetchVirtualLibraries();
+    }
+  }, [syncCompleted, fetchVirtualLibraries]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -50,11 +76,15 @@ export default function SidebarOverlay() {
 
   if (!sidebarOpen) return null;
 
+  // Use virtual libraries if available, else fall back to raw views
+  const hasVlibs = vlibsLoaded && virtualLibraries.length > 0;
+  const mappedVlibs = virtualLibraries.filter((v) => v.isVirtual);
+  const unmappedVlibs = virtualLibraries.filter((v) => !v.isVirtual);
+
   return (
     <div
       className={`${styles.overlay} ${closing ? styles.overlayOut : ''}`}
       onClick={(e) => {
-        // Close if clicking the transparent area (right side)
         if ((e.target as HTMLElement).classList.contains(styles.overlay)) handleClose();
       }}
     >
@@ -71,23 +101,61 @@ export default function SidebarOverlay() {
             <span className={styles.navIcon}><Home size={18} /></span>
             Home
           </NavLink>
-          {views.map((v) => (
-            <NavLink
-              key={v.Id}
-              to={`/library/${v.Id}`}
-              className={({ isActive }) => `${styles.navItem} ${isActive ? styles.active : ''}`}
-              onClick={handleNav}
-            >
-              <span className={styles.navIcon}>{iconForCollection(v.Name)}</span>
-              {v.Name}
-            </NavLink>
-          ))}
+
+          {hasVlibs ? (
+            <>
+              {mappedVlibs.map((vlib) => (
+                <NavLink
+                  key={vlib.id}
+                  to={`/library/${vlib.id}`}
+                  className={({ isActive }) => `${styles.navItem} ${isActive ? styles.active : ''}`}
+                  onClick={handleNav}
+                >
+                  <span className={styles.navIcon}>{iconForVlib(vlib)}</span>
+                  {vlib.name}
+                </NavLink>
+              ))}
+              {unmappedVlibs.length > 0 && (
+                <>
+                  <div className={styles.divider} />
+                  {unmappedVlibs.map((vlib) => (
+                    <NavLink
+                      key={vlib.id}
+                      to={`/library/${vlib.id}`}
+                      className={({ isActive }) => `${styles.navItem} ${isActive ? styles.active : ''}`}
+                      onClick={handleNav}
+                    >
+                      <span className={styles.navIcon}>{iconForVlib(vlib)}</span>
+                      {vlib.name}
+                    </NavLink>
+                  ))}
+                </>
+              )}
+            </>
+          ) : !isCombined ? (
+            // Fallback: raw Emby views (separate mode only)
+            views.map((v) => (
+              <NavLink
+                key={v.Id}
+                to={`/library/${v.Id}`}
+                className={({ isActive }) => `${styles.navItem} ${isActive ? styles.active : ''}`}
+                onClick={handleNav}
+              >
+                <span className={styles.navIcon}>{iconForCollection(v.Name)}</span>
+                {v.Name}
+              </NavLink>
+            ))
+          ) : null}
         </div>
         <div className={styles.divider} />
-        <button className={styles.navItem} onClick={() => { handleClose(); }}>
+        <NavLink
+          to="/settings"
+          className={({ isActive }) => `${styles.navItem} ${isActive ? styles.active : ''}`}
+          onClick={handleNav}
+        >
           <span className={styles.navIcon}><Settings size={18} /></span>
           Settings
-        </button>
+        </NavLink>
       </nav>
     </div>
   );

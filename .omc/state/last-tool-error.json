@@ -1,7 +1,0 @@
-{
-  "tool_name": "Edit",
-  "tool_input_preview": "{\"file_path\":\"/mnt/d/Projects/Nocturne/package.json\",\"old_string\":\"    \\\"lint\\\": \\\"eslint src/\\\"\",\"new_string\":\"    \\\"lint\\\": \\\"eslint src/\\\",\\n    \\\"setup\\\": \\\"node scripts/setup-dev.js\\\"\",\"replace_a...",
-  "error": "ENOENT: no such file or directory, statx '/mnt/d/Projects/Nocturne/package.json'",
-  "timestamp": "2026-04-10T12:47:23.637Z",
-  "retry_count": 1
-}

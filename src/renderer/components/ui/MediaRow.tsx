@@ -37,6 +37,7 @@ export default function MediaRow({ title, items, orientation = 'portrait', loadi
       </div>
       <div className={styles.rowWrap}>
         <div className={styles.row} ref={scrollRef}>
+          <div className={styles.edgeSpacer} aria-hidden="true" />
           {loading
             ? Array.from({ length: 8 }).map((_, i) => (
                 <MediaCardSkeleton key={i} orientation={orientation} />
@@ -49,6 +50,7 @@ export default function MediaRow({ title, items, orientation = 'portrait', loadi
                   onClick={onItemClick ? () => onItemClick(item) : undefined}
                 />
               ))}
+          <div className={styles.edgeSpacer} aria-hidden="true" />
         </div>
         <button className={`${styles.arrow} ${styles.arrowLeft}`} onClick={() => scroll('left')}>
           <ChevronLeft size={24} />

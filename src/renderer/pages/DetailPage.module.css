@@ -472,6 +472,12 @@
   flex: none;
 }
 
+.versionPillPlayIcon {
+  flex: none;
+  opacity: 0.8;
+  margin-left: 2px;
+}
+
 .versionPillActive .versionPillDot {
   background: #111;
 }

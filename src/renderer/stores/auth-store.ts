@@ -1,19 +1,12 @@
 import { create } from 'zustand';
-import type { EmbyServerInfo, EmbyUser, AuthResult } from '../api/types';
-
-const SESSION_KEY = 'nocturne_session';
-
-interface SavedSession {
-  serverUrl: string;
-  accessToken: string;
-  userId: string;
-}
+import type { EmbyServerInfo, EmbyUser, AuthResult, ServerConfig } from '../api/types';
 
 interface AuthState {
   serverUrl: string | null;
   serverInfo: EmbyServerInfo | null;
   user: EmbyUser | null;
   accessToken: string | null;
+  activeServerId: string | null;
   isAuthenticated: boolean;
   isConnecting: boolean;
   error: string | null;
@@ -21,6 +14,7 @@ interface AuthState {
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   loadSavedSession: () => Promise<boolean>;
+  switchServer: (serverId: string) => Promise<boolean>;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -28,6 +22,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   serverInfo: null,
   user: null,
   accessToken: null,
+  activeServerId: null,
   isAuthenticated: false,
   isConnecting: false,
   error: null,
@@ -49,17 +44,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (res.success) {
       const auth = res.data as AuthResult;
       const serverUrl = get().serverUrl!;
-      localStorage.setItem(
-        SESSION_KEY,
-        JSON.stringify({
-          serverUrl,
-          accessToken: auth.AccessToken,
-          userId: auth.User.Id,
-        }),
-      );
+      const serverInfo = get().serverInfo!;
+
+      // Save server config via multi-server manager
+      const serverRes = await window.api.servers.add({
+        name: serverInfo.ServerName,
+        url: serverUrl,
+        userId: auth.User.Id,
+        username: auth.User.Name,
+        accessToken: auth.AccessToken,
+        version: serverInfo.Version,
+      });
+
+      const serverId = serverRes.success ? (serverRes.data as ServerConfig).id : null;
+
       set({
         user: auth.User,
         accessToken: auth.AccessToken,
+        activeServerId: serverId,
         isAuthenticated: true,
         isConnecting: false,
       });
@@ -71,10 +73,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async () => {
     await window.api.auth.logout();
-    localStorage.removeItem(SESSION_KEY);
     set({
       user: null,
       accessToken: null,
+      activeServerId: null,
       isAuthenticated: false,
       serverUrl: null,
       serverInfo: null,
@@ -82,29 +84,56 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loadSavedSession: async () => {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return false;
-
     try {
-      const session: SavedSession = JSON.parse(raw);
+      // Session credentials are stored only in the main process (settings.json)
+      const activeRes = await window.api.servers.getActive();
+      if (!activeRes.success || !activeRes.data) return false;
+      const server = activeRes.data as ServerConfig;
+
       const res = await window.api.auth.restore(
-        session.serverUrl,
-        session.accessToken,
-        session.userId,
+        server.url,
+        server.accessToken,
+        server.userId,
       );
       if (res.success) {
         set({
-          serverUrl: session.serverUrl,
-          accessToken: session.accessToken,
+          serverUrl: server.url,
+          accessToken: server.accessToken,
           user: res.data as EmbyUser,
+          activeServerId: server.id,
           isAuthenticated: true,
         });
         return true;
       }
     } catch {
-      // Session invalid, clear it
+      // Session invalid
     }
-    localStorage.removeItem(SESSION_KEY);
+    return false;
+  },
+
+  switchServer: async (serverId: string) => {
+    set({ isConnecting: true, error: null });
+    const res = await window.api.servers.switch(serverId);
+    if (res.success && res.data) {
+      // Refresh user info from the switched server
+      const userRes = await window.api.user.getCurrentUser();
+      const activeRes = await window.api.servers.getActive();
+      const server = activeRes.success ? activeRes.data as ServerConfig : null;
+
+      if (userRes.success && server) {
+        set({
+          serverUrl: server.url,
+          serverInfo: { ServerName: server.name, Version: server.version, Id: '' },
+          user: userRes.data as EmbyUser,
+          accessToken: server.accessToken,
+          activeServerId: server.id,
+          isAuthenticated: true,
+          isConnecting: false,
+        });
+        return true;
+      }
+    }
+    set({ isConnecting: false, error: 'Failed to switch server — token may have expired' });
     return false;
   },
 }));

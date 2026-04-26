@@ -1,87 +1,245 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play } from 'lucide-react';
+import { Play, RefreshCw } from 'lucide-react';
 import { useLibraryStore } from '../stores/library-store';
+import { useSettingsStore } from '../stores/settings-store';
+import { useSyncStore } from '../stores/sync-store';
 import { usePlay } from '../hooks/use-play';
+import { useAppVisibility } from '../hooks/use-app-visibility';
 import { buildImageUrl } from '../utils/image-url';
+import { cachedToBaseItem, cachedToBaseItems } from '../utils/cache-adapter';
 import { formatRuntime } from '../utils/format';
 import MediaRow from '../components/ui/MediaRow';
 import RatingBadge from '../components/ui/RatingBadge';
 import Skeleton from '../components/ui/Skeleton';
-import type { BaseItemDto } from '../api/types';
+import type { BaseItemDto, CachedItem, VirtualLibrary } from '../api/types';
 import styles from './HomePage.module.css';
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { views, resumeItems, nextUpItems, fetchViews, fetchResume, fetchNextUp, resumeLoading, nextUpLoading } =
-    useLibraryStore();
+  const {
+    virtualLibraries, vlibsLoaded, fetchVirtualLibraries,
+    views, fetchViews,
+    resumeItems, nextUpItems, fetchResume, fetchNextUp,
+    resumeLoading, nextUpLoading,
+  } = useLibraryStore();
+  const { completed: syncCompleted, running: syncRunning } = useSyncStore();
+  const settings = useSettingsStore((s) => s.settings);
+  const isCombined = settings?.libraryMode === 'combined';
   const { play } = usePlay();
+  const { visible: appVisible } = useAppVisibility();
+  const powerMode = settings?.powerMode || 'balanced';
 
-  const [latestByLib, setLatestByLib] = useState<Record<string, BaseItemDto[]>>({});
+  const [latestByVlib, setLatestByVlib] = useState<Record<string, BaseItemDto[]>>({});
   const [latestLoading, setLatestLoading] = useState(true);
   const [heroItems, setHeroItems] = useState<BaseItemDto[]>([]);
   const [heroIndex, setHeroIndex] = useState(0);
   const [heroImgLoaded, setHeroImgLoaded] = useState(false);
+  const [firstSyncBanner, setFirstSyncBanner] = useState(false);
   const heroTimer = useRef<ReturnType<typeof setInterval>>(undefined);
   const readyFired = useRef(false);
+  const heroLoaded = useRef(false);
 
+  // Initial data load — wait for settings so mode-aware fetches take the right path
+  const settingsLoaded = settings !== null;
   useEffect(() => {
+    if (!settingsLoaded) return;
+    fetchVirtualLibraries();
     fetchViews();
     fetchResume();
-    fetchNextUp();
-  }, [fetchViews, fetchResume, fetchNextUp]);
+    loadHeroItems();
+    if (!isCombined) {
+      fetchNextUp();
+    }
+  }, [settingsLoaded]);
 
+  // Refresh when sync completes
   useEffect(() => {
-    if (views.length === 0) return;
+    if (syncCompleted) {
+      fetchVirtualLibraries();
+      fetchResume();
+      loadHeroItems();
+      if (!isCombined) fetchNextUp();
+    }
+  }, [syncCompleted]);
+
+  // Load latest items when vlibs are available
+  useEffect(() => {
+    if (!vlibsLoaded) return;
+    if (isCombined) {
+      // Combined mode: trust cache ONLY when sync reports 'complete'. A partial
+      // cache (first server done, second in progress) would otherwise render as
+      // "only active server's content". While partial/in-progress, fan out to
+      // every server so all libraries populate.
+      (async () => {
+        const statusRes = await window.api.sync.getStatus();
+        const complete = statusRes.success && statusRes.data?.syncStatus === 'complete';
+        if (complete && virtualLibraries.length > 0) {
+          loadLatestFromVlibs(virtualLibraries);
+          setFirstSyncBanner(false);
+        } else {
+          loadLatestFromAllServers(virtualLibraries);
+          if (syncRunning) setFirstSyncBanner(true);
+        }
+      })();
+    } else if (virtualLibraries.length > 0) {
+      loadLatestFromVlibs(virtualLibraries);
+      setFirstSyncBanner(false);
+    } else if (views.length > 0) {
+      // Separate mode, cache empty — fall back to active server's API
+      loadLatestFromViews(views);
+      if (syncRunning) setFirstSyncBanner(true);
+    }
+  }, [vlibsLoaded, virtualLibraries, views, isCombined]);
+
+  async function loadHeroItems() {
+    if (heroLoaded.current) return;
+    // Try cache first
+    const res = await window.api.vlib.getHeroes(undefined, 6);
+    if (res.success) {
+      const cached = res.data as CachedItem[];
+      if (cached.length > 0) {
+        setHeroItems(cachedToBaseItems(cached));
+        heroLoaded.current = true;
+        fireReady();
+        return;
+      }
+    }
+    // Will be populated after sync or by latest items fallback
+  }
+
+  async function loadLatestFromVlibs(vlibs: VirtualLibrary[]) {
     setLatestLoading(true);
-    Promise.all(
-      views.map(async (v) => {
-        const res = await window.api.library.getLatest(v.Id, 20);
-        return { id: v.Id, items: res.success ? (res.data as BaseItemDto[]) : [] };
+    const results = await Promise.all(
+      vlibs.map(async (vlib) => {
+        const res = await window.api.vlib.getLatest(vlib.id, 20);
+        const items = res.success ? cachedToBaseItems(res.data as CachedItem[]) : [];
+        return { id: vlib.id, name: vlib.name, items };
       }),
-    ).then((results) => {
-      const map: Record<string, BaseItemDto[]> = {};
-      const candidates: BaseItemDto[] = [];
-      for (const r of results) {
-        map[r.id] = r.items;
-        for (const it of r.items) {
-          if (it.BackdropImageTags && it.BackdropImageTags.length > 0) {
-            candidates.push(it);
-          }
+    );
+
+    const map: Record<string, BaseItemDto[]> = {};
+    const heroCandidates: BaseItemDto[] = [];
+    for (const r of results) {
+      map[r.id] = r.items;
+      for (const it of r.items) {
+        if (it.BackdropImageTags && it.BackdropImageTags.length > 0) {
+          heroCandidates.push(it);
         }
       }
-      setLatestByLib(map);
-      setLatestLoading(false);
-      const shuffled = candidates.sort(() => Math.random() - 0.5);
-      setHeroItems(shuffled.slice(0, 6));
+    }
+    setLatestByVlib(map);
+    setLatestLoading(false);
 
-      // Signal splash screen that data is ready
-      if (!readyFired.current) {
-        readyFired.current = true;
-        window.dispatchEvent(new Event('nocturne:ready'));
+    // If hero items haven't loaded from cache, use latest candidates
+    if (!heroLoaded.current && heroCandidates.length > 0) {
+      const shuffled = heroCandidates.sort(() => Math.random() - 0.5).slice(0, 6);
+      setHeroItems(shuffled);
+      heroLoaded.current = true;
+    }
+
+    fireReady();
+  }
+
+  async function loadLatestFromViews(viewsList: BaseItemDto[]) {
+    setLatestLoading(true);
+    const results = await Promise.all(
+      viewsList.map(async (v) => {
+        const res = await window.api.library.getLatest(v.Id, 20);
+        return { id: v.Id, name: v.Name, items: res.success ? (res.data as BaseItemDto[]) : [] };
+      }),
+    );
+
+    const map: Record<string, BaseItemDto[]> = {};
+    const heroCandidates: BaseItemDto[] = [];
+    for (const r of results) {
+      map[r.id] = r.items;
+      for (const it of r.items) {
+        if (it.BackdropImageTags && it.BackdropImageTags.length > 0) {
+          heroCandidates.push(it);
+        }
       }
-    });
-  }, [views]);
+    }
+    setLatestByVlib(map);
+    setLatestLoading(false);
 
-  // Auto-rotate hero
+    if (!heroLoaded.current && heroCandidates.length > 0) {
+      const shuffled = heroCandidates.sort(() => Math.random() - 0.5).slice(0, 6);
+      setHeroItems(shuffled);
+      heroLoaded.current = true;
+    }
+
+    fireReady();
+  }
+
+  async function loadLatestFromAllServers(vlibs: VirtualLibrary[]) {
+    setLatestLoading(true);
+    const res = await window.api.library.getAllServersLatest(20);
+    if (!res.success || !res.data) {
+      setLatestLoading(false);
+      return;
+    }
+
+    // Index multi-server response by raw libraryId
+    const byLibrary: Record<string, BaseItemDto[]> = {};
+    for (const lib of res.data.libraries) {
+      byLibrary[lib.libraryId] = lib.items;
+    }
+
+    // Project onto vlibs — each vlib aggregates its constituent library IDs.
+    // Works for Option B per-server fallback (single libraryId) and for real
+    // group mappings (multiple libraryIds).
+    const map: Record<string, BaseItemDto[]> = {};
+    const heroCandidates: BaseItemDto[] = [];
+    for (const vlib of vlibs) {
+      const items: BaseItemDto[] = [];
+      for (const lid of vlib.libraryIds) {
+        if (byLibrary[lid]) items.push(...byLibrary[lid]);
+      }
+      map[vlib.id] = items;
+      for (const it of items) {
+        if (it.BackdropImageTags && it.BackdropImageTags.length > 0) {
+          heroCandidates.push(it);
+        }
+      }
+    }
+    setLatestByVlib(map);
+    setLatestLoading(false);
+
+    if (!heroLoaded.current && heroCandidates.length > 0) {
+      const shuffled = heroCandidates.sort(() => Math.random() - 0.5).slice(0, 6);
+      setHeroItems(shuffled);
+      heroLoaded.current = true;
+    }
+
+    fireReady();
+  }
+
+  function fireReady() {
+    if (!readyFired.current) {
+      readyFired.current = true;
+      window.dispatchEvent(new Event('nocturne:ready'));
+    }
+  }
+
+  // Auto-rotate hero (pause when hidden in balanced/efficiency mode)
   useEffect(() => {
     if (heroItems.length <= 1) return;
+    if (powerMode !== 'performance' && !appVisible) return;
     heroTimer.current = setInterval(() => {
       setHeroIndex((i) => (i + 1) % heroItems.length);
       setHeroImgLoaded(false);
     }, 10000);
     return () => clearInterval(heroTimer.current);
-  }, [heroItems]);
+  }, [heroItems, appVisible, powerMode]);
 
   const hero = heroItems[heroIndex];
 
-  const findViewId = useCallback(
-    (type: string) => views.find((v) => v.Name.toLowerCase().includes(type.toLowerCase()))?.Id,
-    [views],
-  );
-
-  const moviesId = findViewId('movie');
-  const tvId = findViewId('tv') ?? findViewId('series') ?? findViewId('show');
+  // Determine display libraries: virtual if available, else raw views
+  const useVlibs = vlibsLoaded && virtualLibraries.length > 0;
+  const displayLibs = useVlibs
+    ? virtualLibraries.map((v) => ({ id: v.id, name: v.name }))
+    : views.map((v) => ({ id: v.Id, name: v.Name }));
 
   const handlePlayHero = () => {
     if (hero) play(hero);
@@ -93,6 +251,14 @@ export default function HomePage() {
 
   return (
     <div className={`${styles.page} fade-in`}>
+      {/* First sync banner */}
+      {firstSyncBanner && (
+        <div className={styles.syncBanner}>
+          <RefreshCw size={14} className={styles.syncBannerIcon} />
+          Building your library index... Browse normally while this completes.
+        </div>
+      )}
+
       {/* Hero Banner */}
       {hero ? (
         <div className={styles.hero}>
@@ -156,39 +322,21 @@ export default function HomePage() {
           loading={resumeLoading}
           onItemClick={handleContinueWatchingClick}
         />
-        <MediaRow title="Next Up" items={nextUpItems} orientation="landscape" loading={nextUpLoading} />
-        {moviesId && (
-          <MediaRow
-            title="Latest Movies"
-            items={latestByLib[moviesId] ?? []}
-            orientation="portrait"
-            loading={latestLoading}
-            onSeeAll={() => navigate(`/library/${moviesId}`)}
-          />
+        {!isCombined && (
+          <MediaRow title="Next Up" items={nextUpItems} orientation="landscape" loading={nextUpLoading} />
         )}
-        {tvId && (
-          <MediaRow
-            title="Latest TV Shows"
-            items={latestByLib[tvId] ?? []}
-            orientation="portrait"
-            loading={latestLoading}
-            onSeeAll={() => navigate(`/library/${tvId}`)}
-          />
+        {displayLibs.map((lib) =>
+          (latestByVlib[lib.id]?.length ?? 0) > 0 ? (
+            <MediaRow
+              key={lib.id}
+              title={`Latest ${lib.name}`}
+              items={latestByVlib[lib.id] ?? []}
+              orientation="portrait"
+              loading={latestLoading}
+              onSeeAll={() => navigate(`/library/${lib.id}`)}
+            />
+          ) : null,
         )}
-        {views
-          .filter((v) => v.Id !== moviesId && v.Id !== tvId)
-          .map((v) =>
-            (latestByLib[v.Id]?.length ?? 0) > 0 ? (
-              <MediaRow
-                key={v.Id}
-                title={`Latest ${v.Name}`}
-                items={latestByLib[v.Id] ?? []}
-                orientation="portrait"
-                loading={latestLoading}
-                onSeeAll={() => navigate(`/library/${v.Id}`)}
-              />
-            ) : null,
-          )}
       </div>
     </div>
   );

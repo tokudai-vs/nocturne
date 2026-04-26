@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth-store';
-import type { PublicUser } from '../api/types';
+import type { PublicUser, ServerConfig } from '../api/types';
 import { buildImageUrl } from '../utils/image-url';
 import styles from './LoginPage.module.css';
 
@@ -21,7 +21,7 @@ function friendlyError(msg: string): string {
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { serverInfo, serverUrl, isAuthenticated, isConnecting, error, connectToServer, login } = useAuthStore();
+  const { serverInfo, serverUrl, isAuthenticated, isConnecting, error, connectToServer, login, switchServer } = useAuthStore();
 
   const [step, setStep] = useState<'server' | 'users'>(serverInfo ? 'users' : 'server');
   const [url, setUrl] = useState(() => localStorage.getItem(SERVER_URL_KEY) ?? '');
@@ -31,10 +31,18 @@ export default function LoginPage() {
   const [manualMode, setManualMode] = useState(false);
   const [manualUser, setManualUser] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [savedServers, setSavedServers] = useState<ServerConfig[]>([]);
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (isAuthenticated) navigate('/', { replace: true });
   }, [isAuthenticated, navigate]);
+
+  useEffect(() => {
+    window.api.servers.getAll().then((res) => {
+      if (res.success && res.data) setSavedServers(res.data as ServerConfig[]);
+    });
+  }, []);
 
   const handleConnect = async (e: FormEvent) => {
     e.preventDefault();
@@ -73,6 +81,23 @@ export default function LoginPage() {
     if (!ok) setLoginError(error ?? 'Invalid password');
   };
 
+  const handleSavedServerConnect = async (server: ServerConfig) => {
+    setSwitchingId(server.id);
+    setLoginError('');
+    const ok = await switchServer(server.id);
+    setSwitchingId(null);
+    if (!ok) {
+      setLoginError(`Session expired for ${server.name}. Please re-login.`);
+      // Pre-fill the URL so they can reconnect easily
+      setUrl(server.url);
+    }
+  };
+
+  const handleRemoveServer = async (serverId: string) => {
+    await window.api.servers.remove(serverId);
+    setSavedServers((prev) => prev.filter((s) => s.id !== serverId));
+  };
+
   const goBack = () => {
     setStep('server');
     setSelectedUser(null);
@@ -86,21 +111,60 @@ export default function LoginPage() {
         <h1 className={styles.logo}>NOCTURNE</h1>
 
         {step === 'server' && (
-          <form onSubmit={handleConnect} className={styles.form}>
-            <label className={styles.label}>Server Address</label>
-            <input
-              type="text"
-              className={styles.input}
-              placeholder="http://192.168.1.100:8096"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              autoFocus
-            />
-            {error && <div className={styles.error}>{friendlyError(error)}</div>}
-            <button type="submit" className={styles.btn} disabled={isConnecting}>
-              {isConnecting ? 'Connecting...' : 'Connect'}
-            </button>
-          </form>
+          <>
+            {savedServers.length > 0 && (
+              <div className={styles.savedServers}>
+                <p className={styles.subtitle}>Your Servers</p>
+                <div className={styles.serverList}>
+                  {savedServers.map((s) => (
+                    <div key={s.id} className={styles.savedServerCard}>
+                      <button
+                        className={styles.savedServerInfo}
+                        onClick={() => handleSavedServerConnect(s)}
+                        disabled={switchingId !== null}
+                      >
+                        <div className={styles.savedServerName}>{s.name}</div>
+                        <div className={styles.savedServerMeta}>
+                          {s.username} &middot; {s.url.replace(/^https?:\/\//, '')}
+                        </div>
+                      </button>
+                      {switchingId === s.id ? (
+                        <span className={styles.switchingLabel}>Connecting...</span>
+                      ) : (
+                        <button
+                          className={styles.removeServerBtn}
+                          onClick={() => handleRemoveServer(s.id)}
+                          title="Remove server"
+                        >
+                          &times;
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {loginError && <div className={styles.error}>{loginError}</div>}
+                <div className={styles.divider}>
+                  <span>or add a new server</span>
+                </div>
+              </div>
+            )}
+
+            <form onSubmit={handleConnect} className={styles.form}>
+              <label className={styles.label}>Server Address</label>
+              <input
+                type="text"
+                className={styles.input}
+                placeholder="http://192.168.1.100:8096"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                autoFocus
+              />
+              {error && <div className={styles.error}>{friendlyError(error)}</div>}
+              <button type="submit" className={styles.btn} disabled={isConnecting}>
+                {isConnecting ? 'Connecting...' : 'Connect'}
+              </button>
+            </form>
+          </>
         )}
 
         {step === 'users' && (

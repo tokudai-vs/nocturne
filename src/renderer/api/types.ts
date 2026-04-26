@@ -30,6 +30,7 @@ export interface PublicUser {
 export interface BaseItemDto {
   Id: string;
   Name: string;
+  serverId?: string;
   Type:
     | 'Movie'
     | 'Series'
@@ -112,6 +113,180 @@ export interface ItemsResult {
 
 export type ImageType = 'Primary' | 'Backdrop' | 'Logo' | 'Thumb' | 'Banner';
 
+// Sync types
+export interface SyncProgress {
+  phase: string;
+  current: number;
+  total: number;
+  detail: string;
+  librariesDone?: number;
+  librariesTotal?: number;
+  percent: number;
+}
+
+export interface SyncStatus {
+  running: boolean;
+  phase: string | null;
+  progress: SyncProgress | null;
+  lastFullSync: string | null;
+  hasCachedData: boolean;
+  syncStatus: 'never' | 'in-progress' | 'partial' | 'complete';
+  dedupStatus: 'never' | 'in-progress' | 'complete' | 'failed';
+  lastDedupBuild: string | null;
+  dedupRunning: boolean;
+}
+
+// Cache types
+export interface CachedItem {
+  emby_id: string;
+  server_id: string;
+  library_id: string;
+  library_name: string | null;
+  type: string;
+  name: string;
+  sort_name: string | null;
+  overview: string | null;
+  tmdb_id: string | null;
+  imdb_id: string | null;
+  tvdb_id: string | null;
+  production_year: number | null;
+  premiere_date: string | null;
+  community_rating: number | null;
+  official_rating: string | null;
+  runtime_ticks: number | null;
+  genres: string | null;
+  studios: string | null;
+  image_tags: string | null;
+  backdrop_tags: string | null;
+  series_id: string | null;
+  series_name: string | null;
+  season_id: string | null;
+  season_number: number | null;
+  episode_number: number | null;
+  media_sources: string | null;
+  played: number;
+  play_count: number;
+  is_favorite: number;
+  playback_position_ticks: number;
+  played_percentage: number;
+  date_created: string | null;
+  date_modified: string | null;
+  cached_at: string | null;
+  dedup_group_id: string | null;
+  version_count?: number;
+}
+
+export interface CacheFilters {
+  type?: string;
+  libraryId?: string;
+  limit?: number;
+  offset?: number;
+  sortBy?: string;
+  sortOrder?: 'ASC' | 'DESC';
+  search?: string;
+  isFavorite?: boolean;
+  isPlayed?: boolean;
+}
+
+export interface DbStats {
+  totalItems: number;
+  itemsByLibrary: { library_id: string; library_name: string | null; count: number }[];
+  lastSyncTime: string | null;
+}
+
+// Dedup types
+export interface DedupStats {
+  groupCount: number;
+  mergedItems: number;
+}
+
+export interface EpisodeVersionGroup {
+  season_number: number;
+  episode_number: number;
+  items: CachedItem[];
+}
+
+// Settings types
+export interface LibraryMapping {
+  name: string;
+  icon: string;
+  libraryIds: string[];
+}
+
+export interface ServerConfig {
+  id: string;
+  name: string;
+  url: string;
+  userId: string;
+  username: string;
+  accessToken: string;
+  version: string;
+  addedAt: string;
+  lastConnected: string;
+}
+
+export interface VirtualLibrary {
+  id: string;
+  name: string;
+  icon: string;
+  libraryIds: string[];
+  isVirtual: boolean;
+  totalItems: number;
+}
+
+export interface CombinedLibraryRef {
+  serverId: string;
+  serverName: string;
+  libraryId: string;
+  libraryName: string;
+}
+
+export interface CombinedMapping {
+  name: string;
+  icon: string;
+  libraries: CombinedLibraryRef[];
+}
+
+export interface NocturneSettings {
+  servers: ServerConfig[];
+  activeServerId: string | null;
+  libraryMappings: Record<string, Record<string, LibraryMapping>>;
+  libraryMode: 'separate' | 'combined';
+  combinedMappings: Record<string, CombinedMapping>;
+  combinedMappingsInitialized: boolean;
+  showUnmappedLibraries: boolean;
+  preferredQuality: 'highest' | 'lowest';
+  defaultSubtitleLanguage: string;
+  defaultAudioLanguage: string;
+  autoPlayNextEpisode: boolean;
+  subtitleFont: string;
+  subtitleSize: number;
+  subtitleColor: string;
+  subtitleBorderSize: number;
+  subtitleBackground: 'none' | 'semi' | 'opaque';
+  subtitlePosition: number;
+  powerMode: 'performance' | 'balanced' | 'efficiency';
+  startFullscreen: boolean;
+  startPage: 'home' | 'last-visited';
+  imageCacheMaxMB: number;
+  syncOnStartup: boolean;
+  firstLaunchComplete: boolean;
+  lastServerUrl: string;
+}
+
+// Updater types
+export interface UpdateInfo {
+  version: string;
+  releaseNotes?: string;
+}
+
+export interface UpdateStatus {
+  state: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error';
+  info: UpdateInfo | null;
+  progress: number;
+  error: string | null;
+}
+
 // IPC response wrapper
 export interface IpcResponse<T = unknown> {
   success: boolean;
@@ -129,6 +304,10 @@ declare global {
         logout: () => Promise<IpcResponse<void>>;
         getPublicUsers: () => Promise<IpcResponse<PublicUser[]>>;
         restore: (serverUrl: string, token: string, userId: string) => Promise<IpcResponse<EmbyUser>>;
+        connectToServerStandalone: (url: string) => Promise<IpcResponse<EmbyServerInfo>>;
+        getPublicUsersForServer: (url: string) => Promise<IpcResponse<PublicUser[]>>;
+        loginToServer: (url: string, username: string, password: string) => Promise<IpcResponse<AuthResult>>;
+        checkServer: (url: string) => Promise<IpcResponse<boolean>>;
       };
       library: {
         getViews: () => Promise<IpcResponse<ItemsResult>>;
@@ -140,6 +319,24 @@ declare global {
         getSimilar: (itemId: string) => Promise<IpcResponse<ItemsResult>>;
         getSeasons: (seriesId: string) => Promise<IpcResponse<ItemsResult>>;
         getEpisodes: (seriesId: string, seasonId: string) => Promise<IpcResponse<ItemsResult>>;
+        getAllServersViews: () => Promise<IpcResponse<{
+          views: Array<{ Id: string; Name: string; Type: string; serverId: string; serverName: string }>;
+          errors: Array<{ serverId: string; serverName: string; reason: 'offline' | 'auth-expired' }>;
+        }>>;
+        getAllServersLatest: (limit?: number) => Promise<IpcResponse<{
+          libraries: Array<{
+            libraryId: string;
+            libraryName: string;
+            serverId: string;
+            serverName: string;
+            items: BaseItemDto[];
+          }>;
+          errors: Array<{ serverId: string; serverName: string; reason: 'offline' | 'auth-expired' }>;
+        }>>;
+        getAllServersResume: () => Promise<IpcResponse<{
+          items: BaseItemDto[];
+          errors: Array<{ serverId: string; serverName: string; reason: 'offline' | 'auth-expired' }>;
+        }>>;
       };
       media: {
         getPlaybackInfo: (itemId: string) => Promise<IpcResponse<{ MediaSources: MediaSource[] }>>;
@@ -154,6 +351,12 @@ declare global {
         markUnplayed: (itemId: string) => Promise<IpcResponse<void>>;
         updateFavorite: (itemId: string, isFavorite: boolean) => Promise<IpcResponse<void>>;
       };
+      item: {
+        markPlayed: (args: { itemId: string; serverId?: string }) => Promise<IpcResponse<void>>;
+        markUnplayed: (args: { itemId: string; serverId?: string }) => Promise<IpcResponse<void>>;
+        toggleFavorite: (args: { itemId: string; serverId?: string; isFavorite: boolean }) => Promise<IpcResponse<void>>;
+        removeFromContinue: (args: { itemId: string; serverId?: string }) => Promise<IpcResponse<void>>;
+      };
       search: {
         query: (term: string, filters?: Record<string, unknown>) => Promise<IpcResponse<ItemsResult>>;
       };
@@ -167,6 +370,84 @@ declare global {
         onStarting: (cb: () => void) => () => void;
         onStartFailed: (cb: () => void) => () => void;
         onMpvUnavailable: (cb: () => void) => () => void;
+      };
+      sync: {
+        startFull: () => Promise<IpcResponse<void>>;
+        startIncremental: () => Promise<IpcResponse<void>>;
+        autoStart: () => Promise<IpcResponse<void>>;
+        cancel: () => Promise<IpcResponse<void>>;
+        getStatus: () => Promise<IpcResponse<SyncStatus>>;
+        onProgress: (cb: (data: SyncProgress) => void) => () => void;
+        onComplete: (cb: () => void) => () => void;
+        onError: (cb: (err: { message: string }) => void) => () => void;
+      };
+      cache: {
+        getItem: (itemId: string) => Promise<IpcResponse<CachedItem>>;
+        getLibraryItems: (filters: CacheFilters) => Promise<IpcResponse<{ items: CachedItem[]; total: number }>>;
+        getResumeItems: () => Promise<IpcResponse<CachedItem[]>>;
+        getLatestItems: (libraryId: string, limit?: number) => Promise<IpcResponse<CachedItem[]>>;
+        search: (query: string) => Promise<IpcResponse<CachedItem[]>>;
+        resolveDedupGroups: (ids: string[]) => Promise<IpcResponse<Record<string, string>>>;
+        getStats: () => Promise<IpcResponse<DbStats>>;
+        clear: () => Promise<IpcResponse<void>>;
+        hasData: () => Promise<IpcResponse<boolean>>;
+      };
+      imageCache: {
+        getCachedUrl: (url: string) => Promise<IpcResponse<string>>;
+        precache: (urls: string[]) => Promise<IpcResponse<void>>;
+      };
+      settings: {
+        get: () => Promise<IpcResponse<NocturneSettings>>;
+        getValue: (key: string) => Promise<IpcResponse<unknown>>;
+        set: (key: string, value: unknown) => Promise<IpcResponse<void>>;
+        setMultiple: (data: Record<string, unknown>) => Promise<IpcResponse<void>>;
+        reset: () => Promise<IpcResponse<void>>;
+      };
+      libraries: {
+        suggestMapping: () => Promise<IpcResponse<Record<string, LibraryMapping>>>;
+      };
+      vlib: {
+        getAll: () => Promise<IpcResponse<VirtualLibrary[]>>;
+        getItems: (vlibId: string, opts?: Record<string, unknown>) => Promise<IpcResponse<{ items: CachedItem[]; total: number }>>;
+        getLatest: (vlibId: string, limit?: number) => Promise<IpcResponse<CachedItem[]>>;
+        getHeroes: (vlibId?: string, limit?: number) => Promise<IpcResponse<CachedItem[]>>;
+      };
+      dedup: {
+        getVersions: (itemId: string) => Promise<IpcResponse<CachedItem[]>>;
+        getEpisodes: (seriesItemId: string, seasonNumber: number) => Promise<IpcResponse<EpisodeVersionGroup[]>>;
+        getAdjacentEpisodes: (episodeId: string) => Promise<IpcResponse<{ prev: CachedItem | null; next: CachedItem | null }>>;
+        getStats: () => Promise<IpcResponse<DedupStats>>;
+        rebuild: () => Promise<IpcResponse<{ success: boolean; groupsCreated?: number; itemsMerged?: number; error?: string }>>;
+        onComplete: (cb: (data: { groupsCreated: number; itemsMerged: number }) => void) => () => void;
+        onError: (cb: (err: { message: string }) => void) => () => void;
+      };
+      servers: {
+        getAll: () => Promise<IpcResponse<ServerConfig[]>>;
+        getActive: () => Promise<IpcResponse<ServerConfig | null>>;
+        add: (config: Record<string, unknown>) => Promise<IpcResponse<ServerConfig>>;
+        remove: (serverId: string) => Promise<IpcResponse<void>>;
+        switch: (serverId: string) => Promise<IpcResponse<boolean>>;
+        getMappings: () => Promise<IpcResponse<Record<string, LibraryMapping>>>;
+        setMappings: (mappings: Record<string, unknown>) => Promise<IpcResponse<void>>;
+        getLibraryMode: () => Promise<IpcResponse<'separate' | 'combined'>>;
+        getCombinedMappings: () => Promise<IpcResponse<Record<string, CombinedMapping>>>;
+        setCombinedMappings: (mappings: Record<string, unknown>) => Promise<IpcResponse<void>>;
+        getAllLibraries: () => Promise<IpcResponse<CombinedLibraryRef[]>>;
+      };
+      updater: {
+        check: () => Promise<IpcResponse<void>>;
+        download: () => Promise<IpcResponse<void>>;
+        install: () => Promise<IpcResponse<void>>;
+        getStatus: () => Promise<IpcResponse<UpdateStatus>>;
+        onStatus: (cb: (status: UpdateStatus) => void) => () => void;
+      };
+      session: {
+        onExpired: (cb: () => void) => () => void;
+      };
+      app: {
+        onVisibilityChange: (cb: (data: { visible: boolean }) => void) => () => void;
+        onFocusChange: (cb: (data: { focused: boolean }) => void) => () => void;
+        resetFull: () => Promise<IpcResponse<void>>;
       };
       window: {
         minimize: () => Promise<void>;

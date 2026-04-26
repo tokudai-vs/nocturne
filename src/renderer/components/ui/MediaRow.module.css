@@ -38,8 +38,8 @@
   overflow-y: visible;
   scroll-snap-type: x mandatory;
   scroll-behavior: smooth;
-  padding: 16px 20px;
-  margin-top: -4px;
+  padding: 20px 0;
+  margin: -20px 0;
   -ms-overflow-style: none;
   scrollbar-width: none;
   mask-image: linear-gradient(to right, black 92%, transparent 100%);
@@ -52,6 +52,13 @@
 
 .row > * {
   scroll-snap-align: start;
+}
+
+.edgeSpacer {
+  flex-shrink: 0;
+  width: 20px;
+  min-width: 20px;
+  pointer-events: none;
 }
 
 .arrow {

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { createHashRouter, RouterProvider } from 'react-router-dom';
+import ErrorBoundary from './components/ErrorBoundary';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppShell from './components/layout/AppShell';
 import SplashScreen from './components/SplashScreen';
@@ -10,6 +11,7 @@ import HomePage from './pages/HomePage';
 import LibraryPage from './pages/LibraryPage';
 import DetailPage from './pages/DetailPage';
 import SearchPage from './pages/SearchPage';
+import SettingsPage from './pages/SettingsPage';
 import { useLibraryStore } from './stores/library-store';
 
 const router = createHashRouter([
@@ -27,6 +29,7 @@ const router = createHashRouter([
           { path: '/library/:id', element: <LibraryPage /> },
           { path: '/detail/:id', element: <DetailPage /> },
           { path: '/search', element: <SearchPage /> },
+          { path: '/settings', element: <SettingsPage /> },
         ],
       },
     ],
@@ -47,12 +50,12 @@ function PlaybackExitListener() {
 
 export default function App() {
   return (
-    <>
+    <ErrorBoundary>
       <SplashScreen />
       <PlaybackExitListener />
       <PlaybackTransition />
       <MpvErrorModal />
       <RouterProvider router={router} />
-    </>
+    </ErrorBoundary>
   );
 }

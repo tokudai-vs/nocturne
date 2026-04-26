@@ -7,13 +7,17 @@ dist/
 
 # Bundled mpv (large binary, users download separately or we attach to release)
 resources/mpv/
-build/mpv/portable_config/scripts/
-build/mpv/portable_config/fonts/
+# NB: ignore directory *contents* (not the dir itself) so the !whitelists below
+# can re-include specific files. `dir/` blocks all whitelisting under it.
+build/mpv/portable_config/scripts/*
+build/mpv/portable_config/fonts/*
 
-# Keep config templates but not downloaded binaries
+# Keep config templates and our own scripts; downloaded modernz/font stays ignored
 !build/mpv/portable_config/mpv.conf
 !build/mpv/portable_config/input.conf
 !build/mpv/portable_config/script-opts/modernz.conf
+!build/mpv/portable_config/scripts/nocturne_select.lua
+!build/mpv/portable_config/scripts/open-subtitles.lua
 
 # Electron
 .electron-vite/

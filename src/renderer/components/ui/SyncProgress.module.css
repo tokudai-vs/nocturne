@@ -1,0 +1,78 @@
+.container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  cursor: default;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: none;
+}
+
+.container.visible {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.container.fadeOut {
+  opacity: 0;
+  transform: scale(0.8);
+}
+
+.ring {
+  display: block;
+}
+
+.trackCircle {
+  fill: rgba(0, 0, 0, 0.6);
+}
+
+.progressCircle {
+  fill: none;
+  stroke: var(--accent, #e8a851);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.3s ease;
+}
+
+.completeCircle {
+  fill: none;
+  stroke: #4ade80;
+  stroke-width: 3;
+}
+
+.label {
+  fill: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.checkmark {
+  fill: none;
+  stroke: #4ade80;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tooltip {
+  position: absolute;
+  bottom: 48px;
+  right: 0;
+  background: rgba(0, 0, 0, 0.85);
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.container:hover .tooltip {
+  opacity: 1;
+}

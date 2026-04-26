@@ -3,6 +3,7 @@ import net from 'net';
 import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
+import { getSettings } from './settings';
 
 interface PlayOptions {
   startPositionTicks?: number;
@@ -99,6 +100,9 @@ class MpvManager {
       await this.setProperty('start', 'none');
     }
 
+    // Apply subtitle settings from user preferences
+    await this.applySubtitleSettings();
+
     // Show window and go fullscreen before loading
     await this.setProperty('force-window', 'yes');
     await this.setProperty('fullscreen', true);
@@ -132,6 +136,30 @@ class MpvManager {
       /* ignore */
     }
     this.cleanup();
+  }
+
+  private async applySubtitleSettings(): Promise<void> {
+    try {
+      const s = getSettings();
+      await this.setProperty('sub-font', s.subtitleFont || 'Segoe UI Semibold');
+      await this.setProperty('sub-font-size', s.subtitleSize || 46);
+      await this.setProperty('sub-color', s.subtitleColor || '#FFFFFF');
+      await this.setProperty('sub-border-size', s.subtitleBorderSize ?? 2.5);
+      await this.setProperty('sub-shadow-offset', 1);
+      await this.setProperty('sub-shadow-color', '#80000000');
+
+      if (s.subtitleBackground === 'opaque') {
+        await this.setProperty('sub-back-color', '#CC000000');
+      } else if (s.subtitleBackground === 'semi') {
+        await this.setProperty('sub-back-color', '#80000000');
+      } else {
+        await this.setProperty('sub-back-color', '#00000000');
+      }
+
+      await this.setProperty('sub-pos', s.subtitlePosition || 95);
+    } catch (err) {
+      console.error('[mpv] Failed to apply subtitle settings:', err);
+    }
   }
 
   private findMpv(): { exe: string; dir: string } {
@@ -291,6 +319,10 @@ class MpvManager {
 
   running(): boolean {
     return this.isReady && this.proc !== null && !this.proc.killed;
+  }
+
+  pid(): number | null {
+    return this.proc?.pid ?? null;
   }
 
   on(event: string, fn: EventCallback): void {

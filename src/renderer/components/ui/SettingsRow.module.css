@@ -1,0 +1,33 @@
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  gap: var(--space-4);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.labelGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.description {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.control {
+  flex-shrink: 0;
+}

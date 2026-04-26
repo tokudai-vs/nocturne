@@ -4,6 +4,12 @@ import { join } from 'path';
 
 let db: Database.Database | null = null;
 
+// Escape LIKE wildcards so user input like "50%" matches the literal substring
+// instead of acting as a wildcard. Paired with `ESCAPE '\'` in the SQL clause.
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, '\\$&');
+}
+
 export interface ItemRow {
   emby_id: string;
   server_id: string;
@@ -311,8 +317,8 @@ export function getItems(filters: ItemFilters = {}): { items: ItemRow[]; total: 
     params.push(filters.libraryId);
   }
   if (filters.search) {
-    conditions.push('name LIKE ?');
-    params.push(`%${filters.search}%`);
+    conditions.push("name LIKE ? ESCAPE '\\'");
+    params.push(`%${escapeLike(filters.search)}%`);
   }
   if (filters.isFavorite !== undefined) {
     conditions.push('is_favorite = ?');
@@ -401,8 +407,8 @@ export function getLatestItems(libraryId: string, limit = 20): ItemRow[] {
 
 export function searchItems(query: string, limit = 24): ItemRow[] {
   return getDb()
-    .prepare('SELECT * FROM items WHERE name LIKE ? AND type IN (\'Movie\', \'Series\', \'Episode\') ORDER BY name ASC LIMIT ?')
-    .all(`%${query}%`, limit) as ItemRow[];
+    .prepare("SELECT * FROM items WHERE name LIKE ? ESCAPE '\\' AND type IN ('Movie', 'Series', 'Episode') ORDER BY name ASC LIMIT ?")
+    .all(`%${escapeLike(query)}%`, limit) as ItemRow[];
 }
 
 // ── Multi-library queries (for virtual libraries) ───────
@@ -439,8 +445,8 @@ export function getItemsMultiLibrary(
   }
 
   if (opts.searchTerm) {
-    conditions.push('name LIKE ?');
-    params.push(`%${opts.searchTerm}%`);
+    conditions.push("name LIKE ? ESCAPE '\\'");
+    params.push(`%${escapeLike(opts.searchTerm)}%`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -942,18 +948,20 @@ export function searchItemsDeduped(query: string, limit = 24): (ItemRow & { vers
   const MAX_SEARCH_ROWS = 500;
   const all = d.prepare(`
     SELECT * FROM items
-    WHERE name LIKE ? AND type IN ('Movie', 'Series', 'Episode')
+    WHERE name LIKE ? ESCAPE '\\' AND type IN ('Movie', 'Series', 'Episode')
     ORDER BY name ASC LIMIT ?
-  `).all(`%${query}%`, MAX_SEARCH_ROWS) as ItemRow[];
+  `).all(`%${escapeLike(query)}%`, MAX_SEARCH_ROWS) as ItemRow[];
 
   // Deduplicate: group by dedup_group_id, keep primary
   const seen = new Set<string>();
   const results: (ItemRow & { version_count: number })[] = [];
 
-  // First pass: count versions per group
+  // First pass: count versions per group. Only Movie/Series contribute — after
+  // Phase A backfill Episodes inherit their parent Series' dedup_group_id, so
+  // counting them would inflate version_count (e.g., 40 episodes + 2 series = 42).
   const groupCounts = new Map<string, number>();
   for (const item of all) {
-    if (item.dedup_group_id) {
+    if (item.dedup_group_id && (item.type === 'Movie' || item.type === 'Series')) {
       groupCounts.set(item.dedup_group_id, (groupCounts.get(item.dedup_group_id) || 0) + 1);
     }
   }

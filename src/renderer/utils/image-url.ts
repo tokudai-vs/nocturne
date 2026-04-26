@@ -24,3 +24,44 @@ export function buildPersonImageUrl(
 ): string {
   return buildImageUrl(personId, 'Primary', opts);
 }
+
+export function buildCachedItemImageUrl(
+  embyId: string,
+  imageTagsJson: string | null,
+  backdropTagsJson: string | null,
+  imageType: 'Primary' | 'Backdrop' | 'Thumb',
+  opts: { maxWidth?: number } = {},
+): string | null {
+  const { serverUrl, accessToken } = useAuthStore.getState();
+  if (!serverUrl) return null;
+
+  if (imageType === 'Backdrop') {
+    let tags: string[] = [];
+    try {
+      tags = backdropTagsJson ? JSON.parse(backdropTagsJson) : [];
+    } catch { /* ignore */ }
+    if (tags.length === 0) return null;
+
+    const params = new URLSearchParams();
+    params.set('maxWidth', String(opts.maxWidth || 1920));
+    params.set('tag', tags[0]);
+    params.set('quality', '90');
+    if (accessToken) params.set('api_key', accessToken);
+    return `${serverUrl}/emby/Items/${embyId}/Images/Backdrop/0?${params}`;
+  }
+
+  let imageTags: Record<string, string> = {};
+  try {
+    imageTags = imageTagsJson ? JSON.parse(imageTagsJson) : {};
+  } catch { /* ignore */ }
+
+  const tag = imageTags[imageType];
+  if (!tag) return null;
+
+  const params = new URLSearchParams();
+  params.set('maxWidth', String(opts.maxWidth || 300));
+  params.set('tag', tag);
+  params.set('quality', '90');
+  if (accessToken) params.set('api_key', accessToken);
+  return `${serverUrl}/emby/Items/${embyId}/Images/${imageType}?${params}`;
+}

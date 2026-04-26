@@ -1,9 +1,12 @@
 import axios, { AxiosInstance } from 'axios';
-import { app } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { APP_VERSION, CLIENT_NAME, DEVICE_NAME } from '../shared/constants';
+
+const ITEM_FIELDS = 'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+const ITEM_FIELDS_LIGHT = 'Overview,UserData,ImageTags,BackdropImageTags';
 
 function getDeviceId(): string {
   const userDataPath = app.getPath('userData');
@@ -23,7 +26,10 @@ function getDeviceId(): string {
 }
 
 class EmbyClient {
+  /** Axios instance for active-server requests — has auth interceptors */
   private client: AxiosInstance;
+  /** Separate axios instance for standalone/cross-server requests — NO interceptors */
+  private standalone: AxiosInstance;
   private serverUrl: string | null = null;
   private accessToken: string | null = null;
   private userId: string | null = null;
@@ -31,13 +37,30 @@ class EmbyClient {
 
   constructor() {
     this.deviceId = getDeviceId();
-    this.client = axios.create({ timeout: 15000 });
+    this.client = axios.create({ timeout: 10000 });
+    this.standalone = axios.create({ timeout: 10000 });
 
+    // Active-server request interceptor — injects current token
     this.client.interceptors.request.use((config) => {
       const tokenPart = this.accessToken ? `, Token="${this.accessToken}"` : '';
       config.headers['X-Emby-Authorization'] =
         `MediaBrowser Client="${CLIENT_NAME}", Device="${DEVICE_NAME}", DeviceId="${this.deviceId}", Version="${APP_VERSION}"${tokenPart}`;
       return config;
+    });
+
+    // Active-server 401 interceptor — fires session-expired (debounced)
+    let lastSessionExpiredAt = 0;
+    this.client.interceptors.response.use(undefined, (error) => {
+      if (error?.response?.status === 401 && this.accessToken) {
+        const now = Date.now();
+        if (now - lastSessionExpiredAt > 5000) {
+          lastSessionExpiredAt = now;
+          for (const win of BrowserWindow.getAllWindows()) {
+            win.webContents.send('auth:session-expired');
+          }
+        }
+      }
+      return Promise.reject(error);
     });
   }
 
@@ -52,6 +75,8 @@ class EmbyClient {
   get currentUserId(): string | null {
     return this.userId;
   }
+
+  private contextStack: Array<{ url: string | null; token: string | null; userId: string | null }> = [];
 
   setServer(url: string): void {
     const trimmed = url.replace(/\/+$/, '');
@@ -70,6 +95,25 @@ class EmbyClient {
   clearAuth(): void {
     this.accessToken = null;
     this.userId = null;
+  }
+
+  /** Save the current server context onto the stack so it can be restored after sync operations. */
+  pushContext(): void {
+    this.contextStack.push({
+      url: this.serverUrl,
+      token: this.accessToken,
+      userId: this.userId,
+    });
+  }
+
+  /** Restore the most recently saved server context from the stack. */
+  popContext(): void {
+    const ctx = this.contextStack.pop();
+    if (ctx) {
+      this.serverUrl = ctx.url;
+      this.accessToken = ctx.token;
+      this.userId = ctx.userId;
+    }
   }
 
   private url(path: string): string {
@@ -112,8 +156,7 @@ class EmbyClient {
   }
 
   async getItems(parentId: string, params: Record<string, unknown> = {}) {
-    const fields =
-      'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+    const fields = ITEM_FIELDS;
     const { data } = await this.client.get(
       this.url(`/emby/Users/${this.userId}/Items`),
       {
@@ -124,8 +167,7 @@ class EmbyClient {
   }
 
   async getItem(itemId: string) {
-    const fields =
-      'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+    const fields = ITEM_FIELDS;
     const { data } = await this.client.get(
       this.url(`/emby/Users/${this.userId}/Items/${itemId}`),
       { params: { Fields: fields } },
@@ -134,8 +176,7 @@ class EmbyClient {
   }
 
   async getLatestItems(parentId: string, limit = 16) {
-    const fields =
-      'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+    const fields = ITEM_FIELDS;
     const { data } = await this.client.get(
       this.url(`/emby/Users/${this.userId}/Items/Latest`),
       { params: { ParentId: parentId, Limit: limit, Fields: fields } },
@@ -144,8 +185,7 @@ class EmbyClient {
   }
 
   async getResumeItems() {
-    const fields =
-      'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+    const fields = ITEM_FIELDS;
     const { data } = await this.client.get(
       this.url(`/emby/Users/${this.userId}/Items/Resume`),
       {
@@ -156,8 +196,7 @@ class EmbyClient {
   }
 
   async getNextUp() {
-    const fields =
-      'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+    const fields = ITEM_FIELDS;
     const { data } = await this.client.get(this.url('/emby/Shows/NextUp'), {
       params: { UserId: this.userId, Limit: 12, Fields: fields },
     });
@@ -173,7 +212,7 @@ class EmbyClient {
   }
 
   async getSeasons(seriesId: string) {
-    const fields = 'Overview,UserData,ImageTags,BackdropImageTags';
+    const fields = ITEM_FIELDS_LIGHT;
     const { data } = await this.client.get(
       this.url(`/emby/Shows/${seriesId}/Seasons`),
       { params: { UserId: this.userId, Fields: fields } },
@@ -182,8 +221,7 @@ class EmbyClient {
   }
 
   async getEpisodes(seriesId: string, seasonId: string) {
-    const fields =
-      'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+    const fields = ITEM_FIELDS;
     const { data } = await this.client.get(
       this.url(`/emby/Shows/${seriesId}/Episodes`),
       { params: { UserId: this.userId, SeasonId: seasonId, Fields: fields } },
@@ -251,8 +289,7 @@ class EmbyClient {
 
   // Search
   async search(term: string, filters: Record<string, unknown> = {}) {
-    const fields =
-      'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+    const fields = ITEM_FIELDS;
     const { data } = await this.client.get(
       this.url(`/emby/Users/${this.userId}/Items`),
       {
@@ -267,6 +304,150 @@ class EmbyClient {
       },
     );
     return data;
+  }
+
+  // ── Standalone server methods ───────────────────────
+  // These operate on a specific server URL without changing the active client state.
+
+  private authHeader(token?: string): string {
+    const tokenPart = token ? `, Token="${token}"` : '';
+    return `MediaBrowser Client="${CLIENT_NAME}", Device="${DEVICE_NAME}", DeviceId="${this.deviceId}", Version="${APP_VERSION}"${tokenPart}`;
+  }
+
+  /** Build axios config for standalone requests */
+  private standaloneHeaders(token?: string) {
+    return { 'X-Emby-Authorization': this.authHeader(token) };
+  }
+
+  async getPublicInfoForServer(serverUrl: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/System/Info/Public`;
+    const { data } = await this.standalone.get(url, { headers: this.standaloneHeaders() });
+    return data;
+  }
+
+  async getPublicUsersForServer(serverUrl: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/Public`;
+    const { data } = await this.standalone.get(url, { headers: this.standaloneHeaders() });
+    return data;
+  }
+
+  async loginToServer(serverUrl: string, username: string, password: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/AuthenticateByName`;
+    const { data } = await this.standalone.post(url, { Username: username, Pw: password }, { headers: this.standaloneHeaders() });
+    return data; // { AccessToken, User, ServerId }
+  }
+
+  async getViewsForServer(serverUrl: string, token: string, userId: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/${userId}/Views`;
+    const { data } = await this.standalone.get(url, { headers: this.standaloneHeaders(token) });
+    return data;
+  }
+
+  // ── Standalone data-fetch methods (for sync engine — don't touch active-server state) ──
+
+  async getCurrentUserForServer(serverUrl: string, token: string, userId: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/${userId}`;
+    const { data } = await this.standalone.get(url, { headers: this.standaloneHeaders(token) });
+    return data;
+  }
+
+  async getItemsForServer(
+    serverUrl: string, token: string, userId: string,
+    parentId: string, params: Record<string, unknown> = {},
+  ) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/${userId}/Items`;
+    const { data } = await this.standalone.get(url, {
+      headers: this.standaloneHeaders(token),
+      params: { ParentId: parentId, Fields: ITEM_FIELDS, ...params },
+    });
+    return data;
+  }
+
+  async getLatestItemsForServer(serverUrl: string, token: string, userId: string, parentId: string, limit = 20) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/${userId}/Items/Latest`;
+    const { data } = await this.standalone.get(url, {
+      headers: this.standaloneHeaders(token),
+      params: { ParentId: parentId, Limit: limit, Fields: ITEM_FIELDS_LIGHT },
+    });
+    return data;
+  }
+
+  async getResumeItemsForServer(serverUrl: string, token: string, userId: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/${userId}/Items/Resume`;
+    const { data } = await this.standalone.get(url, {
+      headers: this.standaloneHeaders(token),
+      params: { Limit: 12, Fields: ITEM_FIELDS_LIGHT, MediaTypes: 'Video' },
+    });
+    return data;
+  }
+
+  async checkServerReachable(serverUrl: string): Promise<boolean> {
+    try {
+      await this.standalone.get(
+        `${serverUrl.replace(/\/+$/, '')}/emby/System/Info/Public`,
+        { headers: this.standaloneHeaders(), timeout: 5000 },
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ── Cross-server methods ────────────────────────────
+  // These make requests to a specific server, not the active one.
+  // All use this.standalone to avoid touching active-server state.
+
+  async markPlayedOnServer(
+    serverUrl: string,
+    token: string,
+    userId: string,
+    itemId: string,
+  ): Promise<void> {
+    const url = `${serverUrl}/emby/Users/${userId}/PlayedItems/${itemId}`;
+    await this.standalone.post(url, null, { headers: this.standaloneHeaders(token) });
+  }
+
+  async markUnplayedOnServer(
+    serverUrl: string,
+    token: string,
+    userId: string,
+    itemId: string,
+  ): Promise<void> {
+    const url = `${serverUrl}/emby/Users/${userId}/PlayedItems/${itemId}`;
+    await this.standalone.delete(url, { headers: this.standaloneHeaders(token) });
+  }
+
+  async updateFavoriteOnServer(
+    serverUrl: string,
+    token: string,
+    userId: string,
+    itemId: string,
+    isFavorite: boolean,
+  ): Promise<void> {
+    const url = `${serverUrl}/emby/Users/${userId}/FavoriteItems/${itemId}`;
+    if (isFavorite) {
+      await this.standalone.post(url, null, { headers: this.standaloneHeaders(token) });
+    } else {
+      await this.standalone.delete(url, { headers: this.standaloneHeaders(token) });
+    }
+  }
+
+  async reportPlaybackStoppedToServer(
+    serverUrl: string,
+    token: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const url = `${serverUrl}/emby/Sessions/Playing/Stopped`;
+    await this.standalone.post(url, data, { headers: this.standaloneHeaders(token) });
+  }
+
+  getStreamUrlForServer(
+    serverUrl: string,
+    token: string,
+    itemId: string,
+    mediaSourceId: string,
+  ): string {
+    return `${serverUrl}/emby/Videos/${itemId}/stream?Static=true&MediaSourceId=${mediaSourceId}&api_key=${token}`;
   }
 
   // Images

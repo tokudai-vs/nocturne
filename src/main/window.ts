@@ -1,4 +1,4 @@
-import { BrowserWindow, shell, ipcMain } from 'electron';
+import { BrowserWindow, shell, ipcMain, app } from 'electron';
 import { join } from 'path';
 
 function safeOpenExternal(url: string): void {
@@ -19,6 +19,10 @@ export function getMainWindow(): BrowserWindow | null {
 }
 
 export function createWindow(): BrowserWindow {
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(app.getAppPath(), 'build', 'icon.png');
+
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -26,6 +30,7 @@ export function createWindow(): BrowserWindow {
     minHeight: 600,
     backgroundColor: '#0f0f0f',
     title: 'Nocturne',
+    icon: iconPath,
     frame: false,
     titleBarStyle: 'hidden',
     autoHideMenuBar: true,
@@ -35,7 +40,7 @@ export function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      backgroundThrottling: false,
+      backgroundThrottling: true,
     },
   });
 
@@ -54,6 +59,14 @@ export function createWindow(): BrowserWindow {
     // Lock to fullscreen — force back immediately
     win.setFullScreen(true);
   });
+
+  // Broadcast visibility/focus to renderer for power-mode throttling
+  win.on('hide', () => win.webContents.send('app:visibility', { visible: false }));
+  win.on('show', () => win.webContents.send('app:visibility', { visible: true }));
+  win.on('minimize', () => win.webContents.send('app:visibility', { visible: false }));
+  win.on('restore', () => win.webContents.send('app:visibility', { visible: true }));
+  win.on('blur', () => win.webContents.send('app:focus', { focused: false }));
+  win.on('focus', () => win.webContents.send('app:focus', { focused: true }));
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL']);

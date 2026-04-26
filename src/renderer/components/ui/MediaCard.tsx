@@ -3,11 +3,12 @@ import { Check } from 'lucide-react';
 import { buildImageUrl } from '../../utils/image-url';
 import { formatRuntime } from '../../utils/format';
 import type { BaseItemDto } from '../../api/types';
+import { useContextMenuStore } from '../../stores/context-menu-store';
 import styles from './MediaCard.module.css';
 import { useState } from 'react';
 
 interface Props {
-  item: BaseItemDto;
+  item: BaseItemDto & { versionCount?: number };
   orientation?: 'portrait' | 'landscape';
   onClick?: () => void;
 }
@@ -68,10 +69,18 @@ export default function MediaCard({ item, orientation = 'portrait', onClick }: P
     else navigate(`/detail/${item.Id}`);
   };
 
+  const openContextMenu = useContextMenuStore((s) => s.open);
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    openContextMenu(e.clientX, e.clientY, item);
+  };
+
   return (
-    <div className={`${styles.card} ${isLandscape ? styles.landscape : styles.portrait}`}>
-      {isLandscape && item.SeriesName && (
-        <div className={styles.seriesName}>{item.SeriesName}</div>
+    <div className={`${styles.card} ${isLandscape ? styles.landscape : styles.portrait}`} onContextMenu={handleContextMenu}>
+      {isLandscape && (
+        <div className={styles.seriesName}>
+          {item.Type === 'Episode' ? item.SeriesName ?? item.Name : item.Name}
+        </div>
       )}
       <div className={styles.imageWrap} onClick={handleClick}>
         {src ? (
@@ -103,6 +112,10 @@ export default function MediaCard({ item, orientation = 'portrait', onClick }: P
 
         {played && (
           <div className={styles.playedBadge}><Check size={14} strokeWidth={3} /></div>
+        )}
+
+        {item.versionCount && item.versionCount > 1 && (
+          <div className={styles.versionBadge}>{item.versionCount} versions</div>
         )}
 
         {playedPct > 0 && playedPct < 100 && (

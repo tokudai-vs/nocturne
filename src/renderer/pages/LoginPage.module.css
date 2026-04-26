@@ -179,3 +179,98 @@
 .backBtn:hover {
   color: var(--text-secondary);
 }
+
+/* Saved servers */
+.savedServers {
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.serverList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.savedServerCard {
+  display: flex;
+  align-items: center;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 150ms ease;
+}
+
+.savedServerCard:hover {
+  border-color: var(--accent);
+}
+
+.savedServerInfo {
+  flex: 1;
+  padding: 12px 14px;
+  text-align: left;
+  transition: background 150ms ease;
+}
+
+.savedServerInfo:hover {
+  background: var(--bg-hover);
+}
+
+.savedServerInfo:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.savedServerName {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.savedServerMeta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.removeServerBtn {
+  padding: 0 14px;
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.removeServerBtn:hover {
+  color: var(--danger);
+  background: var(--bg-hover);
+}
+
+.switchingLabel {
+  padding: 0 14px;
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
