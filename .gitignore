@@ -46,3 +46,7 @@ npm-debug.log*
 
 # TypeScript
 *.tsbuildinfo
+
+# Dev-only AI session state
+CLAUDE.md
+.omc/
