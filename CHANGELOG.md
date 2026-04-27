@@ -1,5 +1,30 @@
 # Changelog
 
+## v3.0.0 — 2026-04-19
+
+### Added — Trakt.tv Integration
+- Connect Trakt account via OAuth device flow
+- Auto-scrobble playback (start/pause/stop) with 80%+ watched threshold
+- Bidirectional watched-state sync (initial pull with preview, ongoing 6h refresh)
+- Trakt watchlist as virtual library in sidebar
+- Trakt ratings displayed on detail pages alongside IMDB/RT
+- Watchlist toggle (Bookmark) on detail pages
+- Drift indicator for items watched on Trakt but not locally
+- Encrypted token storage via safeStorage (DPAPI on Windows)
+- Configurable scrobble settings + manual sync trigger
+- Failed-event queue with exponential backoff retry
+
+### Changed
+- Mark played/unwatched in Nocturne now also syncs to Trakt (when connected)
+- Settings page reorganized with Trakt section
+
+### Technical
+- 3 new SQLite tables: `trakt_watched_history`, `trakt_watchlist`, `trakt_ratings`
+- All Trakt joins use indexed columns (no perf impact at 1.5M items)
+- Bundled `client_id` with optional override for advanced users
+
+---
+
 ## v2.0.0 — 2026-04-19
 
 ### Added

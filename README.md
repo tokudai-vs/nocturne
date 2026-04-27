@@ -35,6 +35,17 @@
 - **Drag-and-drop library mapping** in Settings, with configurable icons per virtual library
 - Per-server mappings persist across syncs
 
+### :clapper: Trakt.tv Integration
+- **Auto-scrobble** watched movies and episodes (start / pause / stop) — Trakt marks watched at 80%+
+- **Bidirectional watched-state sync** — initial connect shows a preview with per-item checkboxes; ongoing 6-hour background pulls keep the two in sync
+- **Trakt watchlist as a virtual library** in the sidebar; unmatched titles appear greyed out with a "Find on TMDB / IMDB / Remove" info modal
+- **Trakt ratings** displayed on detail pages alongside IMDB and Rotten Tomatoes
+- **Add / remove from watchlist** directly on detail pages with a Bookmark toggle
+- **Drift indicator** ("T✓") when a title was watched on Trakt but not on the current server — one-click sync
+- **Encrypted credential storage** via Electron `safeStorage` (DPAPI on Windows) — tokens never sit in plaintext
+- **Failure queue** with exponential backoff — scrobbles and history pushes survive offline periods
+- **Bundled `client_id`** with optional override under Settings → Trakt → Advanced
+
 ### :card_index_dividers: Library Deduplication
 - Matches duplicates by **TMDB ID → IMDB ID → Name+Year** fallback chain
 - **Version picker** on detail pages showing quality, codec, and file size per copy
@@ -120,7 +131,7 @@ Add v2 screenshots here:
 
 ### Windows (Recommended)
 
-1. Download the latest `Nocturne-Setup-2.0.0.exe` from the [Releases page](../../releases)
+1. Download the latest `Nocturne-Setup-3.0.0.exe` from the [Releases page](../../releases)
 2. Run the installer
 3. Launch Nocturne from the Start Menu or Desktop shortcut
 4. Enter your Emby server address and sign in
@@ -166,7 +177,7 @@ npm run generate-icons
 npm run package:win
 ```
 
-The installer will be at `dist/Nocturne Setup 2.0.0.exe`.
+The installer will be at `dist/Nocturne Setup 3.0.0.exe`.
 
 ### Notes for Development
 
@@ -237,10 +248,16 @@ The installer will be at `dist/Nocturne Setup 2.0.0.exe`.
 
 ## Roadmap
 
-### v3 (planned)
-- [ ] Trakt.tv integration (scrobbling + collection sync)
+### v3 (current)
+- [x] Trakt.tv integration — scrobbling, bidirectional watched-state sync, watchlist, ratings, drift indicator
+
+### v3.x (planned)
 - [ ] Trailer playback in detail pages
 - [ ] Smart collections (rules-based grouping)
+- [ ] Watch history analytics
+- [ ] Skip intro / outro
+- [ ] "Continue listening" for music libraries
+- [ ] Subtitle auto-download
 - [ ] Watch party — Cloudflare Tunnel + HLS for low-friction co-viewing
 
 ### v4 (planned)
