@@ -8,9 +8,20 @@ import styles from './MediaCard.module.css';
 import { useState } from 'react';
 
 interface Props {
-  item: BaseItemDto & { versionCount?: number };
+  item: BaseItemDto & {
+    versionCount?: number;
+    isExternal?: boolean;
+    traktKey?: string;
+    traktType?: 'movie' | 'show';
+  };
   orientation?: 'portrait' | 'landscape';
   onClick?: () => void;
+  /**
+   * If set, called when the card represents an external Trakt-watchlist
+   * item that isn't in the library. Lets parents render a custom info modal
+   * instead of navigating to a non-existent detail page.
+   */
+  onExternalClick?: (item: Props['item']) => void;
 }
 
 function resolveImageSrc(item: BaseItemDto, isLandscape: boolean): string {
@@ -45,11 +56,12 @@ function resolveImageSrc(item: BaseItemDto, isLandscape: boolean): string {
   return buildImageUrl(item.Id, 'Primary', { maxWidth: 300, tag: item.ImageTags?.['Primary'] });
 }
 
-export default function MediaCard({ item, orientation = 'portrait', onClick }: Props) {
+export default function MediaCard({ item, orientation = 'portrait', onClick, onExternalClick }: Props) {
   const navigate = useNavigate();
   const [imgError, setImgError] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
   const isLandscape = orientation === 'landscape';
+  const isExternal = item.isExternal === true;
 
   const src = !imgError ? resolveImageSrc(item, isLandscape) : '';
 
@@ -65,12 +77,18 @@ export default function MediaCard({ item, orientation = 'portrait', onClick }: P
   const runtime = formatRuntime(item.RunTimeTicks);
 
   const handleClick = () => {
+    // External (Trakt-only) items have no detail page — defer to parent handler.
+    if (isExternal) {
+      onExternalClick?.(item);
+      return;
+    }
     if (onClick) onClick();
     else navigate(`/detail/${item.Id}`);
   };
 
   const openContextMenu = useContextMenuStore((s) => s.open);
   const handleContextMenu = (e: React.MouseEvent) => {
+    if (isExternal) return; // No context-menu actions apply to external rows
     e.preventDefault();
     openContextMenu(e.clientX, e.clientY, item);
   };
@@ -82,7 +100,10 @@ export default function MediaCard({ item, orientation = 'portrait', onClick }: P
           {item.Type === 'Episode' ? item.SeriesName ?? item.Name : item.Name}
         </div>
       )}
-      <div className={styles.imageWrap} onClick={handleClick}>
+      <div
+        className={`${styles.imageWrap} ${isExternal ? styles.externalDimmed : ''}`}
+        onClick={handleClick}
+      >
         {src ? (
           <img
             src={src}
@@ -110,15 +131,19 @@ export default function MediaCard({ item, orientation = 'portrait', onClick }: P
           </div>
         </div>
 
-        {played && (
+        {played && !isExternal && (
           <div className={styles.playedBadge}><Check size={14} strokeWidth={3} /></div>
         )}
 
-        {item.versionCount && item.versionCount > 1 && (
+        {item.versionCount && item.versionCount > 1 && !isExternal && (
           <div className={styles.versionBadge}>{item.versionCount} versions</div>
         )}
 
-        {playedPct > 0 && playedPct < 100 && (
+        {isExternal && (
+          <div className={styles.externalBadge}>Not in library</div>
+        )}
+
+        {playedPct > 0 && playedPct < 100 && !isExternal && (
           <div className={styles.progressBar}>
             <div className={styles.progressFill} style={{ width: `${playedPct}%` }} />
           </div>

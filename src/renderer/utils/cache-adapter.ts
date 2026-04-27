@@ -67,6 +67,15 @@ export function cachedToBaseItem(item: CachedItem): BaseItemDto {
     (result as BaseItemDto & { versionCount?: number }).versionCount = item.version_count;
   }
 
+  // Carry through Trakt-only flags so MediaCard can render external rows
+  // greyed out and route clicks to the watchlist info modal.
+  if (item.is_external) {
+    const r = result as BaseItemDto & { isExternal?: boolean; traktKey?: string; traktType?: 'movie' | 'show' };
+    r.isExternal = true;
+    r.traktKey = item.trakt_key;
+    r.traktType = item.trakt_type;
+  }
+
   return result;
 }
 

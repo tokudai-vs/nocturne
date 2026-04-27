@@ -61,6 +61,17 @@ export interface NocturneSettings {
   syncOnStartup: boolean;
   firstLaunchComplete: boolean;
   lastServerUrl: string;
+  // ── Trakt ──
+  traktAutoScrobble: boolean;
+  traktSyncWatchedState: boolean;
+  traktShowWatchlistInSidebar: boolean;
+  traktUsername: string | null;
+  traktUserSlug: string | null;
+  traktConnectedAt: string | null;
+  traktLastSyncAt: string | null;
+  traktLastWatchlistSyncAt: string | null;
+  traktClientIdOverride: string;
+  traktClientSecretOverride: string;
 }
 
 const DEFAULTS: NocturneSettings = {
@@ -88,6 +99,16 @@ const DEFAULTS: NocturneSettings = {
   syncOnStartup: true,
   firstLaunchComplete: false,
   lastServerUrl: '',
+  traktAutoScrobble: true,
+  traktSyncWatchedState: true,
+  traktShowWatchlistInSidebar: true,
+  traktUsername: null,
+  traktUserSlug: null,
+  traktConnectedAt: null,
+  traktLastSyncAt: null,
+  traktLastWatchlistSyncAt: null,
+  traktClientIdOverride: '',
+  traktClientSecretOverride: '',
 };
 
 let settings: NocturneSettings = { ...DEFAULTS };

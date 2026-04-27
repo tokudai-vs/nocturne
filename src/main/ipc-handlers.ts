@@ -50,8 +50,17 @@ import {
   getAdjacentEpisodes as dbGetAdjacentEpisodes,
   updateItemUserData,
   checkpoint,
+  clearTraktQueue,
   type ItemFilters,
 } from './database';
+import { traktClient } from './trakt-client';
+import { traktScrobbler } from './trakt-scrobbler';
+import { traktSync } from './trakt-sync';
+import { TRAKT_BUNDLED_CLIENT_ID } from '../shared/trakt-config';
+import {
+  getTraktWatchlistAsCachedItems,
+  TRAKT_WATCHLIST_VLIB_ID,
+} from './virtual-library';
 
 type IpcResult<T = unknown> = { success: true; data: T } | { success: false; error: string };
 
@@ -87,6 +96,10 @@ const ALLOWED_SETTING_KEYS = new Set<string>([
   'subtitleSize', 'subtitleColor', 'subtitleBorderSize', 'subtitleBackground',
   'subtitlePosition', 'powerMode', 'startFullscreen', 'startPage', 'imageCacheMaxMB',
   'syncOnStartup', 'firstLaunchComplete', 'lastServerUrl',
+  // Trakt — only the renderer-settable subset. Username/slug/connectedAt and
+  // last-sync timestamps are written by the main process during sync work.
+  'traktAutoScrobble', 'traktSyncWatchedState', 'traktShowWatchlistInSidebar',
+  'traktClientIdOverride', 'traktClientSecretOverride',
 ]);
 
 export function registerIpcHandlers(): void {
@@ -505,6 +518,9 @@ export function registerIpcHandlers(): void {
         }
       }
       updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0 });
+      // Push to Trakt (silent no-op if not connected / sync disabled).
+      // Cross-server cascade is naturally deduped on Trakt's side via tmdb id.
+      void traktSync.pushHistoryAdd(itemId);
       return ok(undefined);
     } catch (e) {
       return fail(e);
@@ -523,6 +539,7 @@ export function registerIpcHandlers(): void {
         }
       }
       updateItemUserData(itemId, { played: 0, play_count: 0 });
+      void traktSync.pushHistoryRemove(itemId);
       return ok(undefined);
     } catch (e) {
       return fail(e);
@@ -615,19 +632,30 @@ export function registerIpcHandlers(): void {
     private interval: ReturnType<typeof setInterval> | null = null;
     private session: { itemId: string; mediaSourceId: string; playSessionId: string } | null = null;
     private _lastPosition = 0;
+    private _durationSec = 0;
+    private _lastPaused: boolean | null = null;
     private _transitioning = false;
     private _sessionSeq = 0;
 
     get current() { return this.session; }
     get lastPosition() { return this._lastPosition; }
+    get durationSec() { return this._durationSec; }
     get transitioning() { return this._transitioning; }
     set transitioning(v: boolean) { this._transitioning = v; }
 
-    start(itemId: string, mediaSourceId: string, playSessionId: string, startPosSec: number): void {
+    start(
+      itemId: string,
+      mediaSourceId: string,
+      playSessionId: string,
+      startPosSec: number,
+      durationSec: number,
+    ): void {
       this.stopReporting();
       this._sessionSeq++;
       this.session = { itemId, mediaSourceId, playSessionId };
       this._lastPosition = startPosSec;
+      this._durationSec = durationSec;
+      this._lastPaused = false;
       const seq = this._sessionSeq;
       this.interval = setInterval(async () => {
         if (seq !== this._sessionSeq) { this.stopReporting(); return; }
@@ -636,6 +664,11 @@ export function registerIpcHandlers(): void {
           const pos = (await mpvManager.getProperty('time-pos')) as number | null;
           const paused = (await mpvManager.getProperty('pause')) as boolean;
           if (pos != null) this._lastPosition = pos;
+          // Backfill duration from mpv if cache lookup returned 0
+          if (!this._durationSec) {
+            const dur = (await mpvManager.getProperty('duration')) as number | null;
+            if (dur != null && dur > 0) this._durationSec = dur;
+          }
           await embyClient.reportPlaybackProgress({
             ItemId: itemId,
             MediaSourceId: mediaSourceId,
@@ -645,6 +678,12 @@ export function registerIpcHandlers(): void {
             CanSeek: true,
             PlayMethod: 'DirectPlay',
           });
+          // Trakt scrobble: detect pause / resume edges
+          if (this._lastPaused !== null && paused !== this._lastPaused) {
+            const action = paused ? 'pause' : 'start';
+            void traktScrobbler.scrobble(action, itemId, this._lastPosition, this._durationSec);
+          }
+          this._lastPaused = paused;
         } catch { /* ignore */ }
       }, 10_000);
     }
@@ -703,6 +742,8 @@ export function registerIpcHandlers(): void {
 
     // 4. Emby reporting (async, don't block)
     const finalPositionTicks = Math.floor((playback.lastPosition || 0) * 10_000_000);
+    const finalPositionSec = playback.lastPosition || 0;
+    const finalDurationSec = playback.durationSec;
     const session = playback.take();
     playback.stopReporting();
     if (session) {
@@ -716,6 +757,10 @@ export function registerIpcHandlers(): void {
         .catch(() => {
           /* ignore */
         });
+
+      // Trakt scrobble:stop fires once per playback (regardless of dedup cascade).
+      // Trakt auto-marks watched at >= 80% on stop; below that it's discarded.
+      void traktScrobbler.scrobble('stop', session.itemId, finalPositionSec, finalDurationSec);
 
       // Cross-server: mark played on other servers that have this item
       if (serverManager.isCombinedMode()) {
@@ -819,7 +864,20 @@ export function registerIpcHandlers(): void {
           PlayMethod: 'DirectPlay',
         });
 
-        playback.start(itemId, mediaSourceId, playSessionId, (startPositionTicks || 0) / 10_000_000);
+        // Resolve duration for Trakt progress percentage. Cache is the fast
+        // path; mpv's `duration` property is the fallback inside the polling
+        // loop once playback is rolling.
+        const cached = dbGetItem(itemId);
+        const durationSec =
+          cached?.runtime_ticks && cached.runtime_ticks > 0
+            ? cached.runtime_ticks / 10_000_000
+            : 0;
+        const startPosSec = (startPositionTicks || 0) / 10_000_000;
+
+        playback.start(itemId, mediaSourceId, playSessionId, startPosSec, durationSec);
+
+        // Trakt scrobble:start (fires once per play). Silent no-op if not connected.
+        void traktScrobbler.scrobble('start', itemId, startPosSec, durationSec);
 
         return ok(undefined);
       } catch (e) {
@@ -1168,6 +1226,19 @@ export function registerIpcHandlers(): void {
     itemType?: string;
   }) => {
     try {
+      // Trakt watchlist sentinel — short-circuit before hitting SQL helpers.
+      if (args.vlibId === TRAKT_WATCHLIST_VLIB_ID) {
+        const all = getTraktWatchlistAsCachedItems();
+        const filtered = args.itemType
+          ? all.filter((i) => i.type === args.itemType)
+          : all;
+        const startIndex = args.startIndex || 0;
+        const limit = args.limit || 40;
+        return ok({
+          items: filtered.slice(startIndex, startIndex + limit),
+          total: filtered.length,
+        });
+      }
       const result = getVirtualLibraryItems(args.vlibId, {
         startIndex: args.startIndex || 0,
         limit: args.limit || 40,
@@ -1184,6 +1255,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('vlib:get-latest', (_, { vlibId, limit }: { vlibId: string; limit?: number }) => {
     try {
+      if (vlibId === TRAKT_WATCHLIST_VLIB_ID) {
+        return ok(getTraktWatchlistAsCachedItems().slice(0, limit || 20));
+      }
       return ok(getVirtualLibraryLatest(vlibId, limit || 20));
     } catch (e) {
       return fail(e);
@@ -1373,5 +1447,253 @@ export function registerIpcHandlers(): void {
     } catch (e) {
       return fail(e);
     }
+  });
+
+  // ── Trakt ────────────────────────────────────────────
+  ipcMain.handle('trakt:get-status', () => {
+    try {
+      return ok(traktClient.getStatus(traktScrobbler.getQueueCount()));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:auth-start', async () => {
+    try {
+      const data = await traktClient.startDeviceFlow();
+      return ok(data);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:auth-poll', async (_, { deviceCode }: { deviceCode: string }) => {
+    if (!isNonEmptyString(deviceCode)) return fail('Missing deviceCode');
+    try {
+      const state = await traktClient.pollDeviceFlow(deviceCode);
+      return ok(state);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:disconnect', () => {
+    try {
+      traktClient.disconnect();
+      clearTraktQueue();
+      return ok(undefined);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:drain-queue', async () => {
+    try {
+      await traktScrobbler.drainQueue();
+      return ok({ remaining: traktScrobbler.getQueueCount() });
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:get-queue-count', () => {
+    try {
+      return ok(traktScrobbler.getQueueCount());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:get-advanced-config', () => {
+    try {
+      return ok({
+        clientIdOverride: (getSettingValue('traktClientIdOverride') as string) || '',
+        clientSecretOverride: (getSettingValue('traktClientSecretOverride') as string) || '',
+        bundledIdPresent: Boolean(TRAKT_BUNDLED_CLIENT_ID),
+      });
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle(
+    'trakt:set-advanced-config',
+    (_, { clientId, clientSecret }: { clientId: string; clientSecret: string }) => {
+      try {
+        setSetting('traktClientIdOverride', typeof clientId === 'string' ? clientId : '');
+        setSetting('traktClientSecretOverride', typeof clientSecret === 'string' ? clientSecret : '');
+        return ok(undefined);
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  ipcMain.handle('trakt:open-verification', (_, { url }: { url: string }) => {
+    if (!isValidUrl(url)) return fail('Invalid URL');
+    try {
+      const { shell } = require('electron');
+      shell.openExternal(url);
+      return ok(undefined);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  // ── Trakt Phase 2/3/4 ─────────────────────────────
+
+  ipcMain.handle('trakt:fetch-preview', async () => {
+    try {
+      const preview = await traktSync.fetchInitialPreview();
+      return ok(preview);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:apply-watched-state', async (_, { embyIds }: { embyIds: string[] }) => {
+    if (!Array.isArray(embyIds)) return fail('embyIds must be an array');
+    try {
+      const result = await traktSync.applyWatchedState(embyIds);
+      return ok(result);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:sync-now', async () => {
+    try {
+      const [history, watchlist] = await Promise.all([
+        traktSync.runBackgroundHistorySync(),
+        traktSync.refreshWatchlist(),
+      ]);
+      return ok({ history, watchlist });
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:get-stats', () => {
+    try {
+      return ok(traktSync.getStats());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:get-watchlist', () => {
+    try {
+      return ok(getTraktWatchlistAsCachedItems());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:refresh-watchlist', async () => {
+    try {
+      const result = await traktSync.refreshWatchlist();
+      return ok(result);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:add-to-watchlist', async (_, { itemId }: { itemId: string }) => {
+    if (!isNonEmptyString(itemId)) return fail('Missing itemId');
+    try {
+      const result = await traktSync.addItemToWatchlist(itemId);
+      return ok(result);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle(
+    'trakt:remove-from-watchlist',
+    async (_, args: { itemId?: string; traktType?: 'movie' | 'show'; tmdbId?: string; key?: string }) => {
+      try {
+        if (args.itemId) {
+          const result = await traktSync.removeItemFromWatchlist({ embyId: args.itemId });
+          return ok(result);
+        }
+        if (args.traktType && args.tmdbId) {
+          const result = await traktSync.removeItemFromWatchlist({
+            traktType: args.traktType,
+            tmdbId: args.tmdbId,
+            key: args.key,
+          });
+          return ok(result);
+        }
+        return fail('Missing itemId or traktType/tmdbId');
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  ipcMain.handle('trakt:in-watchlist', (_, { itemId }: { itemId: string }) => {
+    try {
+      return ok(traktSync.isInWatchlist(itemId));
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:get-rating', async (_, { tmdbId, type }: { tmdbId: string; type: 'movie' | 'show' }) => {
+    if (!isNonEmptyString(tmdbId)) return fail('Missing tmdbId');
+    if (type !== 'movie' && type !== 'show') return fail('Invalid type');
+    try {
+      const result = await traktSync.getRating(tmdbId, type);
+      return ok(result);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:check-watched', (_, { tmdbId, type, season, episode }: { tmdbId: string; type: 'movie' | 'episode'; season?: number; episode?: number }) => {
+    if (!isNonEmptyString(tmdbId)) return ok(false);
+    try {
+      if (type === 'movie') {
+        const { isMovieWatchedOnTrakt } = require('./database');
+        return ok(isMovieWatchedOnTrakt(tmdbId));
+      }
+      if (type === 'episode' && typeof season === 'number' && typeof episode === 'number') {
+        const { isEpisodeWatchedOnTrakt } = require('./database');
+        return ok(isEpisodeWatchedOnTrakt(tmdbId, season, episode));
+      }
+      return ok(false);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  // Forward Trakt events to renderer
+  traktClient.on('auth-success', () => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('trakt:auth-success');
+    // Re-arm sync timers now that we have credentials.
+    traktSync.startTimers();
+  });
+  traktClient.on('token-refresh-failed', () => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('trakt:token-refresh-failed');
+    traktSync.stopTimers();
+  });
+  traktClient.on('disconnected', () => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('trakt:disconnected');
+    traktSync.stopTimers();
+  });
+  traktScrobbler.on('scrobble-error', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('trakt:scrobble-error', data);
+  });
+  traktSync.on('background-sync-complete', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('trakt:sync-complete', data);
+  });
+  traktSync.on('watchlist-updated', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('trakt:watchlist-updated', data);
   });
 }

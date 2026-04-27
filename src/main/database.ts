@@ -182,6 +182,61 @@ export function initDatabase(): void {
       cached_at TEXT DEFAULT (datetime('now')),
       size_bytes INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS trakt_scrobble_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      emby_id TEXT,
+      attempts INTEGER DEFAULT 0,
+      next_retry_at TEXT,
+      last_error TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_trakt_queue_retry ON trakt_scrobble_queue(next_retry_at);
+
+    -- Phase 2: Trakt watched-state mirror.
+    -- Synthesized "key" column avoids COALESCE-on-NULL primary-key pitfalls.
+    -- Movies → 'movie:<tmdb_id>' (or 'movie:imdb:<imdb_id>' if no tmdb).
+    -- Episodes → 'episode:<show_tmdb_id>:<season>:<ep>'.
+    CREATE TABLE IF NOT EXISTS trakt_watched_history (
+      key TEXT PRIMARY KEY,
+      trakt_type TEXT NOT NULL,
+      tmdb_id TEXT,
+      imdb_id TEXT,
+      show_tmdb_id TEXT,
+      season_number INTEGER,
+      episode_number INTEGER,
+      watched_at TEXT NOT NULL,
+      synced_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_thw_movie ON trakt_watched_history(tmdb_id) WHERE trakt_type = 'movie';
+    CREATE INDEX IF NOT EXISTS idx_thw_episode ON trakt_watched_history(show_tmdb_id, season_number, episode_number) WHERE trakt_type = 'episode';
+
+    -- Phase 3: Trakt watchlist mirror.
+    CREATE TABLE IF NOT EXISTS trakt_watchlist (
+      key TEXT PRIMARY KEY,
+      trakt_type TEXT NOT NULL,
+      tmdb_id TEXT,
+      imdb_id TEXT,
+      trakt_id INTEGER,
+      title TEXT,
+      year INTEGER,
+      overview TEXT,
+      added_at TEXT,
+      synced_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_twl_tmdb ON trakt_watchlist(tmdb_id);
+
+    -- Phase 4: Trakt rating cache (24h TTL — pruned lazily).
+    CREATE TABLE IF NOT EXISTS trakt_ratings (
+      tmdb_id TEXT NOT NULL,
+      trakt_type TEXT NOT NULL,
+      rating REAL,
+      votes INTEGER,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (tmdb_id, trakt_type)
+    );
   `);
 }
 
@@ -1087,4 +1142,274 @@ export function hasAnyCachedItems(): boolean {
 
 export function checkpoint(): void {
   getDb().pragma('wal_checkpoint(PASSIVE)');
+}
+
+// ── Trakt scrobble queue ────────────────────────────
+
+export interface TraktQueueRow {
+  id: number;
+  action: string;
+  payload: string;
+  emby_id: string | null;
+  attempts: number;
+  next_retry_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export function enqueueTraktScrobble(
+  action: string,
+  payload: string,
+  embyId: string | null,
+  lastError: string | null,
+): void {
+  getDb()
+    .prepare(
+      `INSERT INTO trakt_scrobble_queue (action, payload, emby_id, attempts, last_error)
+       VALUES (?, ?, ?, 0, ?)`,
+    )
+    .run(action, payload, embyId, lastError);
+}
+
+/** Get the next queue entry by FIFO (lowest id), regardless of retry timing. */
+export function getNextTraktScrobble(): TraktQueueRow | undefined {
+  return getDb()
+    .prepare(`SELECT * FROM trakt_scrobble_queue ORDER BY id ASC LIMIT 1`)
+    .get() as TraktQueueRow | undefined;
+}
+
+export function markTraktScrobbleAttempt(
+  id: number,
+  nextRetryAt: string | null,
+  lastError: string | null,
+): void {
+  getDb()
+    .prepare(
+      `UPDATE trakt_scrobble_queue
+       SET attempts = attempts + 1, next_retry_at = ?, last_error = ?
+       WHERE id = ?`,
+    )
+    .run(nextRetryAt, lastError, id);
+}
+
+export function deleteTraktScrobble(id: number): void {
+  getDb().prepare(`DELETE FROM trakt_scrobble_queue WHERE id = ?`).run(id);
+}
+
+export function clearTraktQueue(): void {
+  getDb().exec(`DELETE FROM trakt_scrobble_queue`);
+}
+
+export function countTraktQueue(): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) as c FROM trakt_scrobble_queue`)
+    .get() as { c: number };
+  return row.c;
+}
+
+// ── Trakt watched history (mirror of /sync/watched) ───
+
+export interface TraktWatchedRow {
+  key: string;
+  trakt_type: 'movie' | 'episode';
+  tmdb_id: string | null;
+  imdb_id: string | null;
+  show_tmdb_id: string | null;
+  season_number: number | null;
+  episode_number: number | null;
+  watched_at: string;
+}
+
+export function bulkUpsertTraktWatched(rows: TraktWatchedRow[]): void {
+  if (rows.length === 0) return;
+  const d = getDb();
+  const stmt = d.prepare(`
+    INSERT INTO trakt_watched_history
+      (key, trakt_type, tmdb_id, imdb_id, show_tmdb_id, season_number, episode_number, watched_at, synced_at)
+    VALUES
+      (@key, @trakt_type, @tmdb_id, @imdb_id, @show_tmdb_id, @season_number, @episode_number, @watched_at, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      watched_at = excluded.watched_at,
+      synced_at  = datetime('now')
+  `);
+  const tx = d.transaction((batch: TraktWatchedRow[]) => {
+    for (const r of batch) stmt.run(r);
+  });
+  tx(rows);
+}
+
+export function clearTraktWatched(): void {
+  getDb().exec(`DELETE FROM trakt_watched_history`);
+}
+
+export function countTraktWatched(): { movies: number; episodes: number } {
+  const d = getDb();
+  const m = d.prepare(`SELECT COUNT(*) as c FROM trakt_watched_history WHERE trakt_type = 'movie'`).get() as { c: number };
+  const e = d.prepare(`SELECT COUNT(*) as c FROM trakt_watched_history WHERE trakt_type = 'episode'`).get() as { c: number };
+  return { movies: m.c, episodes: e.c };
+}
+
+export function isMovieWatchedOnTrakt(tmdbId: string): boolean {
+  const row = getDb()
+    .prepare(`SELECT 1 FROM trakt_watched_history WHERE trakt_type = 'movie' AND tmdb_id = ? LIMIT 1`)
+    .get(tmdbId);
+  return Boolean(row);
+}
+
+export function isEpisodeWatchedOnTrakt(showTmdbId: string, season: number, episode: number): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM trakt_watched_history
+       WHERE trakt_type = 'episode' AND show_tmdb_id = ? AND season_number = ? AND episode_number = ?
+       LIMIT 1`,
+    )
+    .get(showTmdbId, season, episode);
+  return Boolean(row);
+}
+
+// ── Trakt watchlist (mirror of /users/me/watchlist) ───
+
+export interface TraktWatchlistRow {
+  key: string;
+  trakt_type: 'movie' | 'show';
+  tmdb_id: string | null;
+  imdb_id: string | null;
+  trakt_id: number | null;
+  title: string | null;
+  year: number | null;
+  overview: string | null;
+  added_at: string | null;
+}
+
+export function bulkUpsertTraktWatchlist(rows: TraktWatchlistRow[]): void {
+  if (rows.length === 0) return;
+  const d = getDb();
+  const stmt = d.prepare(`
+    INSERT INTO trakt_watchlist
+      (key, trakt_type, tmdb_id, imdb_id, trakt_id, title, year, overview, added_at, synced_at)
+    VALUES
+      (@key, @trakt_type, @tmdb_id, @imdb_id, @trakt_id, @title, @year, @overview, @added_at, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      title = excluded.title,
+      year = excluded.year,
+      overview = excluded.overview,
+      added_at = excluded.added_at,
+      synced_at = datetime('now')
+  `);
+  const tx = d.transaction((batch: TraktWatchlistRow[]) => {
+    for (const r of batch) stmt.run(r);
+  });
+  tx(rows);
+}
+
+export function replaceTraktWatchlist(rows: TraktWatchlistRow[]): void {
+  const d = getDb();
+  const tx = d.transaction(() => {
+    d.exec(`DELETE FROM trakt_watchlist`);
+    if (rows.length === 0) return;
+    const stmt = d.prepare(`
+      INSERT INTO trakt_watchlist
+        (key, trakt_type, tmdb_id, imdb_id, trakt_id, title, year, overview, added_at, synced_at)
+      VALUES
+        (@key, @trakt_type, @tmdb_id, @imdb_id, @trakt_id, @title, @year, @overview, @added_at, datetime('now'))
+    `);
+    for (const r of rows) stmt.run(r);
+  });
+  tx();
+}
+
+export function clearTraktWatchlist(): void {
+  getDb().exec(`DELETE FROM trakt_watchlist`);
+}
+
+export function countTraktWatchlist(): number {
+  const row = getDb().prepare(`SELECT COUNT(*) as c FROM trakt_watchlist`).get() as { c: number };
+  return row.c;
+}
+
+export function getTraktWatchlistEntries(): TraktWatchlistRow[] {
+  return getDb()
+    .prepare(`SELECT key, trakt_type, tmdb_id, imdb_id, trakt_id, title, year, overview, added_at FROM trakt_watchlist ORDER BY added_at DESC`)
+    .all() as TraktWatchlistRow[];
+}
+
+export function isInTraktWatchlist(traktType: 'movie' | 'show', tmdbId: string): boolean {
+  const row = getDb()
+    .prepare(`SELECT 1 FROM trakt_watchlist WHERE trakt_type = ? AND tmdb_id = ? LIMIT 1`)
+    .get(traktType, tmdbId);
+  return Boolean(row);
+}
+
+export function deleteTraktWatchlistEntry(key: string): void {
+  getDb().prepare(`DELETE FROM trakt_watchlist WHERE key = ?`).run(key);
+}
+
+// ── Trakt rating cache (24h TTL) ─────────────────────
+
+export interface TraktRatingRow {
+  tmdb_id: string;
+  trakt_type: 'movie' | 'show';
+  rating: number | null;
+  votes: number | null;
+  fetched_at: string;
+}
+
+export function getCachedTraktRating(tmdbId: string, type: 'movie' | 'show', ttlMs: number): TraktRatingRow | undefined {
+  const row = getDb()
+    .prepare(`SELECT * FROM trakt_ratings WHERE tmdb_id = ? AND trakt_type = ?`)
+    .get(tmdbId, type) as TraktRatingRow | undefined;
+  if (!row) return undefined;
+  const ageMs = Date.now() - new Date(row.fetched_at).getTime();
+  if (ageMs > ttlMs) return undefined;
+  return row;
+}
+
+export function setCachedTraktRating(tmdbId: string, type: 'movie' | 'show', rating: number | null, votes: number | null): void {
+  getDb()
+    .prepare(`
+      INSERT INTO trakt_ratings (tmdb_id, trakt_type, rating, votes, fetched_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(tmdb_id, trakt_type) DO UPDATE SET
+        rating = excluded.rating,
+        votes = excluded.votes,
+        fetched_at = excluded.fetched_at
+    `)
+    .run(tmdbId, type, rating, votes);
+}
+
+export function clearTraktRatings(): void {
+  getDb().exec(`DELETE FROM trakt_ratings`);
+}
+
+// ── Lookup helpers used by Trakt sync engine ─────────
+
+/** All cached items matching a TMDB id (across servers). */
+export function findItemsByTmdbId(tmdbId: string, type?: 'Movie' | 'Series'): ItemRow[] {
+  const d = getDb();
+  if (type) {
+    return d.prepare(`SELECT * FROM items WHERE tmdb_id = ? AND type = ?`).all(tmdbId, type) as ItemRow[];
+  }
+  return d.prepare(`SELECT * FROM items WHERE tmdb_id = ?`).all(tmdbId) as ItemRow[];
+}
+
+export function findItemsByImdbId(imdbId: string, type?: 'Movie' | 'Series'): ItemRow[] {
+  const d = getDb();
+  if (type) {
+    return d.prepare(`SELECT * FROM items WHERE imdb_id = ? AND type = ?`).all(imdbId, type) as ItemRow[];
+  }
+  return d.prepare(`SELECT * FROM items WHERE imdb_id = ?`).all(imdbId) as ItemRow[];
+}
+
+/** All cached episode rows for a given (showTmdbId, season, episode), across servers/series copies. */
+export function findEpisodesByShowTmdb(showTmdbId: string, season: number, episode: number): ItemRow[] {
+  return getDb()
+    .prepare(
+      `SELECT e.* FROM items e
+       INNER JOIN items s ON e.series_id = s.emby_id
+       WHERE s.type = 'Series' AND s.tmdb_id = ?
+         AND e.type = 'Episode'
+         AND e.season_number = ?
+         AND e.episode_number = ?`,
+    )
+    .all(showTmdbId, season, episode) as ItemRow[];
 }

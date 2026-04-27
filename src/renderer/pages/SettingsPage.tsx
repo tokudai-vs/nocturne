@@ -14,8 +14,10 @@ import Slider from '../components/ui/Slider';
 import SettingsRow from '../components/ui/SettingsRow';
 import AddServerModal from '../components/ui/AddServerModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import TraktAuthModal from '../components/ui/TraktAuthModal';
+import TraktHistoryPreviewModal from '../components/ui/TraktHistoryPreviewModal';
 import { SUBTITLE_LANGUAGE_OPTIONS, AUDIO_LANGUAGE_OPTIONS } from '../../shared/languages';
-import type { BaseItemDto, LibraryMapping, DbStats, DedupStats, UpdateStatus, CombinedMapping, CombinedLibraryRef, ServerConfig, SyncStatus } from '../api/types';
+import type { BaseItemDto, LibraryMapping, DbStats, DedupStats, UpdateStatus, CombinedMapping, CombinedLibraryRef, ServerConfig, SyncStatus, TraktStatus, TraktAdvancedConfig, TraktSyncStats } from '../api/types';
 import { formatDistanceToNow } from 'date-fns';
 import styles from './SettingsPage.module.css';
 
@@ -122,6 +124,19 @@ export default function SettingsPage() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
 
+  // Trakt state
+  const [traktStatus, setTraktStatus] = useState<TraktStatus | null>(null);
+  const [traktStats, setTraktStats] = useState<TraktSyncStats | null>(null);
+  const [showTraktModal, setShowTraktModal] = useState(false);
+  const [showTraktPreview, setShowTraktPreview] = useState(false);
+  const [showTraktDisconnect, setShowTraktDisconnect] = useState(false);
+  const [traktAdvanced, setTraktAdvanced] = useState<TraktAdvancedConfig | null>(null);
+  const [traktDraftId, setTraktDraftId] = useState('');
+  const [traktDraftSecret, setTraktDraftSecret] = useState('');
+  const [traktAdvancedSaved, setTraktAdvancedSaved] = useState(false);
+  const [traktDraining, setTraktDraining] = useState(false);
+  const [traktSyncingNow, setTraktSyncingNow] = useState(false);
+
   // Library mapping state
   const [mappings, setMappings] = useState<Record<string, LibraryMapping>>({});
   const [libraryMode, setLibraryMode] = useState<'separate' | 'combined'>('separate');
@@ -150,17 +165,62 @@ export default function SettingsPage() {
     });
   }, []);
 
+  const loadTraktStatus = useCallback(() => {
+    window.api.trakt.getStatus().then((res) => {
+      if (res.success && res.data) setTraktStatus(res.data as TraktStatus);
+    });
+    window.api.trakt.getAdvancedConfig().then((res) => {
+      if (res.success && res.data) {
+        const cfg = res.data as TraktAdvancedConfig;
+        setTraktAdvanced(cfg);
+        setTraktDraftId(cfg.clientIdOverride);
+        setTraktDraftSecret(cfg.clientSecretOverride);
+      }
+    });
+    window.api.trakt.getStats().then((res) => {
+      if (res.success && res.data) setTraktStats(res.data as TraktSyncStats);
+    });
+  }, []);
+
   useEffect(() => {
     fetchSettings();
     loadViews();
     loadStats();
     loadServers();
+    loadTraktStatus();
     window.api.updater.getStatus().then((res) => {
       if (res.success && res.data) setUpdateStatus(res.data as UpdateStatus);
     });
-    const unsub = window.api.updater.onStatus((s) => setUpdateStatus(s));
-    return unsub;
-  }, [fetchSettings, loadServers]);
+    const unsubUpdater = window.api.updater.onStatus((s) => setUpdateStatus(s));
+    const unsubAuth = window.api.trakt.onAuthSuccess(() => {
+      loadTraktStatus();
+      addToast('Connected to Trakt', 'success');
+      // Phase 2: chain into the history preview modal automatically.
+      // Settings is the right surface to host this — the auth modal closes
+      // immediately on success and we want the preview while context is fresh.
+      setShowTraktPreview(true);
+    });
+    const unsubRefresh = window.api.trakt.onTokenRefreshFailed(() => {
+      loadTraktStatus();
+      addToast('Trakt session expired — please reconnect', 'error');
+    });
+    const unsubScrobbleErr = window.api.trakt.onScrobbleError(() => {
+      loadTraktStatus();
+    });
+    const unsubBgSync = window.api.trakt.onSyncComplete((data) => {
+      loadTraktStatus();
+      if (data.newlyWatched > 0) {
+        addToast(`Trakt sync: marked ${data.newlyWatched} new item${data.newlyWatched === 1 ? '' : 's'} watched`, 'success');
+      }
+    });
+    return () => {
+      unsubUpdater();
+      unsubAuth();
+      unsubRefresh();
+      unsubScrobbleErr();
+      unsubBgSync();
+    };
+  }, [fetchSettings, loadServers, loadTraktStatus, addToast]);
 
   async function loadViews() {
     const res = await window.api.library.getViews();
@@ -542,6 +602,55 @@ export default function SettingsPage() {
     }
   }
 
+  // ── Trakt actions ─────────────────────────────────────
+
+  async function handleTraktConfirmDisconnect() {
+    await window.api.trakt.disconnect();
+    setShowTraktDisconnect(false);
+    loadTraktStatus();
+    addToast('Disconnected from Trakt', 'success');
+  }
+
+  async function handleSaveTraktAdvanced() {
+    await window.api.trakt.setAdvancedConfig({
+      clientId: traktDraftId.trim(),
+      clientSecret: traktDraftSecret.trim(),
+    });
+    setTraktAdvancedSaved(true);
+    setTimeout(() => setTraktAdvancedSaved(false), 1500);
+    loadTraktStatus();
+  }
+
+  async function handleDrainTraktQueue() {
+    setTraktDraining(true);
+    const res = await window.api.trakt.drainQueue();
+    setTraktDraining(false);
+    loadTraktStatus();
+    if (res.success && res.data) {
+      const remaining = (res.data as { remaining: number }).remaining;
+      addToast(
+        remaining === 0 ? 'Trakt queue cleared' : `${remaining} scrobble${remaining === 1 ? '' : 's'} still pending`,
+        remaining === 0 ? 'success' : 'error',
+      );
+    }
+  }
+
+  async function handleTraktSyncNow() {
+    setTraktSyncingNow(true);
+    const res = await window.api.trakt.syncNow();
+    setTraktSyncingNow(false);
+    loadTraktStatus();
+    if (res.success && res.data) {
+      const { history, watchlist } = res.data;
+      addToast(
+        `Synced — ${history.newlyWatched} new watched, ${watchlist.count} watchlist item${watchlist.count === 1 ? '' : 's'}`,
+        'success',
+      );
+    } else {
+      addToast(`Sync failed: ${res.error ?? 'unknown error'}`, 'error');
+    }
+  }
+
   if (!settings) return null;
 
   const libCountMap = new Map<string, number>();
@@ -892,6 +1001,189 @@ export default function SettingsPage() {
         </SettingsRow>
       </div>
 
+      {/* Trakt */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>Trakt</div>
+        {traktStatus && !traktStatus.encryptionAvailable && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', padding: '8px 0' }}>
+            System credential storage is unavailable on this machine. Trakt cannot be connected safely.
+          </div>
+        )}
+        {traktStatus && traktStatus.encryptionAvailable && !traktStatus.configured && !traktAdvanced?.bundledIdPresent && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '8px 0' }}>
+            Trakt credentials are not bundled in this build. Add a client_id and secret under Advanced below to connect.
+          </div>
+        )}
+        {!traktStatus?.connected ? (
+          <SettingsRow
+            label="Connect Trakt account"
+            description="Auto-scrobble, sync watched state, and surface your Trakt watchlist."
+          >
+            <button
+              className={styles.connectBtn}
+              onClick={() => setShowTraktModal(true)}
+              disabled={!traktStatus?.encryptionAvailable || !traktStatus?.configured}
+            >
+              Connect
+            </button>
+          </SettingsRow>
+        ) : (
+          <>
+            {/* Account header — connected as / since / disconnect */}
+            <div className={styles.statRow}>
+              <span>
+                Connected as <strong style={{ color: 'var(--text-primary)' }}>@{traktStatus.username || 'unknown'}</strong>
+                {traktStatus.connectedAt && (
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
+                    · since {formatDistanceToNow(new Date(traktStatus.connectedAt), { addSuffix: true })}
+                  </span>
+                )}
+              </span>
+              <button
+                className={`${styles.actionBtn} ${styles.actionBtnDanger}`}
+                onClick={() => setShowTraktDisconnect(true)}
+              >
+                Disconnect
+              </button>
+            </div>
+
+            {/* SYNC group */}
+            <div style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)', marginTop: 'var(--space-3)', marginBottom: 4 }}>
+              Sync
+            </div>
+            <SettingsRow label="Auto-scrobble playback" description="Send start, pause, and stop events to Trakt as you watch.">
+              <Toggle
+                value={settings.traktAutoScrobble ?? true}
+                onChange={(v) => handleSettingChange('traktAutoScrobble', v)}
+              />
+            </SettingsRow>
+            <SettingsRow label="Sync watched state" description="Pull every 6h; mark items watched here when watched on Trakt and vice versa.">
+              <Toggle
+                value={settings.traktSyncWatchedState ?? true}
+                onChange={(v) => handleSettingChange('traktSyncWatchedState', v)}
+              />
+            </SettingsRow>
+            <SettingsRow label="Show watchlist in sidebar" description="Add a Trakt Watchlist virtual library to the sidebar.">
+              <Toggle
+                value={settings.traktShowWatchlistInSidebar ?? true}
+                onChange={(v) => handleSettingChange('traktShowWatchlistInSidebar', v)}
+              />
+            </SettingsRow>
+            <div className={styles.statRow}>
+              <span>
+                Last synced
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {traktStats?.lastHistorySync
+                    ? formatDistanceToNow(new Date(traktStats.lastHistorySync), { addSuffix: true })
+                    : 'Never'}
+                  {traktStats && (
+                    <> · {traktStats.watched.movies} movies, {traktStats.watched.episodes} episodes mirrored</>
+                  )}
+                </div>
+              </span>
+              <button
+                className={`${styles.actionBtn} ${styles.actionBtnAccent}`}
+                onClick={handleTraktSyncNow}
+                disabled={traktSyncingNow}
+              >
+                {traktSyncingNow ? 'Syncing…' : 'Sync now'}
+              </button>
+            </div>
+
+            {/* QUEUE group — only renders when something is queued */}
+            {traktStatus.queueCount > 0 && (
+              <>
+                <div style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)', marginTop: 'var(--space-3)', marginBottom: 4 }}>
+                  Queue
+                </div>
+                <div className={styles.statRow}>
+                  <span style={{ color: 'var(--accent)' }}>
+                    {traktStatus.queueCount} pending event{traktStatus.queueCount === 1 ? '' : 's'}
+                  </span>
+                  <button
+                    className={styles.actionBtn}
+                    onClick={handleDrainTraktQueue}
+                    disabled={traktDraining}
+                  >
+                    {traktDraining ? 'Retrying…' : 'Retry now'}
+                  </button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        <details style={{ marginTop: 'var(--space-3)' }}>
+          <summary
+            style={{
+              cursor: 'pointer',
+              fontSize: 'var(--text-xs)',
+              color: 'var(--text-muted)',
+              padding: '4px 0',
+              userSelect: 'none',
+            }}
+          >
+            Advanced
+          </summary>
+          <div style={{ paddingTop: 'var(--space-2)' }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', paddingBottom: 'var(--space-2)' }}>
+              Override the bundled Trakt application credentials. Register an app at
+              {' '}<a
+                href="#"
+                onClick={(e) => { e.preventDefault(); window.api.trakt.openVerification('https://trakt.tv/oauth/applications'); }}
+                style={{ color: 'var(--accent)' }}
+              >trakt.tv/oauth/applications</a>
+              {' '}with redirect URI{' '}<code>urn:ietf:wg:oauth:2.0:oob</code>. Leave blank to use the bundled defaults.
+              {traktStatus?.connected && (
+                <div style={{ marginTop: 4, color: 'var(--accent)' }}>
+                  Disconnect first if you change these — current tokens will become invalid.
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+              <input
+                type="text"
+                placeholder="client_id (override)"
+                value={traktDraftId}
+                onChange={(e) => setTraktDraftId(e.target.value)}
+                style={{
+                  padding: '6px 10px',
+                  fontSize: 'var(--text-sm)',
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  color: 'var(--text-primary)',
+                  fontFamily: 'var(--font-mono, Consolas, monospace)',
+                }}
+              />
+              <input
+                type="password"
+                placeholder="client_secret (override)"
+                value={traktDraftSecret}
+                onChange={(e) => setTraktDraftSecret(e.target.value)}
+                style={{
+                  padding: '6px 10px',
+                  fontSize: 'var(--text-sm)',
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  color: 'var(--text-primary)',
+                  fontFamily: 'var(--font-mono, Consolas, monospace)',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+                <button className={styles.actionBtn} onClick={handleSaveTraktAdvanced}>
+                  Save credentials
+                </button>
+                {traktAdvancedSaved && (
+                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)' }}>Saved</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+
       {/* Subtitles */}
       <div className={styles.section}>
         <div className={styles.sectionHeader}>Subtitles</div>
@@ -1075,7 +1367,7 @@ export default function SettingsPage() {
       <div className={styles.section}>
         <div className={styles.sectionHeader}>About</div>
         <div className={styles.aboutInfo}>
-          <div className={styles.aboutVersion}>Nocturne v2.0.0</div>
+          <div className={styles.aboutVersion}>Nocturne v3.0.0</div>
           <div className={styles.aboutLine}>Desktop Emby client built with Electron + React + mpv</div>
           <div className={styles.aboutUpdate}>
             {updateStatus?.state === 'available' && (
@@ -1133,6 +1425,38 @@ export default function SettingsPage() {
           danger
           onConfirm={handleResetFull}
           onCancel={() => setShowResetConfirm(false)}
+        />
+      )}
+
+      {/* Trakt OAuth Modal */}
+      {showTraktModal && (
+        <TraktAuthModal
+          onClose={() => setShowTraktModal(false)}
+          onSuccess={() => {
+            setShowTraktModal(false);
+            loadTraktStatus();
+          }}
+        />
+      )}
+
+      {/* Trakt initial-pull preview (auto-opens after auth-success) */}
+      {showTraktPreview && (
+        <TraktHistoryPreviewModal
+          username={traktStatus?.username ?? null}
+          onClose={() => setShowTraktPreview(false)}
+          onApplied={() => loadTraktStatus()}
+        />
+      )}
+
+      {/* Trakt Disconnect Confirmation */}
+      {showTraktDisconnect && (
+        <ConfirmDialog
+          title="Disconnect Trakt?"
+          message="Nocturne will stop scrobbling, drop the watchlist sidebar entry, and discard any queued events. You can reconnect later."
+          confirmLabel="Disconnect"
+          danger
+          onConfirm={handleTraktConfirmDisconnect}
+          onCancel={() => setShowTraktDisconnect(false)}
         />
       )}
     </div>

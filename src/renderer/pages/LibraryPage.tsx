@@ -7,8 +7,15 @@ import { buildImageUrl } from '../utils/image-url';
 import { cachedToBaseItems } from '../utils/cache-adapter';
 import MediaCard from '../components/ui/MediaCard';
 import MediaCardSkeleton from '../components/ui/MediaCardSkeleton';
+import TraktExternalItemModal from '../components/ui/TraktExternalItemModal';
 import type { BaseItemDto, CachedItem, ItemsResult } from '../api/types';
 import styles from './LibraryPage.module.css';
+
+type ExternalItem = BaseItemDto & {
+  isExternal?: boolean;
+  traktKey?: string;
+  traktType?: 'movie' | 'show';
+};
 
 const SORT_OPTIONS = [
   { value: 'DateCreated', label: 'Date Added' },
@@ -26,6 +33,7 @@ export default function LibraryPage() {
   const { virtualLibraries, vlibsLoaded, views } = useLibraryStore();
   const { completed: syncCompleted } = useSyncStore();
 
+  const [externalItem, setExternalItem] = useState<ExternalItem | null>(null);
   const [items, setItems] = useState<BaseItemDto[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -203,7 +211,11 @@ export default function LibraryPage() {
       ) : viewMode === 'grid' ? (
         <div className={styles.grid}>
           {items.map((item) => (
-            <MediaCard key={item.Id} item={item} />
+            <MediaCard
+              key={item.Id}
+              item={item as ExternalItem}
+              onExternalClick={(ext) => setExternalItem(ext)}
+            />
           ))}
         </div>
       ) : (
@@ -249,6 +261,24 @@ export default function LibraryPage() {
       )}
 
       <div ref={sentinelRef} className={styles.sentinel} />
+
+      {externalItem && externalItem.traktType && (
+        <TraktExternalItemModal
+          title={externalItem.Name}
+          year={externalItem.ProductionYear ?? null}
+          overview={externalItem.Overview ?? null}
+          tmdbId={null}
+          imdbId={null}
+          traktType={externalItem.traktType}
+          traktKey={externalItem.traktKey}
+          onClose={() => setExternalItem(null)}
+          onRemoved={() => {
+            // Item was removed from Trakt — drop it from the visible list.
+            setItems((prev) => prev.filter((p) => p.Id !== externalItem.Id));
+            setTotalCount((c) => Math.max(0, c - 1));
+          }}
+        />
+      )}
     </div>
   );
 }

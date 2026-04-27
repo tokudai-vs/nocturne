@@ -1,6 +1,10 @@
 import { getSettings } from './settings';
 import { serverManager } from './server-manager';
+import { traktClient } from './trakt-client';
 import {
+  countTraktWatchlist,
+  findItemsByImdbId,
+  findItemsByTmdbId,
   getItem,
   getItemsMultiLibrary,
   getItemsMultiLibraryDeduped,
@@ -12,8 +16,11 @@ import {
   getGroupVersions,
   getEpisodeVersions,
   getDedupStats,
+  getTraktWatchlistEntries,
   type ItemRow,
 } from './database';
+
+export const TRAKT_WATCHLIST_VLIB_ID = 'trakt:watchlist';
 
 export interface VirtualLibrary {
   id: string;
@@ -34,10 +41,30 @@ interface VlibItemsOpts {
 }
 
 export function getVirtualLibraries(): VirtualLibrary[] {
-  if (serverManager.isCombinedMode()) {
-    return getCombinedVirtualLibraries();
+  const base = serverManager.isCombinedMode()
+    ? getCombinedVirtualLibraries()
+    : getSeparateVirtualLibraries();
+  // Prepend the Trakt Watchlist sentinel when connected and the toggle is on.
+  // The sidebar count comes from trakt_watchlist (cheap COUNT(*)), updated by
+  // background refresh; renderer doesn't need a live Trakt round-trip.
+  const settings = getSettings();
+  if (
+    settings.traktShowWatchlistInSidebar !== false &&
+    traktClient.isConnected()
+  ) {
+    return [
+      {
+        id: TRAKT_WATCHLIST_VLIB_ID,
+        name: 'Trakt Watchlist',
+        icon: 'Star',
+        libraryIds: [],
+        isVirtual: true,
+        totalItems: countTraktWatchlist(),
+      },
+      ...base,
+    ];
   }
-  return getSeparateVirtualLibraries();
+  return base;
 }
 
 function getSeparateVirtualLibraries(): VirtualLibrary[] {
@@ -193,6 +220,78 @@ export function getSeriesEpisodeVersions(
 
 export function getVirtualLibraryDedupStats(): { groupCount: number; mergedItems: number } {
   return getDedupStats();
+}
+
+/**
+ * Watchlist as virtual library. Each Trakt watchlist entry is mapped to the
+ * matched local CachedItem when one exists; otherwise a synthetic row with
+ * `is_external: true` so the renderer can grey it out and offer "find this".
+ */
+export function getTraktWatchlistAsCachedItems(): (ItemRow & { is_external?: boolean; trakt_key?: string; trakt_type?: string })[] {
+  const entries = getTraktWatchlistEntries();
+  const out: (ItemRow & { is_external?: boolean; trakt_key?: string; trakt_type?: string })[] = [];
+  const seenEmbyIds = new Set<string>();
+
+  for (const entry of entries) {
+    const localType: 'Movie' | 'Series' = entry.trakt_type === 'show' ? 'Series' : 'Movie';
+    let matches: ItemRow[] = [];
+    if (entry.tmdb_id) matches = findItemsByTmdbId(entry.tmdb_id, localType);
+    if (matches.length === 0 && entry.imdb_id) {
+      matches = findItemsByImdbId(entry.imdb_id, localType);
+    }
+
+    if (matches.length > 0) {
+      // Prefer a row with a dedup_group_id (it's the canonical primary).
+      const primary = matches.find((m) => m.dedup_group_id) ?? matches[0];
+      if (seenEmbyIds.has(primary.emby_id)) continue;
+      seenEmbyIds.add(primary.emby_id);
+      out.push({ ...primary, trakt_key: entry.key, trakt_type: entry.trakt_type });
+    } else {
+      // Synthetic external row — not playable.
+      const synthetic: ItemRow & { is_external: boolean; trakt_key: string; trakt_type: string } = {
+        emby_id: `trakt:${entry.key}`,
+        server_id: '',
+        library_id: TRAKT_WATCHLIST_VLIB_ID,
+        library_name: 'Trakt Watchlist',
+        type: localType,
+        name: entry.title ?? '(unknown)',
+        sort_name: entry.title,
+        overview: entry.overview,
+        tmdb_id: entry.tmdb_id,
+        imdb_id: entry.imdb_id,
+        tvdb_id: null,
+        production_year: entry.year,
+        premiere_date: null,
+        community_rating: null,
+        official_rating: null,
+        runtime_ticks: null,
+        genres: null,
+        studios: null,
+        image_tags: null,
+        backdrop_tags: null,
+        series_id: null,
+        series_name: null,
+        season_id: null,
+        season_number: null,
+        episode_number: null,
+        media_sources: null,
+        played: 0,
+        play_count: 0,
+        is_favorite: 0,
+        playback_position_ticks: 0,
+        played_percentage: 0,
+        date_created: entry.added_at,
+        date_modified: null,
+        cached_at: null,
+        dedup_group_id: null,
+        is_external: true,
+        trakt_key: entry.key,
+        trakt_type: entry.trakt_type,
+      };
+      out.push(synthetic);
+    }
+  }
+  return out;
 }
 
 function resolveLibraryIds(vlibId: string): string[] {

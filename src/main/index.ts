@@ -7,6 +7,8 @@ import { initImageCache } from './image-cache';
 import { syncEngine } from './sync-engine';
 import { initSettings } from './settings';
 import { initUpdater, checkForUpdates } from './updater';
+import { traktScrobbler } from './trakt-scrobbler';
+import { traktSync } from './trakt-sync';
 
 app.setAppUserModelId('com.nocturne.desktop');
 
@@ -41,6 +43,13 @@ app.whenReady().then(() => {
 
     // If dedup hasn't run in > 7 days, schedule a background rebuild
     syncEngine.checkDedupDrift();
+
+    // Drain any Trakt scrobbles queued from a prior session
+    traktScrobbler.init();
+
+    // Start Trakt history (6h) + watchlist (1h) periodic sync timers.
+    // No-op when not connected; re-armed on successful auth.
+    traktSync.startTimers();
   });
 
   app.on('activate', () => {
@@ -64,6 +73,7 @@ app.on('before-quit', (e) => {
   e.preventDefault();
   if (updateCheckInterval) clearInterval(updateCheckInterval);
   syncEngine.cancel();
+  traktSync.stopTimers();
   closeDatabase();
   mpvManager.quit().finally(() => app.exit());
 });

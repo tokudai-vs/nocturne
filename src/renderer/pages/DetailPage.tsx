@@ -1,17 +1,18 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Play, Heart, Check } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Play, Heart, Check, Bookmark } from 'lucide-react';
 import { buildImageUrl } from '../utils/image-url';
 import { formatRuntime, formatFileSize, formatBitrate, formatEpisodeNumber } from '../utils/format';
 import { cachedToBaseItem } from '../utils/cache-adapter';
 import { usePlay } from '../hooks/use-play';
+import { useToastStore } from '../stores/toast-store';
 import HeroBackdrop from '../components/ui/HeroBackdrop';
 import RatingBadge from '../components/ui/RatingBadge';
 import PersonCard from '../components/ui/PersonCard';
 import MediaRow from '../components/ui/MediaRow';
 import MediaSourcePicker from '../components/ui/MediaSourcePicker';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
-import type { BaseItemDto, CachedItem, EpisodeVersionGroup, ItemsResult, MediaSource as MediaSourceType, ServerConfig } from '../api/types';
+import type { BaseItemDto, CachedItem, EpisodeVersionGroup, ItemsResult, MediaSource as MediaSourceType, ServerConfig, TraktRating } from '../api/types';
 import styles from './DetailPage.module.css';
 import pickerStyles from '../components/ui/MediaSourcePicker.module.css';
 
@@ -114,6 +115,13 @@ export default function DetailPage() {
   const [favBounce, setFavBounce] = useState(false);
   const [playedBounce, setPlayedBounce] = useState(false);
 
+  // Trakt: rating + watchlist + drift indicator
+  const addToast = useToastStore((s) => s.addToast);
+  const [traktRating, setTraktRating] = useState<TraktRating | null>(null);
+  const [inWatchlist, setInWatchlist] = useState(false);
+  const [watchlistBusy, setWatchlistBusy] = useState(false);
+  const [traktDrift, setTraktDrift] = useState(false);
+
   // Media source picker
   const [pickerSources, setPickerSources] = useState<MediaSourceType[] | null>(null);
   const [pickerItem, setPickerItem] = useState<BaseItemDto | null>(null);
@@ -183,8 +191,70 @@ export default function DetailPage() {
       window.api.library.getSimilar(id).then((r) => {
         if (r.success) setSimilar((r.data as ItemsResult).Items);
       });
+
+      // 5. Trakt watchlist state for this item (cheap local lookup)
+      window.api.trakt.inWatchlist(id).then((r) => {
+        if (r.success) setInWatchlist(Boolean(r.data));
+      });
     })();
   }, [id]);
+
+  // Trakt rating + drift detection. Uses tmdb_id from the cached/fetched item.
+  // Rating fetch is cached in main with 24h TTL — won't hammer Trakt.
+  useEffect(() => {
+    setTraktRating(null);
+    setTraktDrift(false);
+    if (!item) return;
+    const isMovie = item.Type === 'Movie';
+    const isSeries = item.Type === 'Series';
+    const isEp = item.Type === 'Episode';
+    if (!isMovie && !isSeries && !isEp) return;
+
+    // The cached item is the canonical source for tmdb_id since BaseItemDto
+    // from Emby doesn't always carry it. Episodes need their parent series.
+    (async () => {
+      const cached = await window.api.cache.getItem(item.Id);
+      if (!cached.success || !cached.data) return;
+      const cachedItem = cached.data as CachedItem;
+
+      let ratingTmdb: string | null = null;
+      let ratingType: 'movie' | 'show' = 'movie';
+      if (isMovie && cachedItem.tmdb_id) {
+        ratingTmdb = cachedItem.tmdb_id;
+        ratingType = 'movie';
+      } else if (isSeries && cachedItem.tmdb_id) {
+        ratingTmdb = cachedItem.tmdb_id;
+        ratingType = 'show';
+      } else if (isEp && cachedItem.series_id) {
+        const s = await window.api.cache.getItem(cachedItem.series_id);
+        if (s.success && s.data && (s.data as CachedItem).tmdb_id) {
+          ratingTmdb = (s.data as CachedItem).tmdb_id;
+          ratingType = 'show';
+        }
+      }
+      if (ratingTmdb) {
+        const r = await window.api.trakt.getRating(ratingTmdb, ratingType);
+        if (r.success && r.data) setTraktRating(r.data);
+      }
+
+      // Drift indicator: watched on Trakt but not on this server.
+      if (isMovie && cachedItem.tmdb_id && !cachedItem.played) {
+        const d = await window.api.trakt.checkWatched({ tmdbId: cachedItem.tmdb_id, type: 'movie' });
+        if (d.success && d.data) setTraktDrift(true);
+      } else if (isEp && cachedItem.series_id && cachedItem.season_number != null && cachedItem.episode_number != null && !cachedItem.played) {
+        const s = await window.api.cache.getItem(cachedItem.series_id);
+        if (s.success && s.data && (s.data as CachedItem).tmdb_id) {
+          const d = await window.api.trakt.checkWatched({
+            tmdbId: (s.data as CachedItem).tmdb_id!,
+            type: 'episode',
+            season: cachedItem.season_number,
+            episode: cachedItem.episode_number,
+          });
+          if (d.success && d.data) setTraktDrift(true);
+        }
+      }
+    })();
+  }, [item]);
 
   // Seasons fetch — re-runs when active series changes (version pill click)
   useEffect(() => {
@@ -248,9 +318,36 @@ export default function DetailPage() {
     setIsPlayed(next);
     setPlayedBounce(true);
     setTimeout(() => setPlayedBounce(false), 250);
-    if (next) await window.api.user.markPlayed(item.Id);
-    else await window.api.user.markUnplayed(item.Id);
+    // Use the cross-server-aware item handler so the change cascades through
+    // the dedup group AND propagates to Trakt (Phase 2 push).
+    if (next) await window.api.item.markPlayed({ itemId: item.Id });
+    else await window.api.item.markUnplayed({ itemId: item.Id });
+    if (next) setTraktDrift(false);
   }, [item, isPlayed]);
+
+  const toggleWatchlist = useCallback(async () => {
+    if (!item || watchlistBusy) return;
+    const next = !inWatchlist;
+    setWatchlistBusy(true);
+    setInWatchlist(next); // optimistic
+    const res = next
+      ? await window.api.trakt.addToWatchlist(item.Id)
+      : await window.api.trakt.removeFromWatchlist({ itemId: item.Id });
+    setWatchlistBusy(false);
+    if (!res.success || !res.data?.ok) {
+      setInWatchlist(!next); // revert
+      addToast(`Watchlist update failed: ${res.data?.error ?? res.error ?? 'unknown'}`, 'error');
+    } else {
+      addToast(next ? 'Added to Trakt watchlist' : 'Removed from Trakt watchlist', 'success');
+    }
+  }, [item, inWatchlist, watchlistBusy, addToast]);
+
+  const markPlayedFromDrift = useCallback(async () => {
+    if (!item) return;
+    setIsPlayed(true);
+    setTraktDrift(false);
+    await window.api.item.markPlayed({ itemId: item.Id });
+  }, [item]);
 
   const handlePlay = useCallback(async (target: BaseItemDto) => {
     // Check for multiple media sources
@@ -379,6 +476,29 @@ export default function DetailPage() {
                 officialRating={item.OfficialRating}
                 criticRating={item.CriticRating}
               />
+              {traktRating?.rating != null && (
+                <span
+                  title={traktRating.votes ? `${traktRating.votes.toLocaleString()} votes on Trakt` : 'Trakt rating'}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-sm)' }}
+                >
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', background: 'rgba(229,57,75,0.15)', color: '#e5394b', borderRadius: 4, letterSpacing: 0.5 }}>TRAKT</span>
+                  {traktRating.rating.toFixed(1)}
+                </span>
+              )}
+              {traktDrift && (
+                <button
+                  onClick={markPlayedFromDrift}
+                  title="Watched on Trakt but not on this server — click to mark played here"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    padding: '2px 7px', borderRadius: 10,
+                    background: 'rgba(229,57,75,0.12)', border: '1px solid rgba(229,57,75,0.4)',
+                    color: '#e5394b', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  T<Check size={11} strokeWidth={3} />
+                </button>
+              )}
               {isSeries && item.ChildCount != null && (
                 <span>{item.ChildCount} Season{item.ChildCount !== 1 ? 's' : ''}</span>
               )}
@@ -413,6 +533,17 @@ export default function DetailPage() {
               >
                 <Check size={16} /> {isPlayed ? 'Played' : 'Mark Played'}
               </button>
+              {!isEpisode && (
+                <button
+                  className={`${styles.actionBtn} ${inWatchlist ? styles.actionActive : ''}`}
+                  onClick={toggleWatchlist}
+                  disabled={watchlistBusy}
+                  title={inWatchlist ? 'Remove from Trakt watchlist' : 'Add to Trakt watchlist'}
+                >
+                  <Bookmark size={16} fill={inWatchlist ? 'currentColor' : 'none'} />
+                  {inWatchlist ? 'On Watchlist' : 'Add to Watchlist'}
+                </button>
+              )}
             </div>
           </div>
         </div>

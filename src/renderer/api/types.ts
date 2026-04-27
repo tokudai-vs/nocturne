@@ -174,6 +174,10 @@ export interface CachedItem {
   cached_at: string | null;
   dedup_group_id: string | null;
   version_count?: number;
+  // Phase 3: Trakt watchlist sentinel rows.
+  is_external?: boolean;
+  trakt_key?: string;
+  trakt_type?: 'movie' | 'show';
 }
 
 export interface CacheFilters {
@@ -272,6 +276,16 @@ export interface NocturneSettings {
   syncOnStartup: boolean;
   firstLaunchComplete: boolean;
   lastServerUrl: string;
+  traktAutoScrobble: boolean;
+  traktSyncWatchedState: boolean;
+  traktShowWatchlistInSidebar: boolean;
+  traktUsername: string | null;
+  traktUserSlug: string | null;
+  traktConnectedAt: string | null;
+  traktLastSyncAt: string | null;
+  traktLastWatchlistSyncAt: string | null;
+  traktClientIdOverride: string;
+  traktClientSecretOverride: string;
 }
 
 // Updater types
@@ -292,6 +306,90 @@ export interface IpcResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+}
+
+// ── Trakt ──
+export interface TraktStatus {
+  connected: boolean;
+  configured: boolean;
+  encryptionAvailable: boolean;
+  username: string | null;
+  slug: string | null;
+  expiresAt: string | null;
+  connectedAt: string | null;
+  queueCount: number;
+}
+
+export interface TraktDeviceCode {
+  device_code: string;
+  user_code: string;
+  verification_url: string;
+  expires_in: number;
+  interval: number;
+}
+
+export type TraktDeviceFlowState =
+  | 'pending'
+  | 'success'
+  | 'denied'
+  | 'expired'
+  | 'slow_down';
+
+export interface TraktAdvancedConfig {
+  clientIdOverride: string;
+  clientSecretOverride: string;
+  bundledIdPresent: boolean;
+}
+
+export interface TraktScrobbleError {
+  action: string;
+  itemId: string;
+  message: string;
+}
+
+export interface TraktMatchedMovie {
+  tmdbId: string | null;
+  imdbId: string | null;
+  title: string;
+  year: number | null;
+  watchedAt: string;
+  embyIds: string[];
+  alreadyPlayed: boolean;
+}
+
+export interface TraktMatchedEpisode {
+  showTmdbId: string;
+  showTitle: string;
+  season: number;
+  episode: number;
+  watchedAt: string;
+  embyIds: string[];
+  alreadyPlayed: boolean;
+}
+
+export interface TraktHistoryPreview {
+  movies: {
+    totalOnTrakt: number;
+    matchedInLibrary: number;
+    items: TraktMatchedMovie[];
+  };
+  episodes: {
+    totalOnTrakt: number;
+    matchedInLibrary: number;
+    items: TraktMatchedEpisode[];
+  };
+}
+
+export interface TraktSyncStats {
+  watched: { movies: number; episodes: number };
+  watchlist: number;
+  lastHistorySync: string | null;
+  lastWatchlistSync: string | null;
+}
+
+export interface TraktRating {
+  rating: number | null;
+  votes: number | null;
 }
 
 // Window API type declaration
@@ -443,6 +541,41 @@ declare global {
       };
       session: {
         onExpired: (cb: () => void) => () => void;
+      };
+      trakt: {
+        getStatus: () => Promise<IpcResponse<TraktStatus>>;
+        authStart: () => Promise<IpcResponse<TraktDeviceCode>>;
+        authPoll: (deviceCode: string) => Promise<IpcResponse<TraktDeviceFlowState>>;
+        disconnect: () => Promise<IpcResponse<void>>;
+        drainQueue: () => Promise<IpcResponse<{ remaining: number }>>;
+        getQueueCount: () => Promise<IpcResponse<number>>;
+        getAdvancedConfig: () => Promise<IpcResponse<TraktAdvancedConfig>>;
+        setAdvancedConfig: (cfg: { clientId: string; clientSecret: string }) => Promise<IpcResponse<void>>;
+        openVerification: (url: string) => Promise<IpcResponse<void>>;
+        onAuthSuccess: (cb: () => void) => () => void;
+        onDisconnected: (cb: () => void) => () => void;
+        onScrobbleError: (cb: (err: TraktScrobbleError) => void) => () => void;
+        onTokenRefreshFailed: (cb: () => void) => () => void;
+        fetchPreview: () => Promise<IpcResponse<TraktHistoryPreview>>;
+        applyWatchedState: (embyIds: string[]) => Promise<IpcResponse<{ applied: number; failed: number }>>;
+        syncNow: () => Promise<IpcResponse<{
+          history: { newlyWatched: number; failed: number };
+          watchlist: { count: number };
+        }>>;
+        getStats: () => Promise<IpcResponse<TraktSyncStats>>;
+        getWatchlist: () => Promise<IpcResponse<CachedItem[]>>;
+        refreshWatchlist: () => Promise<IpcResponse<{ count: number }>>;
+        addToWatchlist: (itemId: string) => Promise<IpcResponse<{ ok: boolean; error?: string }>>;
+        removeFromWatchlist: (
+          args: { itemId?: string; traktType?: 'movie' | 'show'; tmdbId?: string; key?: string },
+        ) => Promise<IpcResponse<{ ok: boolean; error?: string }>>;
+        inWatchlist: (itemId: string) => Promise<IpcResponse<boolean>>;
+        getRating: (tmdbId: string, type: 'movie' | 'show') => Promise<IpcResponse<TraktRating | null>>;
+        checkWatched: (
+          args: { tmdbId: string; type: 'movie' | 'episode'; season?: number; episode?: number },
+        ) => Promise<IpcResponse<boolean>>;
+        onSyncComplete: (cb: (data: { newlyWatched: number; failed: number }) => void) => () => void;
+        onWatchlistUpdated: (cb: (data: { count: number }) => void) => () => void;
       };
       app: {
         onVisibilityChange: (cb: (data: { visible: boolean }) => void) => () => void;

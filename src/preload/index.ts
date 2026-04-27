@@ -207,6 +207,75 @@ const api = {
       return () => ipcRenderer.removeListener('updater:status', handler);
     },
   },
+  trakt: {
+    getStatus: () => ipcRenderer.invoke('trakt:get-status'),
+    authStart: () => ipcRenderer.invoke('trakt:auth-start'),
+    authPoll: (deviceCode: string) =>
+      ipcRenderer.invoke('trakt:auth-poll', { deviceCode }),
+    disconnect: () => ipcRenderer.invoke('trakt:disconnect'),
+    drainQueue: () => ipcRenderer.invoke('trakt:drain-queue'),
+    getQueueCount: () => ipcRenderer.invoke('trakt:get-queue-count'),
+    getAdvancedConfig: () => ipcRenderer.invoke('trakt:get-advanced-config'),
+    setAdvancedConfig: (cfg: { clientId: string; clientSecret: string }) =>
+      ipcRenderer.invoke('trakt:set-advanced-config', cfg),
+    openVerification: (url: string) =>
+      ipcRenderer.invoke('trakt:open-verification', { url }),
+    onAuthSuccess: (cb: () => void) => {
+      const handler = () => cb();
+      ipcRenderer.on('trakt:auth-success', handler);
+      return () => ipcRenderer.removeListener('trakt:auth-success', handler);
+    },
+    onDisconnected: (cb: () => void) => {
+      const handler = () => cb();
+      ipcRenderer.on('trakt:disconnected', handler);
+      return () => ipcRenderer.removeListener('trakt:disconnected', handler);
+    },
+    onScrobbleError: (
+      cb: (err: { action: string; itemId: string; message: string }) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        err: { action: string; itemId: string; message: string },
+      ) => cb(err);
+      ipcRenderer.on('trakt:scrobble-error', handler);
+      return () => ipcRenderer.removeListener('trakt:scrobble-error', handler);
+    },
+    onTokenRefreshFailed: (cb: () => void) => {
+      const handler = () => cb();
+      ipcRenderer.on('trakt:token-refresh-failed', handler);
+      return () => ipcRenderer.removeListener('trakt:token-refresh-failed', handler);
+    },
+    // ── Phase 2/3/4 ──
+    fetchPreview: () => ipcRenderer.invoke('trakt:fetch-preview'),
+    applyWatchedState: (embyIds: string[]) =>
+      ipcRenderer.invoke('trakt:apply-watched-state', { embyIds }),
+    syncNow: () => ipcRenderer.invoke('trakt:sync-now'),
+    getStats: () => ipcRenderer.invoke('trakt:get-stats'),
+    getWatchlist: () => ipcRenderer.invoke('trakt:get-watchlist'),
+    refreshWatchlist: () => ipcRenderer.invoke('trakt:refresh-watchlist'),
+    addToWatchlist: (itemId: string) =>
+      ipcRenderer.invoke('trakt:add-to-watchlist', { itemId }),
+    removeFromWatchlist: (
+      args: { itemId?: string; traktType?: 'movie' | 'show'; tmdbId?: string; key?: string },
+    ) => ipcRenderer.invoke('trakt:remove-from-watchlist', args),
+    inWatchlist: (itemId: string) =>
+      ipcRenderer.invoke('trakt:in-watchlist', { itemId }),
+    getRating: (tmdbId: string, type: 'movie' | 'show') =>
+      ipcRenderer.invoke('trakt:get-rating', { tmdbId, type }),
+    checkWatched: (
+      args: { tmdbId: string; type: 'movie' | 'episode'; season?: number; episode?: number },
+    ) => ipcRenderer.invoke('trakt:check-watched', args),
+    onSyncComplete: (cb: (data: { newlyWatched: number; failed: number }) => void) => {
+      const handler = (_: unknown, data: { newlyWatched: number; failed: number }) => cb(data);
+      ipcRenderer.on('trakt:sync-complete', handler);
+      return () => ipcRenderer.removeListener('trakt:sync-complete', handler);
+    },
+    onWatchlistUpdated: (cb: (data: { count: number }) => void) => {
+      const handler = (_: unknown, data: { count: number }) => cb(data);
+      ipcRenderer.on('trakt:watchlist-updated', handler);
+      return () => ipcRenderer.removeListener('trakt:watchlist-updated', handler);
+    },
+  },
   app: {
     onVisibilityChange: (cb: (data: { visible: boolean }) => void) => {
       const handler = (_: unknown, data: { visible: boolean }) => cb(data);
