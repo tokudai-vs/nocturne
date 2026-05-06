@@ -10,6 +10,7 @@
     "package:win": "npm run build && electron-builder --win",
     "download-mpv": "node scripts/download-mpv.js",
     "download-modernz": "node scripts/download-modernz.js",
+    "patch-modernz": "node scripts/patch-modernz.js",
     "mirror-mpv-config": "node scripts/mirror-mpv-config.js",
     "generate-icons": "node scripts/generate-icons.js",
     "lint": "eslint src/",

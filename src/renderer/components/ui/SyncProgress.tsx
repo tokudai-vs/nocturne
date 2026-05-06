@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSyncStore } from '../../stores/sync-store';
-import type { SyncProgress as SyncProgressData } from '../../api/types';
+import type { SyncProgress as SyncProgressData, SyncStatus } from '../../api/types';
 import styles from './SyncProgress.module.css';
 
 const SIZE = 40;
@@ -9,12 +9,22 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 export default function SyncProgress() {
   const { running, progress, completed, setProgress, setComplete, setError } = useSyncStore();
+  const setStatus = useSyncStore((s) => s.setStatus);
   const [visible, setVisible] = useState(false);
   const [fadeOut, setFadeOut] = useState(false);
   const fadeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  // Subscribe to sync IPC events
+  // Subscribe to sync IPC events + bootstrap current state on mount.
   useEffect(() => {
+    // One-shot bootstrap: if a sync was already in progress before this
+    // component mounted (e.g., the auto-start kicked off in ProtectedRoute
+    // before AppShell rendered), the renderer's `running` flag would stay
+    // false until the next progress event. Pull the live status once so
+    // banner / spinner reflect reality on cold start.
+    void window.api.sync.getStatus().then((res) => {
+      if (res.success && res.data) setStatus(res.data as SyncStatus);
+    });
+
     const unsubProgress = window.api.sync.onProgress((data) => {
       setProgress(data as SyncProgressData);
     });
@@ -30,7 +40,7 @@ export default function SyncProgress() {
       unsubComplete();
       unsubError();
     };
-  }, [setProgress, setComplete, setError]);
+  }, [setProgress, setComplete, setError, setStatus]);
 
   // Show/hide logic
   useEffect(() => {

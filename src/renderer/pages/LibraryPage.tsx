@@ -128,6 +128,20 @@ export default function LibraryPage() {
     }
   }, [syncCompleted]);
 
+  // Bug 2 fix: when viewing the Trakt watchlist sentinel, refetch on
+  // watchlist-updated events (fired after add-to-watchlist / remove /
+  // background refresh). Skip when on any other library to avoid spurious
+  // refetches.
+  useEffect(() => {
+    if (id !== 'trakt:watchlist') return;
+    const off = window.api.trakt.onWatchlistUpdated(() => {
+      setItems([]);
+      setTotalCount(0);
+      fetchPage(0, true);
+    });
+    return off;
+  }, [id, fetchPage]);
+
   // Infinite scroll via IntersectionObserver
   useEffect(() => {
     const sentinel = sentinelRef.current;

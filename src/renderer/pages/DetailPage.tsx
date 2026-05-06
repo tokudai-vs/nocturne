@@ -320,6 +320,9 @@ export default function DetailPage() {
     setTimeout(() => setPlayedBounce(false), 250);
     // Use the cross-server-aware item handler so the change cascades through
     // the dedup group AND propagates to Trakt (Phase 2 push).
+    console.log(
+      `[detail-page] Mark ${next ? 'Played' : 'Unplayed'} clicked, calling window.api.item.${next ? 'markPlayed' : 'markUnplayed'} for itemId=${item.Id}`,
+    );
     if (next) await window.api.item.markPlayed({ itemId: item.Id });
     else await window.api.item.markUnplayed({ itemId: item.Id });
     if (next) setTraktDrift(false);

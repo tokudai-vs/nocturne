@@ -5,21 +5,21 @@ import { embyClient } from './emby-client';
 import { serverManager } from './server-manager';
 import { getSettingValue, setSetting } from './settings';
 import {
+  bulkFindEpisodesBySeriesIds,
+  bulkFindItemsByExternalIds,
+  bulkGetItemsByEmbyIds,
+  bulkMarkItemsPlayed,
   bulkUpsertTraktWatched,
   clearTraktWatched,
   countTraktWatched,
   countTraktWatchlist,
   deleteTraktWatchlistEntry,
-  findEpisodesByShowTmdb,
-  findItemsByImdbId,
-  findItemsByTmdbId,
   getCachedTraktRating,
   getItem as dbGetItem,
   getTraktWatchlistEntries,
   isInTraktWatchlist,
   replaceTraktWatchlist,
   setCachedTraktRating,
-  updateItemUserData,
   type ItemRow,
   type TraktWatchedRow,
   type TraktWatchlistRow,
@@ -39,9 +39,17 @@ const RATING_TTL_MS = 24 * 60 * 60 * 1000;
 const HISTORY_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const WATCHLIST_SYNC_INTERVAL_MS = 60 * 60 * 1000;
 
+const APPLY_CONCURRENCY = 10;
+
 class TraktSync extends EventEmitter {
   private historyTimer: ReturnType<typeof setInterval> | null = null;
   private watchlistTimer: ReturnType<typeof setInterval> | null = null;
+  /** Set by `cancelApply()`; checked between Emby pushes during apply. */
+  private applyCancelled = false;
+  /** Single-flight guard for refreshWatchlist. Multiple concurrent triggers
+   *  (boot + auth-success + 1h timer + add/remove + manual) attach to the
+   *  in-flight promise instead of issuing duplicate Trakt round-trips. */
+  private inFlightWatchlistRefresh: Promise<{ count: number }> | null = null;
 
   // ── Lifecycle ──────────────────────────────────────
 
@@ -87,25 +95,63 @@ class TraktSync extends EventEmitter {
    * the apply step.
    */
   async fetchInitialPreview(): Promise<TraktHistoryPreview> {
+    // Hard 30s ceiling for the entire fetch + match pipeline. Bulk queries
+    // bring this well under a second in practice, but the timeout exists so
+    // a network hiccup (or a future regression) can never leave the renderer
+    // stuck in the "Looking up your Trakt history…" state forever.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const work = this.doFetchInitialPreview();
+    try {
+      return await Promise.race([
+        work,
+        new Promise<TraktHistoryPreview>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('Timed out fetching Trakt history (30s). Try again or check your connection.')),
+            30_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async doFetchInitialPreview(): Promise<TraktHistoryPreview> {
+    const t0 = Date.now();
+    console.log('[trakt-sync] fetchInitialPreview: requesting /sync/watched/movies + /sync/watched/shows');
     const [movies, shows] = await Promise.all([
-      traktClient.getWatchedMovies(),
-      traktClient.getWatchedShows(),
+      traktClient.getWatchedMovies().then((m) => {
+        console.log(`[trakt-sync]   getWatchedMovies → ${m.length} rows (+${Date.now() - t0}ms)`);
+        return m;
+      }),
+      traktClient.getWatchedShows().then((s) => {
+        const epCount = s.reduce((n, sh) => n + sh.seasons.reduce((m, se) => m + se.episodes.length, 0), 0);
+        console.log(`[trakt-sync]   getWatchedShows → ${s.length} shows / ${epCount} episodes (+${Date.now() - t0}ms)`);
+        return s;
+      }),
     ]);
 
-    // Persist watched mirror
+    const tPersist = Date.now();
     const historyRows = this.buildHistoryRows(movies, shows);
     if (historyRows.length > 0) {
       // Replace-style: full pull means current state is authoritative.
       clearTraktWatched();
       bulkUpsertTraktWatched(historyRows);
     }
+    console.log(`[trakt-sync]   persisted ${historyRows.length} history rows (+${Date.now() - tPersist}ms)`);
 
+    console.log(`[trakt-sync] fetchInitialPreview: matching against local cache (+${Date.now() - t0}ms)`);
+    const tMatch = Date.now();
     const matchedMovies = this.matchMovies(movies);
+    console.log(`[trakt-sync]   matched ${matchedMovies.length}/${movies.length} movies (+${Date.now() - tMatch}ms)`);
+    const tEp = Date.now();
     const matchedEpisodes = this.matchEpisodes(shows);
+    console.log(`[trakt-sync]   matched ${matchedEpisodes.length} episodes (+${Date.now() - tEp}ms)`);
 
     const totalEpisodesOnTrakt = shows.reduce((sum, s) =>
       sum + s.seasons.reduce((ss, season) => ss + season.episodes.length, 0), 0);
 
+    console.log(`[trakt-sync] fetchInitialPreview: complete (+${Date.now() - t0}ms total)`);
     return {
       movies: {
         totalOnTrakt: movies.length,
@@ -122,66 +168,183 @@ class TraktSync extends EventEmitter {
 
   /**
    * Apply Trakt watched state to a chosen subset of local items.
-   * Each entry is { embyIds: string[] } — callers expand each Trakt-watched
-   * row into all matched local copies (across servers) and we mark every
-   * copy played without echoing the change back to Trakt.
+   *
+   * Pipeline (replaces an old serial loop that took ~5–10 minutes for 3k+
+   * items):
+   *   1. One bulk SELECT to fetch all rows by emby_id (chunked at 500 to
+   *      stay under SQLite's 999-param limit).
+   *   2. Filter to rows that aren't already played.
+   *   3. ONE transactional UPDATE marks every row played in local cache.
+   *      The UI now reflects the change immediately; users don't wait on
+   *      the network for what they came to see.
+   *   4. Push to each item's home Emby server in parallel with a
+   *      concurrency cap. Per-item failures are tolerated; counts are
+   *      collected and surfaced. Cancellation is checked between pushes.
+   *
+   * Critical: this path NEVER calls the `item:mark-played` IPC handler, so
+   * it never re-pushes the same state to Trakt — that would create a sync
+   * loop on the next 6h pull. The Emby calls go through `embyClient`
+   * directly, bypassing the Trakt-push side-effect.
    */
-  async applyWatchedState(embyIds: string[]): Promise<{ applied: number; failed: number }> {
-    let applied = 0;
-    let failed = 0;
-    // De-dupe to avoid wasted work when caller passes overlapping lists.
+  async applyWatchedState(
+    embyIds: string[],
+  ): Promise<{ applied: number; failed: number; cancelled: boolean }> {
+    this.applyCancelled = false;
+    const t0 = Date.now();
     const unique = Array.from(new Set(embyIds));
 
-    for (const embyId of unique) {
-      try {
-        await this.markPlayedSilent(embyId);
-        applied++;
-      } catch (err) {
-        console.warn(`[trakt-sync] applyWatchedState: ${embyId} failed:`, err);
-        failed++;
-      }
+    // Phase 1: bulk-fetch matching rows.
+    const rows = bulkGetItemsByEmbyIds(unique);
+    const byId = new Map<string, ItemRow>(rows.map((r) => [r.emby_id, r]));
+    const toApply = unique
+      .map((id) => byId.get(id))
+      .filter((r): r is ItemRow => r !== undefined && r.played === 0);
+
+    const total = toApply.length;
+    console.log(`[trakt-sync] applyWatchedState: ${unique.length} requested, ${total} need apply (${Date.now() - t0}ms)`);
+
+    this.emit('apply-progress', { current: 0, total });
+
+    if (total === 0) {
+      setSetting('traktLastSyncAt', new Date().toISOString());
+      this.emit('history-applied', { applied: 0, failed: 0 });
+      return { applied: 0, failed: 0, cancelled: false };
     }
+
+    // Phase 2: bulk-mark played in local SQLite (single transaction).
+    const tLocal = Date.now();
+    bulkMarkItemsPlayed(toApply.map((r) => r.emby_id));
+    console.log(`[trakt-sync]   local mark-played for ${total} items (+${Date.now() - tLocal}ms)`);
+
+    // Phase 3: push to each item's home server in parallel. 10 concurrent
+    // is a safe sweet spot — Emby tolerates it without flooding, and axios
+    // pools per host so we get keep-alive reuse.
+    let applied = 0;
+    let failed = 0;
+    let lastEmit = 0;
+    const step = Math.max(1, Math.floor(total / 100));
+
+    const emitProgress = (force = false) => {
+      const done = applied + failed;
+      if (force || done - lastEmit >= step) {
+        lastEmit = done;
+        this.emit('apply-progress', { current: done, total });
+      }
+    };
+
+    let nextIdx = 0;
+    const activeServer = serverManager.getActiveServer();
+
+    const worker = async (): Promise<void> => {
+      while (true) {
+        if (this.applyCancelled) return;
+        const idx = nextIdx++;
+        if (idx >= toApply.length) return;
+        const item = toApply[idx];
+        const server = serverManager.getServer(item.server_id);
+        if (!server) {
+          // Item's server is gone — local cache is already updated, count it
+          // as applied so we don't surface a misleading failure.
+          applied++;
+          emitProgress();
+          continue;
+        }
+        try {
+          if (activeServer && server.id === activeServer.id) {
+            await embyClient.markPlayed(item.emby_id);
+          } else {
+            await embyClient.markPlayedOnServer(
+              server.url, server.accessToken, server.userId, item.emby_id,
+            );
+          }
+          applied++;
+        } catch (err) {
+          failed++;
+          console.warn(`[trakt-sync]   Emby mark-played failed for ${item.emby_id}:`, err);
+        }
+        emitProgress();
+      }
+    };
+
+    const tPush = Date.now();
+    await Promise.all(
+      Array.from({ length: Math.min(APPLY_CONCURRENCY, toApply.length) }, () => worker()),
+    );
+    console.log(
+      `[trakt-sync]   pushed to Emby — applied ${applied}, failed ${failed}`
+        + (this.applyCancelled ? ', cancelled' : '')
+        + ` (+${Date.now() - tPush}ms, ${Date.now() - t0}ms total)`,
+    );
+
+    emitProgress(true);
+
     setSetting('traktLastSyncAt', new Date().toISOString());
     this.emit('history-applied', { applied, failed });
-    return { applied, failed };
+    return { applied, failed, cancelled: this.applyCancelled };
   }
 
-  /**
-   * Mark an item played without pushing the change back to Trakt
-   * (used when the source of truth IS Trakt — initial pull, background sync).
-   * Updates local cache + pushes to Emby on the item's home server.
-   */
-  private async markPlayedSilent(embyId: string): Promise<void> {
-    const item = dbGetItem(embyId);
-    if (!item) return;
-    if (item.played) return; // already played locally
-    updateItemUserData(embyId, { played: 1, playback_position_ticks: 0, played_percentage: 0 });
-    const server = serverManager.getServer(item.server_id);
-    if (!server) return;
-    const activeServer = serverManager.getActiveServer();
-    try {
-      if (activeServer && server.id === activeServer.id) {
-        await embyClient.markPlayed(embyId);
-      } else {
-        await embyClient.markPlayedOnServer(server.url, server.accessToken, server.userId, embyId);
-      }
-    } catch (err) {
-      // Local cache stays optimistically marked; next sync will reconcile.
-      console.warn(`[trakt-sync] Emby mark-played failed for ${embyId}:`, err);
-    }
+  /** Cancel an in-flight applyWatchedState. Workers check the flag between
+   *  pushes; the local SQLite update has already completed by the time
+   *  any cancel can land, so the user-visible state is consistent. */
+  cancelApply(): void {
+    this.applyCancelled = true;
   }
 
   // ── Phase 2: Push (Nocturne → Trakt) ───────────────
 
   /** Called when the user marks an item played in the Nocturne UI. */
   async pushHistoryAdd(embyId: string): Promise<void> {
-    if (!this.syncWatchedEnabled() || !traktClient.isConnected()) return;
+    const item = dbGetItem(embyId);
+    console.log(
+      `[trakt-history-push] item:mark-played triggered, item={id=${embyId}, name="${item?.name ?? '?'}", `
+        + `type=${item?.type ?? '?'}, tmdb_id=${item?.tmdb_id ?? '-'}, imdb_id=${item?.imdb_id ?? '-'}}`,
+    );
+    if (!this.syncWatchedEnabled()) {
+      console.log(`[trakt-history-push] skip ${embyId}: traktSyncWatchedState=false`);
+      return;
+    }
+    if (!traktClient.isConnected()) {
+      console.log(`[trakt-history-push] skip ${embyId}: not connected to Trakt`);
+      return;
+    }
     const body = this.buildHistoryBody(embyId);
-    if (!body) return;
+    if (!body) {
+      // Most common cause: Emby metadata didn't populate tmdb_id / imdb_id.
+      // Without either, Trakt has nothing to match against.
+      console.warn(
+        `[trakt-history-push] SKIP ${embyId} (${item?.type ?? '?'} "${item?.name ?? '?'}"): `
+          + `no tmdb_id/imdb_id on local item — refresh Emby metadata for this title`,
+      );
+      return;
+    }
+    console.log(
+      `[trakt-history-push] enqueued history-add for tmdb_id=${item?.tmdb_id ?? '-'} `
+        + `(${item?.type} "${item?.name}")`,
+    );
+    console.log(
+      `[trakt-history-push] queue drain: sending POST /sync/history with body=${JSON.stringify(body)}`,
+    );
     try {
-      await traktClient.addHistory(body);
+      const response = await traktClient.addHistory(body);
+      const r = response as { added?: { movies?: number; episodes?: number }; not_found?: { movies?: unknown[]; episodes?: unknown[] } };
+      const addedMovies = r?.added?.movies ?? 0;
+      const addedEpisodes = r?.added?.episodes ?? 0;
+      const notFoundMovies = r?.not_found?.movies?.length ?? 0;
+      const notFoundEpisodes = r?.not_found?.episodes?.length ?? 0;
+      console.log(
+        `[trakt-history-push] response: 201 — added=${addedMovies + addedEpisodes}, `
+          + `not_found_movies=${notFoundMovies}, not_found_episodes=${notFoundEpisodes}`,
+      );
+      if (addedMovies + addedEpisodes === 0) {
+        // Trakt returned 200/201 but didn't add the item — almost always
+        // because Trakt's catalog couldn't find a matching entry. Surface
+        // this so the user knows their click had no remote effect.
+        console.warn(
+          `[trakt-history-push] Trakt did NOT add the item. body=${JSON.stringify(body)} response=${JSON.stringify(response).slice(0, 400)}`,
+        );
+      }
     } catch (err) {
-      console.warn(`[trakt-sync] history-add failed, queueing:`, err);
+      console.warn(`[trakt-history-push] history-add FAILED, queueing for retry:`, err);
       traktScrobbler.enqueueHistoryAction('history-add', body, embyId, errorMessage(err));
     }
   }
@@ -189,12 +352,25 @@ class TraktSync extends EventEmitter {
   /** Called when the user marks an item unwatched in the Nocturne UI. */
   async pushHistoryRemove(embyId: string): Promise<void> {
     if (!this.syncWatchedEnabled() || !traktClient.isConnected()) return;
+    const item = dbGetItem(embyId);
     const body = this.buildHistoryBody(embyId);
-    if (!body) return;
+    if (!body) {
+      console.warn(
+        `[trakt-history-push] SKIP remove ${embyId} (${item?.type ?? '?'} "${item?.name ?? '?'}"): no tmdb_id/imdb_id`,
+      );
+      return;
+    }
+    console.log(
+      `[trakt-history-push] item:mark-unplayed → POST /sync/history/remove `
+        + `(${item?.type} "${item?.name}", tmdb=${item?.tmdb_id ?? '-'})`,
+    );
     try {
-      await traktClient.removeHistory(body);
+      const response = await traktClient.removeHistory(body);
+      const r = response as { deleted?: { movies?: number; episodes?: number } };
+      const deleted = (r?.deleted?.movies ?? 0) + (r?.deleted?.episodes ?? 0);
+      console.log(`[trakt-history-push] response: deleted=${deleted}`);
     } catch (err) {
-      console.warn(`[trakt-sync] history-remove failed, queueing:`, err);
+      console.warn(`[trakt-history-push] history-remove FAILED, queueing for retry:`, err);
       traktScrobbler.enqueueHistoryAction('history-remove', body, embyId, errorMessage(err));
     }
   }
@@ -244,21 +420,45 @@ class TraktSync extends EventEmitter {
   // ── Phase 3: Watchlist ─────────────────────────────
 
   async refreshWatchlist(): Promise<{ count: number }> {
-    if (!traktClient.isConnected()) return { count: 0 };
-    try {
-      const [movies, shows] = await Promise.all([
-        traktClient.getWatchlistMovies(),
-        traktClient.getWatchlistShows(),
-      ]);
-      const rows = this.buildWatchlistRows(movies, shows);
-      replaceTraktWatchlist(rows);
-      setSetting('traktLastWatchlistSyncAt', new Date().toISOString());
-      this.emit('watchlist-updated', { count: rows.length });
-      return { count: rows.length };
-    } catch (err) {
-      console.warn('[trakt-sync] watchlist refresh failed:', err);
-      return { count: countTraktWatchlist() };
+    if (!traktClient.isConnected()) {
+      console.log('[trakt-watchlist] refresh skipped — not connected');
+      return { count: 0 };
     }
+    // Single-flight: piggy-back on an existing in-flight refresh instead of
+    // racing duplicate `GET /watchlist/{movies,shows}` round-trips. Boot,
+    // auth-success, the 1h timer, add/remove, and manual `trakt:sync-now`
+    // all funnel through here, so without this an authed-on-launch user
+    // can fire 2-3 simultaneous refreshes during cold start.
+    if (this.inFlightWatchlistRefresh) {
+      console.log('[trakt-watchlist] refresh already in flight — attaching to existing promise');
+      return this.inFlightWatchlistRefresh;
+    }
+    const t0 = Date.now();
+    console.log('[trakt-watchlist] refresh: GET /users/me/watchlist/{movies,shows}?extended=full');
+    const work = (async () => {
+      try {
+        const [movies, shows] = await Promise.all([
+          traktClient.getWatchlistMovies(),
+          traktClient.getWatchlistShows(),
+        ]);
+        const rows = this.buildWatchlistRows(movies, shows);
+        replaceTraktWatchlist(rows);
+        setSetting('traktLastWatchlistSyncAt', new Date().toISOString());
+        console.log(
+          `[trakt-watchlist] refresh complete: ${rows.length} entries `
+            + `(${movies.length} movies, ${shows.length} shows) in ${Date.now() - t0}ms`,
+        );
+        this.emit('watchlist-updated', { count: rows.length });
+        return { count: rows.length };
+      } catch (err) {
+        console.warn(`[trakt-watchlist] refresh failed after ${Date.now() - t0}ms:`, err);
+        return { count: countTraktWatchlist() };
+      } finally {
+        this.inFlightWatchlistRefresh = null;
+      }
+    })();
+    this.inFlightWatchlistRefresh = work;
+    return work;
   }
 
   /**
@@ -338,7 +538,13 @@ class TraktSync extends EventEmitter {
 
     try {
       await traktClient.removeFromWatchlist(body!);
+      // Optimistically prune the local row immediately so the renderer can
+      // re-query without waiting on the network round-trip.
       if (watchlistKey) deleteTraktWatchlistEntry(watchlistKey);
+      // Then mirror Trakt's actual state — this also emits 'watchlist-updated'
+      // so the sidebar count and any open watchlist library refresh in <2s
+      // instead of waiting for the next 1h timer.
+      await this.refreshWatchlist();
       return { ok: true };
     } catch (err) {
       return { ok: false, error: errorMessage(err) };
@@ -435,14 +641,50 @@ class TraktSync extends EventEmitter {
     return out;
   }
 
+  /**
+   * Movie matching — was per-row SQL (one IN-clauseless lookup per Trakt
+   * movie); now: one bulk IN query for tmdb, one for imdb, then in-memory
+   * map lookups. ~331 row scans collapse into ~1-2 round trips.
+   */
   private matchMovies(movies: TraktWatchedMovie[]): TraktMatchedMovie[] {
+    if (movies.length === 0) return [];
+
+    const tmdbIds = new Set<string>();
+    const imdbIds = new Set<string>();
+    for (const m of movies) {
+      if (m.movie.ids.tmdb) tmdbIds.add(String(m.movie.ids.tmdb));
+      if (m.movie.ids.imdb) imdbIds.add(m.movie.ids.imdb);
+    }
+
+    const localMovies = bulkFindItemsByExternalIds(
+      Array.from(tmdbIds),
+      Array.from(imdbIds),
+      'Movie',
+    );
+
+    // Multiple local copies per id are common — same movie on two servers.
+    const byTmdb = new Map<string, ItemRow[]>();
+    const byImdb = new Map<string, ItemRow[]>();
+    for (const r of localMovies) {
+      if (r.tmdb_id) {
+        const list = byTmdb.get(r.tmdb_id) ?? [];
+        list.push(r);
+        byTmdb.set(r.tmdb_id, list);
+      }
+      if (r.imdb_id) {
+        const list = byImdb.get(r.imdb_id) ?? [];
+        list.push(r);
+        byImdb.set(r.imdb_id, list);
+      }
+    }
+
     const matched: TraktMatchedMovie[] = [];
     for (const m of movies) {
       const tmdb = m.movie.ids.tmdb ? String(m.movie.ids.tmdb) : null;
       const imdb = m.movie.ids.imdb || null;
       let rows: ItemRow[] = [];
-      if (tmdb) rows = findItemsByTmdbId(tmdb, 'Movie');
-      if (rows.length === 0 && imdb) rows = findItemsByImdbId(imdb, 'Movie');
+      if (tmdb) rows = byTmdb.get(tmdb) ?? [];
+      if (rows.length === 0 && imdb) rows = byImdb.get(imdb) ?? [];
       if (rows.length === 0) continue;
       matched.push({
         tmdbId: tmdb,
@@ -457,15 +699,68 @@ class TraktSync extends EventEmitter {
     return matched;
   }
 
+  /**
+   * Episode matching — was per-episode JOIN against items twice (3,446 calls
+   * × multi-thousand-row table = main-thread freeze for tens of seconds);
+   * now: one IN query for matching Series rows, one IN query pulling every
+   * Episode of those series, then a nested Map<showTmdb, season, ep> for
+   * O(1) lookups during the iteration over Trakt's nested shape.
+   */
   private matchEpisodes(shows: TraktWatchedShow[]): TraktMatchedEpisode[] {
+    if (shows.length === 0) return [];
+
+    // Phase 1: collect show TMDB ids. Episodes are matched via show.tmdb only
+    // (Trakt episodes don't carry standalone external IDs reliably).
+    const showTmdbIds = new Set<string>();
+    for (const s of shows) {
+      if (s.show.ids.tmdb) showTmdbIds.add(String(s.show.ids.tmdb));
+    }
+    if (showTmdbIds.size === 0) return [];
+
+    // Phase 2: bulk-fetch matching local Series rows.
+    const localSeries = bulkFindItemsByExternalIds(
+      Array.from(showTmdbIds),
+      [],
+      'Series',
+    );
+    if (localSeries.length === 0) return [];
+
+    // emby_id → tmdb_id map so we can key each episode back to its Trakt show.
+    const seriesEmbyToTmdb = new Map<string, string>();
+    for (const r of localSeries) {
+      if (r.tmdb_id) seriesEmbyToTmdb.set(r.emby_id, r.tmdb_id);
+    }
+
+    // Phase 3: bulk-fetch ALL episodes belonging to the matched series.
+    const localEpisodes = bulkFindEpisodesBySeriesIds(Array.from(seriesEmbyToTmdb.keys()));
+
+    // Build nested map: showTmdb → season → episode → ItemRow[]
+    const epMap = new Map<string, Map<number, Map<number, ItemRow[]>>>();
+    for (const e of localEpisodes) {
+      if (!e.series_id || e.season_number == null || e.episode_number == null) continue;
+      const showTmdb = seriesEmbyToTmdb.get(e.series_id);
+      if (!showTmdb) continue;
+      let bySeason = epMap.get(showTmdb);
+      if (!bySeason) { bySeason = new Map(); epMap.set(showTmdb, bySeason); }
+      let byEp = bySeason.get(e.season_number);
+      if (!byEp) { byEp = new Map(); bySeason.set(e.season_number, byEp); }
+      let list = byEp.get(e.episode_number);
+      if (!list) { list = []; byEp.set(e.episode_number, list); }
+      list.push(e);
+    }
+
     const matched: TraktMatchedEpisode[] = [];
     for (const s of shows) {
       const showTmdb = s.show.ids.tmdb ? String(s.show.ids.tmdb) : null;
       if (!showTmdb) continue;
+      const bySeason = epMap.get(showTmdb);
+      if (!bySeason) continue;
       for (const season of s.seasons) {
+        const byEp = bySeason.get(season.number);
+        if (!byEp) continue;
         for (const ep of season.episodes) {
-          const rows = findEpisodesByShowTmdb(showTmdb, season.number, ep.number);
-          if (rows.length === 0) continue;
+          const rows = byEp.get(ep.number);
+          if (!rows || rows.length === 0) continue;
           matched.push({
             showTmdbId: showTmdb,
             showTitle: s.show.title,
@@ -520,15 +815,27 @@ class TraktSync extends EventEmitter {
     return out;
   }
 
-  /** Build a /sync/history request body for a single local item. */
+  /** Build a /sync/history request body for a single local item.
+   *  Includes title/year alongside IDs so Trakt can fall back to fuzzy match
+   *  when a tmdb_id isn't in their catalog, and an explicit `watched_at` so
+   *  the entry lands in the user's history page at the time they clicked
+   *  Mark Played (rather than Trakt's default "released" date for movies). */
   private buildHistoryBody(embyId: string): Record<string, unknown> | null {
     const item = dbGetItem(embyId);
     if (!item) return null;
+    const watchedAt = new Date().toISOString();
     if (item.type === 'Movie') {
       const tmdb = item.tmdb_id ? Number(item.tmdb_id) : undefined;
       const imdb = item.imdb_id || undefined;
       if (!tmdb && !imdb) return null;
-      return { movies: [{ ids: { tmdb, imdb } }] };
+      return {
+        movies: [{
+          watched_at: watchedAt,
+          title: item.name,
+          year: item.production_year ?? undefined,
+          ids: { tmdb, imdb },
+        }],
+      };
     }
     if (item.type === 'Episode') {
       if (!item.series_id || item.season_number == null || item.episode_number == null) return null;
@@ -540,10 +847,15 @@ class TraktSync extends EventEmitter {
       if (!tmdb && !imdb && !tvdb) return null;
       return {
         shows: [{
+          title: series.name,
+          year: series.production_year ?? undefined,
           ids: { tmdb, imdb, tvdb },
           seasons: [{
             number: item.season_number,
-            episodes: [{ number: item.episode_number }],
+            episodes: [{
+              watched_at: watchedAt,
+              number: item.episode_number,
+            }],
           }],
         }],
       };

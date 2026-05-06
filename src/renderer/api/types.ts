@@ -557,7 +557,9 @@ declare global {
         onScrobbleError: (cb: (err: TraktScrobbleError) => void) => () => void;
         onTokenRefreshFailed: (cb: () => void) => () => void;
         fetchPreview: () => Promise<IpcResponse<TraktHistoryPreview>>;
-        applyWatchedState: (embyIds: string[]) => Promise<IpcResponse<{ applied: number; failed: number }>>;
+        applyWatchedState: (embyIds: string[]) => Promise<IpcResponse<{ applied: number; failed: number; cancelled: boolean }>>;
+        cancelApply: () => Promise<IpcResponse<void>>;
+        onApplyProgress: (cb: (data: { current: number; total: number }) => void) => () => void;
         syncNow: () => Promise<IpcResponse<{
           history: { newlyWatched: number; failed: number };
           watchlist: { count: number };

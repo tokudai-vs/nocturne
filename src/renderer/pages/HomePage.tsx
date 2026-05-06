@@ -53,14 +53,23 @@ export default function HomePage() {
     }
   }, [settingsLoaded]);
 
-  // Refresh when sync completes
+  // Refresh when sync completes — debounced so back-to-back complete events
+  // (rare but possible during a partial→full transition or two consecutive
+  // incrementals) coalesce into a single refetch fan-out instead of
+  // re-firing vlib:get-all + cache:get-resume + vlib:get-heroes per event.
+  const syncRefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
-    if (syncCompleted) {
+    if (!syncCompleted) return;
+    if (syncRefetchTimer.current) clearTimeout(syncRefetchTimer.current);
+    syncRefetchTimer.current = setTimeout(() => {
       fetchVirtualLibraries();
       fetchResume();
       loadHeroItems();
       if (!isCombined) fetchNextUp();
-    }
+    }, 200);
+    return () => {
+      if (syncRefetchTimer.current) clearTimeout(syncRefetchTimer.current);
+    };
   }, [syncCompleted]);
 
   // Load latest items when vlibs are available

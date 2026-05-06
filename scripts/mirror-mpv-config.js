@@ -20,6 +20,7 @@ const FILES = [
   'input.conf',
   'script-opts/modernz.conf',
   'scripts/nocturne_select.lua',
+  'scripts/nocturne_nav.lua',
   'scripts/open-subtitles.lua',
 ];
 

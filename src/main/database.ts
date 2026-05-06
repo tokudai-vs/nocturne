@@ -4,6 +4,15 @@ import { join } from 'path';
 
 let db: Database.Database | null = null;
 
+// Wired at startup from ipc-handlers.ts to avoid a top-level circular import
+// against virtual-library (which depends on this module). The bundler flattens
+// to a single file in production builds, so a lazy require('./virtual-library')
+// at call time can't resolve — the callback pattern dodges that entirely.
+let onWatchlistMutated: (() => void) | null = null;
+export function setWatchlistMutationHook(cb: () => void): void {
+  onWatchlistMutated = cb;
+}
+
 // Escape LIKE wildcards so user input like "50%" matches the literal substring
 // instead of acting as a wildcard. Paired with `ESCAPE '\'` in the SQL clause.
 function escapeLike(s: string): string {
@@ -1316,6 +1325,7 @@ export function replaceTraktWatchlist(rows: TraktWatchlistRow[]): void {
     for (const r of rows) stmt.run(r);
   });
   tx();
+  onWatchlistMutated?.();
 }
 
 export function clearTraktWatchlist(): void {
@@ -1342,6 +1352,7 @@ export function isInTraktWatchlist(traktType: 'movie' | 'show', tmdbId: string):
 
 export function deleteTraktWatchlistEntry(key: string): void {
   getDb().prepare(`DELETE FROM trakt_watchlist WHERE key = ?`).run(key);
+  onWatchlistMutated?.();
 }
 
 // ── Trakt rating cache (24h TTL) ─────────────────────
@@ -1383,6 +1394,22 @@ export function clearTraktRatings(): void {
 
 // ── Lookup helpers used by Trakt sync engine ─────────
 
+/**
+ * Resolve a dedup_group_id to its primary item row. Used by the Trakt
+ * watchlist match path so the rendered card matches the same primary the
+ * library grid shows (preserving image_tags + the right server_id), instead
+ * of picking an arbitrary group member that may have empty image metadata.
+ */
+export function getDedupPrimaryItem(groupId: string): ItemRow | undefined {
+  const d = getDb();
+  const row = d.prepare(
+    `SELECT i.* FROM items i
+     INNER JOIN dedup_groups dg ON i.emby_id = dg.primary_item_id
+     WHERE dg.group_id = ?`,
+  ).get(groupId) as ItemRow | undefined;
+  return row;
+}
+
 /** All cached items matching a TMDB id (across servers). */
 export function findItemsByTmdbId(tmdbId: string, type?: 'Movie' | 'Series'): ItemRow[] {
   const d = getDb();
@@ -1412,4 +1439,148 @@ export function findEpisodesByShowTmdb(showTmdbId: string, season: number, episo
          AND e.episode_number = ?`,
     )
     .all(showTmdbId, season, episode) as ItemRow[];
+}
+
+/**
+ * Bulk lookup for items by external IDs. Returns the union of rows matching
+ * any tmdb_id or imdb_id in the input lists, deduplicated by emby_id. SQLite
+ * has a default 999-parameter limit, so we chunk. Used by Trakt sync to
+ * collapse thousands of per-item lookups into a few flat IN queries.
+ */
+export function bulkFindItemsByExternalIds(
+  tmdbIds: string[],
+  imdbIds: string[],
+  type: 'Movie' | 'Series',
+): ItemRow[] {
+  const d = getDb();
+  const CHUNK = 500;
+  const out: ItemRow[] = [];
+  const seen = new Set<string>();
+
+  const append = (rows: ItemRow[]) => {
+    for (const r of rows) {
+      if (seen.has(r.emby_id)) continue;
+      seen.add(r.emby_id);
+      out.push(r);
+    }
+  };
+
+  for (let i = 0; i < tmdbIds.length; i += CHUNK) {
+    const chunk = tmdbIds.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    append(
+      d.prepare(
+        `SELECT * FROM items WHERE type = ? AND tmdb_id IN (${placeholders})`,
+      ).all(type, ...chunk) as ItemRow[],
+    );
+  }
+  for (let i = 0; i < imdbIds.length; i += CHUNK) {
+    const chunk = imdbIds.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    append(
+      d.prepare(
+        `SELECT * FROM items WHERE type = ? AND imdb_id IN (${placeholders})`,
+      ).all(type, ...chunk) as ItemRow[],
+    );
+  }
+  return out;
+}
+
+/** Bulk lookup: every Episode row whose series_id is in the given list. Chunked for SQLite param limit. */
+export function bulkFindEpisodesBySeriesIds(seriesIds: string[]): ItemRow[] {
+  if (seriesIds.length === 0) return [];
+  const d = getDb();
+  const CHUNK = 500;
+  const out: ItemRow[] = [];
+  for (let i = 0; i < seriesIds.length; i += CHUNK) {
+    const chunk = seriesIds.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = d.prepare(
+      `SELECT * FROM items WHERE type = 'Episode' AND series_id IN (${placeholders})`,
+    ).all(...chunk) as ItemRow[];
+    out.push(...rows);
+  }
+  return out;
+}
+
+/** Bulk fetch items by emby_id list. Used by Trakt apply-watched to load all
+ *  selected rows in 1-N flat queries instead of N getItem() round trips. */
+export function bulkGetItemsByEmbyIds(embyIds: string[]): ItemRow[] {
+  if (embyIds.length === 0) return [];
+  const d = getDb();
+  const CHUNK = 500;
+  const out: ItemRow[] = [];
+  for (let i = 0; i < embyIds.length; i += CHUNK) {
+    const chunk = embyIds.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = d.prepare(
+      `SELECT * FROM items WHERE emby_id IN (${placeholders})`,
+    ).all(...chunk) as ItemRow[];
+    out.push(...rows);
+  }
+  return out;
+}
+
+/**
+ * Last-resort matcher for Trakt → local lookups when an item lacks both
+ * tmdb_id and imdb_id (Emby metadata gap), or the catalog id mismatches.
+ *
+ * Two-pass strategy:
+ *   1. Strict — exact lowercased+trimmed name with production_year ±1
+ *      (Trakt and Emby occasionally disagree by one on release year).
+ *   2. Normalized — strip leading articles, punctuation, and collapse
+ *      whitespace, then compare. This catches title variants like
+ *      "The Hoppers" vs "Hoppers" or "Spider-Man" vs "Spider Man".
+ * Used by the watchlist sidebar; not by primary mark-played pathways.
+ */
+export function findItemsByNameAndYear(
+  name: string,
+  year: number,
+  type: 'Movie' | 'Series',
+): ItemRow[] {
+  const d = getDb();
+  const lowered = name.trim().toLowerCase();
+  // Pass 1: exact match with ±1 year tolerance.
+  const strict = d.prepare(
+    `SELECT * FROM items
+     WHERE type = ?
+       AND production_year BETWEEN ? AND ?
+       AND LOWER(TRIM(name)) = ?`,
+  ).all(type, year - 1, year + 1, lowered) as ItemRow[];
+  if (strict.length > 0) return strict;
+
+  // Pass 2: normalized match (strip articles + punctuation) on year ±1.
+  const target = normalizeTitleForMatch(name);
+  if (!target) return [];
+  const candidates = d.prepare(
+    `SELECT * FROM items
+     WHERE type = ? AND production_year BETWEEN ? AND ?`,
+  ).all(type, year - 1, year + 1) as ItemRow[];
+  return candidates.filter((row) => normalizeTitleForMatch(row.name) === target);
+}
+
+/** Lowercase, drop leading article ("the"/"a"/"an"), strip non-alphanumeric. */
+function normalizeTitleForMatch(s: string | null | undefined): string {
+  if (!s) return '';
+  return s
+    .toLowerCase()
+    .replace(/^\s*(the|a|an)\s+/, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+/** Mark a list of items played in one transaction (clears resume position).
+ *  Used by Trakt apply-watched and background history sync. Does NOT touch
+ *  Emby — caller pushes those separately, optionally with concurrency. */
+export function bulkMarkItemsPlayed(embyIds: string[]): void {
+  if (embyIds.length === 0) return;
+  const d = getDb();
+  const stmt = d.prepare(`
+    UPDATE items
+    SET played = 1, playback_position_ticks = 0, played_percentage = 0
+    WHERE emby_id = ?
+  `);
+  const tx = d.transaction((ids: string[]) => {
+    for (const id of ids) stmt.run(id);
+  });
+  tx(embyIds);
 }

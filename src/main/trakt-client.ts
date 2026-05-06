@@ -226,10 +226,15 @@ class TraktClient extends EventEmitter {
       const res = await this.http.post(`/scrobble/${action}`, body, { headers });
       return { ok: true, status: res.status };
     } catch (err) {
-      const status = (err as AxiosError).response?.status;
+      const axErr = err as AxiosError;
+      const status = axErr.response?.status;
+      // [DEBUG] Scrobble failures (esp. 422 unprocessable entity) are easier
+      // to triage with the request body + Trakt's response body in logs.
+      console.warn(
+        `[trakt-client] scrobble/${action} FAILED status=${status} body=${JSON.stringify(body)} response=${JSON.stringify(axErr.response?.data)}`,
+      );
       // 404: nothing to scrobble (no current play). 409: already scrobbled in last 30s.
       if (status === 404 || status === 409) {
-        console.log(`[trakt-client] scrobble/${action} → ${status} (non-retryable)`);
         return { ok: false, status };
       }
       throw err;

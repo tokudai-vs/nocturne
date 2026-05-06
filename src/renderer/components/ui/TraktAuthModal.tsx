@@ -18,7 +18,28 @@ export default function TraktAuthModal({ onClose, onSuccess }: Props) {
   const [copied, setCopied] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const expireTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const cancelled = useRef(false);
+
+  // Always-current refs for the callback props. SettingsPage passes inline
+  // arrow functions whose identity changes on every parent re-render. If we
+  // closed over `onClose` / `onSuccess` directly inside `useCallback`, the
+  // entire effect chain (beginPolling → startFlow → useEffect) would re-fire
+  // on every parent re-render and request a fresh device code each time —
+  // which is the bug this guards against.
+  const onCloseRef = useRef(onClose);
+  const onSuccessRef = useRef(onSuccess);
+  onCloseRef.current = onClose;
+  onSuccessRef.current = onSuccess;
+
+  // Generation counter used to invalidate in-flight async work. Each call to
+  // startFlow bumps it and captures the new value into a local `myEpoch`; all
+  // awaits compare-and-bail when the latest epoch no longer matches. The
+  // mount cleanup also bumps it so:
+  //   - React StrictMode's double-mount in dev doesn't race two authStart
+  //     calls into setting modal state (only the latest wins);
+  //   - clicking Try Again throws away any pending poll from the prior flow;
+  //   - unmounting mid-flight makes the in-flight authStart resolve into a
+  //     no-op instead of touching state on an unmounted component.
+  const epoch = useRef(0);
 
   const cleanup = useCallback(() => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -28,12 +49,12 @@ export default function TraktAuthModal({ onClose, onSuccess }: Props) {
   }, []);
 
   const beginPolling = useCallback(
-    (d: TraktDeviceCode) => {
+    (d: TraktDeviceCode, myEpoch: number) => {
       let intervalSec = d.interval;
       const tick = async () => {
-        if (cancelled.current) return;
+        if (myEpoch !== epoch.current) return;
         const res = await window.api.trakt.authPoll(d.device_code);
-        if (cancelled.current) return;
+        if (myEpoch !== epoch.current) return;
         if (!res.success) {
           // Network/config error — keep retrying at the suggested interval.
           pollTimer.current = setTimeout(tick, intervalSec * 1000);
@@ -43,8 +64,8 @@ export default function TraktAuthModal({ onClose, onSuccess }: Props) {
         if (state === 'success') {
           setStatus('success');
           cleanup();
-          onSuccess();
-          setTimeout(onClose, 800);
+          onSuccessRef.current();
+          setTimeout(() => onCloseRef.current(), 800);
           return;
         }
         if (state === 'expired') { setStatus('expired'); cleanup(); return; }
@@ -56,16 +77,16 @@ export default function TraktAuthModal({ onClose, onSuccess }: Props) {
       };
       pollTimer.current = setTimeout(tick, intervalSec * 1000);
     },
-    [cleanup, onClose, onSuccess],
+    [cleanup],
   );
 
   const startFlow = useCallback(async () => {
     cleanup();
-    cancelled.current = false;
+    const myEpoch = ++epoch.current;
     setStatus('loading');
     setError(null);
     const res = await window.api.trakt.authStart();
-    if (cancelled.current) return;
+    if (myEpoch !== epoch.current) return;
     if (!res.success || !res.data) {
       setStatus('error');
       setError(res.error ?? 'Failed to start authorization');
@@ -75,7 +96,14 @@ export default function TraktAuthModal({ onClose, onSuccess }: Props) {
     setDevice(d);
     setSecondsLeft(d.expires_in);
     setStatus('waiting');
-    expireTimer.current = setInterval(() => {
+    // Capture the interval handle into a local so a stale tick (after a new
+    // flow has bumped the epoch and replaced expireTimer.current) clears the
+    // RIGHT interval rather than the new flow's active one.
+    const interval = setInterval(() => {
+      if (myEpoch !== epoch.current) {
+        clearInterval(interval);
+        return;
+      }
       setSecondsLeft((s) => {
         if (s <= 1) {
           setStatus('expired');
@@ -85,13 +113,16 @@ export default function TraktAuthModal({ onClose, onSuccess }: Props) {
         return s - 1;
       });
     }, 1000);
-    beginPolling(d);
+    expireTimer.current = interval;
+    beginPolling(d, myEpoch);
   }, [beginPolling, cleanup]);
 
   useEffect(() => {
-    startFlow();
+    void startFlow();
     return () => {
-      cancelled.current = true;
+      // Bumping the epoch invalidates any in-flight authStart/authPoll and
+      // any pending tick callbacks; cleanup() clears the active timers.
+      ++epoch.current;
       cleanup();
     };
   }, [startFlow, cleanup]);

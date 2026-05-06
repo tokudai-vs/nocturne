@@ -23,17 +23,21 @@ app.whenReady().then(() => {
   registerWindowIpc();
 
   const mainWindow = createWindow();
-  mainWindow.on('ready-to-show', async () => {
+  mainWindow.on('ready-to-show', () => {
     mainWindow.show();
     mainWindow.setFullScreen(true);
 
-    // Pre-start mpv in idle mode (runs silently in background)
-    try {
-      await mpvManager.startIdle();
-    } catch (err) {
+    // Pre-start mpv in idle mode — fire-and-forget so it does NOT block the
+    // rest of the post-show kickoffs (Trakt watchlist, scrobbler drain,
+    // dedup drift check). mpv spawn is 200-800ms+; the user has no reason
+    // to wait on that for the sidebar / watchlist count to populate.
+    // Failures still surface to the renderer via `player:mpv-unavailable`.
+    mpvManager.startIdle().catch((err) => {
       console.error('[main] Failed to pre-start mpv:', err);
-      mainWindow.webContents.send('player:mpv-unavailable');
-    }
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('player:mpv-unavailable');
+      }
+    });
 
     // Check for updates after launch (non-blocking), then every 6 hours
     if (app.isPackaged) {
@@ -50,6 +54,13 @@ app.whenReady().then(() => {
     // Start Trakt history (6h) + watchlist (1h) periodic sync timers.
     // No-op when not connected; re-armed on successful auth.
     traktSync.startTimers();
+
+    // Kick an immediate watchlist refresh on launch so the sidebar reflects
+    // changes made on Trakt's side since last run, instead of waiting up to
+    // 1h for the timer. The single-flight guard in refreshWatchlist makes
+    // boot + auth-success collisions a no-op (second caller attaches to the
+    // first promise), so we don't need mode-detection here.
+    void traktSync.refreshWatchlist();
   });
 
   app.on('activate', () => {

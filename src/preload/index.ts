@@ -249,6 +249,12 @@ const api = {
     fetchPreview: () => ipcRenderer.invoke('trakt:fetch-preview'),
     applyWatchedState: (embyIds: string[]) =>
       ipcRenderer.invoke('trakt:apply-watched-state', { embyIds }),
+    cancelApply: () => ipcRenderer.invoke('trakt:cancel-apply'),
+    onApplyProgress: (cb: (data: { current: number; total: number }) => void) => {
+      const handler = (_: unknown, data: { current: number; total: number }) => cb(data);
+      ipcRenderer.on('trakt:apply-progress', handler);
+      return () => ipcRenderer.removeListener('trakt:apply-progress', handler);
+    },
     syncNow: () => ipcRenderer.invoke('trakt:sync-now'),
     getStats: () => ipcRenderer.invoke('trakt:get-stats'),
     getWatchlist: () => ipcRenderer.invoke('trakt:get-watchlist'),

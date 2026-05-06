@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check } from 'lucide-react';
 import { useToastStore } from '../../stores/toast-store';
 import type { TraktHistoryPreview, TraktMatchedEpisode, TraktMatchedMovie } from '../../api/types';
@@ -23,30 +23,68 @@ export default function TraktHistoryPreviewModal({ username, onClose, onApplied 
   const [moviesSelected, setMoviesSelected] = useState<Set<string>>(new Set());
   const [episodesSelected, setEpisodesSelected] = useState<Set<string>>(new Set());
   const [applying, setApplying] = useState(false);
+  const [applyProgress, setApplyProgress] = useState<{ current: number; total: number } | null>(null);
+  // Increment to retry the fetch after a failure. The fetch effect depends on
+  // this so re-clicking Try Again re-runs it.
+  const [attempt, setAttempt] = useState(0);
+
+  // Subscribe to main-process apply-progress events for the lifetime of the
+  // modal. Cheap; the listener is a no-op when not applying.
+  useEffect(() => {
+    const off = window.api.trakt.onApplyProgress((data) => {
+      setApplyProgress(data);
+    });
+    return off;
+  }, []);
+
+  // If the modal unmounts while an apply is in flight, tell main to abort.
+  // The local SQLite update has already happened (Phase 2 of the pipeline),
+  // so the user-visible "watched" state is consistent regardless.
+  const applyingRef = useRef(false);
+  applyingRef.current = applying;
+  useEffect(() => {
+    return () => {
+      if (applyingRef.current) {
+        void window.api.trakt.cancelApply();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
+    const t0 = Date.now();
+    console.log('[trakt-preview-modal] mount — calling window.api.trakt.fetchPreview()');
     (async () => {
-      const res = await window.api.trakt.fetchPreview();
-      if (cancelled) return;
-      if (!res.success || !res.data) {
-        setError(res.error ?? 'Failed to fetch Trakt history');
+      try {
+        const res = await window.api.trakt.fetchPreview();
+        console.log(`[trakt-preview-modal] fetchPreview returned after ${Date.now() - t0}ms`, res);
+        if (cancelled) return;
+        if (!res.success || !res.data) {
+          setError(res.error ?? 'Failed to fetch Trakt history');
+          setLoading(false);
+          return;
+        }
+        const p = res.data;
+        setPreview(p);
+        // Default: all unplayed matches selected.
+        const ms = new Set<string>();
+        for (const m of p.movies.items) if (!m.alreadyPlayed) ms.add(movieKey(m));
+        const es = new Set<string>();
+        for (const e of p.episodes.items) if (!e.alreadyPlayed) es.add(episodeKey(e));
+        setMoviesSelected(ms);
+        setEpisodesSelected(es);
         setLoading(false);
-        return;
+      } catch (e) {
+        // Defensive: IPC bridge shouldn't throw (it returns {success,error}),
+        // but if anything unexpected does, surface it instead of hanging.
+        console.error('[trakt-preview-modal] unexpected exception:', e);
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : 'Unexpected error');
+        setLoading(false);
       }
-      const p = res.data;
-      setPreview(p);
-      // Default: all unplayed matches selected.
-      const ms = new Set<string>();
-      for (const m of p.movies.items) if (!m.alreadyPlayed) ms.add(movieKey(m));
-      const es = new Set<string>();
-      for (const e of p.episodes.items) if (!e.alreadyPlayed) es.add(episodeKey(e));
-      setMoviesSelected(ms);
-      setEpisodesSelected(es);
-      setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [attempt]);
 
   const moviesEligibleCount = useMemo(
     () => preview ? preview.movies.items.filter((m) => !m.alreadyPlayed).length : 0,
@@ -98,16 +136,18 @@ export default function TraktHistoryPreviewModal({ username, onClose, onApplied 
       return;
     }
     setApplying(true);
+    setApplyProgress({ current: 0, total: 0 });
     const res = await window.api.trakt.applyWatchedState(ids);
     setApplying(false);
+    setApplyProgress(null);
     if (res.success && res.data) {
-      const { applied, failed } = res.data;
-      addToast(
-        failed > 0
+      const { applied, failed, cancelled } = res.data;
+      const msg = cancelled
+        ? `Cancelled — applied ${applied} so far`
+        : failed > 0
           ? `Applied ${applied}, ${failed} failed`
-          : `Applied ${applied} watched item${applied === 1 ? '' : 's'}`,
-        failed > 0 ? 'error' : 'success',
-      );
+          : `Applied ${applied} watched item${applied === 1 ? '' : 's'}`;
+      addToast(msg, failed > 0 || cancelled ? 'error' : 'success');
       onApplied?.(applied);
       onClose();
     } else {
@@ -141,10 +181,22 @@ export default function TraktHistoryPreviewModal({ username, onClose, onApplied 
         {loading && <div className={styles.loading}>Looking up your Trakt history…</div>}
 
         {error && (
-          <div className={styles.error}>
-            {error}
-            <button className={styles.cancelBtn} onClick={onClose}>Close</button>
-          </div>
+          <>
+            <div className={styles.error}>{error}</div>
+            <div className={styles.footer}>
+              <button className={styles.cancelBtn} onClick={onClose}>Skip</button>
+              <button
+                className={styles.applyBtn}
+                onClick={() => {
+                  setError(null);
+                  setLoading(true);
+                  setAttempt((a) => a + 1);
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          </>
         )}
 
         {!loading && !error && preview && (
@@ -263,14 +315,30 @@ export default function TraktHistoryPreviewModal({ username, onClose, onApplied 
               </div>
             )}
 
+            {applying && applyProgress && applyProgress.total > 0 && (
+              <div className={styles.progressBar}>
+                <div
+                  className={styles.progressFill}
+                  style={{
+                    width: `${Math.min(100, Math.round((applyProgress.current / applyProgress.total) * 100))}%`,
+                  }}
+                />
+              </div>
+            )}
             <div className={styles.footer}>
-              <button className={styles.cancelBtn} onClick={onClose} disabled={applying}>Skip</button>
+              <button className={styles.cancelBtn} onClick={onClose}>
+                {applying ? 'Cancel' : 'Skip'}
+              </button>
               <button
                 className={styles.applyBtn}
                 onClick={handleApply}
                 disabled={applying || totalToApply === 0}
               >
-                {applying ? 'Applying…' : `Apply (${totalToApply})`}
+                {applying
+                  ? applyProgress && applyProgress.total > 0
+                    ? `Applying ${applyProgress.current.toLocaleString()} of ${applyProgress.total.toLocaleString()}…`
+                    : 'Applying…'
+                  : `Apply (${totalToApply.toLocaleString()})`}
               </button>
             </div>
           </>

@@ -30,6 +30,14 @@ try {
   console.warn('⚠ ModernZ download failed. Download manually from https://github.com/Samillion/ModernZ');
 }
 
+// Re-apply Nocturne's episode-nav patches on top of upstream ModernZ
+console.log('\nPatching ModernZ with episode-nav extensions...');
+try {
+  execSync('node scripts/patch-modernz.js', { stdio: 'inherit' });
+} catch {
+  console.warn('⚠ ModernZ patch failed. Episode prev/next OSC buttons will not work.');
+}
+
 // Mirror our custom mpv scripts/configs from build/ → resources/
 console.log('\nMirroring mpv portable_config to resources/...');
 try {

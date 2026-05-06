@@ -4,7 +4,9 @@ import { traktClient } from './trakt-client';
 import {
   countTraktWatchlist,
   findItemsByImdbId,
+  findItemsByNameAndYear,
   findItemsByTmdbId,
+  getDedupPrimaryItem,
   getItem,
   getItemsMultiLibrary,
   getItemsMultiLibraryDeduped,
@@ -120,14 +122,19 @@ function getCombinedVirtualLibraries(): VirtualLibrary[] {
   const combined = settings.combinedMappings || {};
   const result: VirtualLibrary[] = [];
 
-  // TEMP DIAGNOSTIC — remove once sidebar-empty bug is confirmed.
+  // Diagnostic block — gated behind DEBUG_VLIB env var because the full
+  // allLibs dump is ~2KB and `getVirtualLibraries()` runs on every
+  // `vlib:get-all` IPC (multiple times per startup). Set DEBUG_VLIB=1 to
+  // re-enable when investigating sidebar / combined-mode bugs.
   const diagAllLibs = serverManager.getAllServerLibraries();
-  console.log('[vlib] combined', {
-    mappingsCount: Object.keys(combined).length,
-    showUnmapped: settings.showUnmappedLibraries,
-    allLibsCount: diagAllLibs.length,
-    allLibs: diagAllLibs,
-  });
+  if (process.env.DEBUG_VLIB) {
+    console.log('[vlib] combined', {
+      mappingsCount: Object.keys(combined).length,
+      showUnmapped: settings.showUnmappedLibraries,
+      allLibsCount: diagAllLibs.length,
+      allLibs: diagAllLibs,
+    });
+  }
 
   // Add combined groups (cross-server)
   for (const [groupId, mapping] of Object.entries(combined)) {
@@ -222,31 +229,87 @@ export function getVirtualLibraryDedupStats(): { groupCount: number; mergedItems
   return getDedupStats();
 }
 
+type TraktWatchlistItem = ItemRow & { is_external?: boolean; trakt_key?: string; trakt_type?: string };
+
+// In-memory cache of the matched watchlist. The match scan is deterministic
+// given trakt_watchlist + cached_items + dedup_groups, so we recompute it
+// only when one of those changes (refresh, add/remove, sync, dedup) instead
+// of on every IPC read. Without this the matcher (and its `[trakt-watchlist]
+// match:` log) re-runs on every HomePage row fetch and every renderer-side
+// store update.
+let watchlistCache: TraktWatchlistItem[] | null = null;
+
+export function invalidateTraktWatchlistCache(): void {
+  watchlistCache = null;
+}
+
 /**
  * Watchlist as virtual library. Each Trakt watchlist entry is mapped to the
  * matched local CachedItem when one exists; otherwise a synthetic row with
  * `is_external: true` so the renderer can grey it out and offer "find this".
  */
-export function getTraktWatchlistAsCachedItems(): (ItemRow & { is_external?: boolean; trakt_key?: string; trakt_type?: string })[] {
+export function getTraktWatchlistAsCachedItems(): TraktWatchlistItem[] {
+  if (watchlistCache) return watchlistCache;
   const entries = getTraktWatchlistEntries();
-  const out: (ItemRow & { is_external?: boolean; trakt_key?: string; trakt_type?: string })[] = [];
+  const out: TraktWatchlistItem[] = [];
   const seenEmbyIds = new Set<string>();
+  let externalCount = 0;
 
   for (const entry of entries) {
     const localType: 'Movie' | 'Series' = entry.trakt_type === 'show' ? 'Series' : 'Movie';
     let matches: ItemRow[] = [];
-    if (entry.tmdb_id) matches = findItemsByTmdbId(entry.tmdb_id, localType);
+    let matchSource: 'tmdb' | 'imdb' | 'name+year' | null = null;
+    if (entry.tmdb_id) {
+      matches = findItemsByTmdbId(entry.tmdb_id, localType);
+      if (matches.length > 0) matchSource = 'tmdb';
+    }
     if (matches.length === 0 && entry.imdb_id) {
       matches = findItemsByImdbId(entry.imdb_id, localType);
+      if (matches.length > 0) matchSource = 'imdb';
+    }
+    // Bug 4 fallback: titles whose Emby metadata doesn't have tmdb/imdb (the
+    // `Hoppers` case). Last-resort exact (case-insensitive, trimmed) match
+    // on title + production_year. Year-anchored to avoid same-titled false
+    // positives.
+    if (matches.length === 0 && entry.title && entry.year) {
+      matches = findItemsByNameAndYear(entry.title, entry.year, localType);
+      if (matches.length > 0) matchSource = 'name+year';
     }
 
     if (matches.length > 0) {
-      // Prefer a row with a dedup_group_id (it's the canonical primary).
-      const primary = matches.find((m) => m.dedup_group_id) ?? matches[0];
+      // Pick the dedup-group's canonical primary so the watchlist card
+      // shows the SAME row the library grid uses (with proper image_tags
+      // and the right server_id). Without this, we'd often pick a
+      // secondary copy whose Emby metadata didn't include image tags,
+      // and the card would fall through to the letter placeholder.
+      const groupId = matches.find((m) => m.dedup_group_id)?.dedup_group_id ?? null;
+      const dedupPrimary = groupId ? getDedupPrimaryItem(groupId) : undefined;
+      const primary = dedupPrimary ?? matches[0];
       if (seenEmbyIds.has(primary.emby_id)) continue;
       seenEmbyIds.add(primary.emby_id);
+      // Diagnostic so we can confirm matched rows have the metadata
+      // MediaCard needs (image_tags + server_id). If `tag` is `-`, the
+      // local item has no Primary image cached and the card will show
+      // its letter placeholder regardless of the matching path.
+      let primaryTag: string | null = null;
+      try {
+        const tags = primary.image_tags ? JSON.parse(primary.image_tags) as Record<string, string> : {};
+        primaryTag = tags.Primary ?? null;
+      } catch { /* ignore */ }
+      console.log(
+        `[trakt-watchlist] match: trakt={title="${entry.title ?? '?'}", year=${entry.year ?? '?'}, tmdb=${entry.tmdb_id ?? '-'}} `
+          + `→ matched local emby_id=${primary.emby_id} tag=${primaryTag ?? '-'} server=${primary.server_id || '-'} (via ${matchSource ?? '?'}${dedupPrimary ? ', dedup-primary' : ''})`,
+      );
       out.push({ ...primary, trakt_key: entry.key, trakt_type: entry.trakt_type });
     } else {
+      externalCount++;
+      // One concise log per unmatched entry — actionable for diagnosing why
+      // a title shows up as "Not in library" when the user knows it is.
+      console.log(
+        `[trakt-watchlist] external "${entry.title ?? '?'}" (${entry.year ?? '?'}): `
+          + `tmdb=${entry.tmdb_id ?? '-'}, imdb=${entry.imdb_id ?? '-'} — `
+          + `no local match by tmdb / imdb / name+year`,
+      );
       // Synthetic external row — not playable.
       const synthetic: ItemRow & { is_external: boolean; trakt_key: string; trakt_type: string } = {
         emby_id: `trakt:${entry.key}`,
@@ -291,6 +354,10 @@ export function getTraktWatchlistAsCachedItems(): (ItemRow & { is_external?: boo
       out.push(synthetic);
     }
   }
+  if (externalCount > 0) {
+    console.log(`[trakt-watchlist] ${externalCount}/${entries.length} entries unmatched (rendered as external)`);
+  }
+  watchlistCache = out;
   return out;
 }
 

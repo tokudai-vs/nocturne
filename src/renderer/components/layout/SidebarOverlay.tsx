@@ -54,6 +54,17 @@ export default function SidebarOverlay() {
     }
   }, [syncCompleted, fetchVirtualLibraries]);
 
+  // Refresh virtual libraries on Trakt watchlist changes so the sidebar's
+  // Trakt Watchlist row count tracks add/remove + initial post-auth refresh
+  // without waiting for the next 1h timer. Always-on listener (cheap) so it
+  // works regardless of whether the sidebar is currently open.
+  useEffect(() => {
+    const off = window.api.trakt.onWatchlistUpdated(() => {
+      fetchVirtualLibraries();
+    });
+    return off;
+  }, [fetchVirtualLibraries]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && sidebarOpen) handleClose();

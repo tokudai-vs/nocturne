@@ -48,6 +48,7 @@ import {
   getResumeClearTargets as dbGetResumeClearTargets,
   getDedupGroupsForItemIds as dbGetDedupGroupsForItemIds,
   getAdjacentEpisodes as dbGetAdjacentEpisodes,
+  setWatchlistMutationHook,
   updateItemUserData,
   checkpoint,
   clearTraktQueue,
@@ -59,6 +60,7 @@ import { traktSync } from './trakt-sync';
 import { TRAKT_BUNDLED_CLIENT_ID } from '../shared/trakt-config';
 import {
   getTraktWatchlistAsCachedItems,
+  invalidateTraktWatchlistCache,
   TRAKT_WATCHLIST_VLIB_ID,
 } from './virtual-library';
 
@@ -103,6 +105,12 @@ const ALLOWED_SETTING_KEYS = new Set<string>([
 ]);
 
 export function registerIpcHandlers(): void {
+  // Bridge the watchlist mutation hook from database.ts to the cache
+  // invalidator in virtual-library.ts. database.ts can't import
+  // virtual-library at the top level (cycle) and a runtime require() doesn't
+  // survive the electron-vite bundle, so the hook is wired here at startup.
+  setWatchlistMutationHook(() => invalidateTraktWatchlistCache());
+
   // ── Auth ──────────────────────────────────────────────
   ipcMain.handle('emby:auth:connect', async (_, { url }: { url: string }) => {
     if (!isValidUrl(url)) return fail('Invalid server URL');
@@ -476,8 +484,16 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle('emby:user:mark-played', async (_, { itemId }: { itemId: string }) => {
+    console.log(`[emby:user:mark-played] handler entry, itemId=${itemId}`);
     try {
       await embyClient.markPlayed(itemId);
+      // Mirror the cross-server-aware handler so any path that ends here
+      // (legacy callers, useEmby hook, etc.) still pushes to Trakt and
+      // updates local cache. Without this, a non-`item:mark-played` caller
+      // would silently bypass Trakt sync.
+      updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0 });
+      console.log(`[trakt-history-push] handler dispatching pushHistoryAdd for ${itemId} (via emby:user:mark-played)`);
+      void traktSync.pushHistoryAdd(itemId);
       return ok(undefined);
     } catch (e) {
       return fail(e);
@@ -485,8 +501,11 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle('emby:user:mark-unplayed', async (_, { itemId }: { itemId: string }) => {
+    console.log(`[emby:user:mark-unplayed] handler entry, itemId=${itemId}`);
     try {
       await embyClient.markUnplayed(itemId);
+      updateItemUserData(itemId, { played: 0, play_count: 0 });
+      void traktSync.pushHistoryRemove(itemId);
       return ok(undefined);
     } catch (e) {
       return fail(e);
@@ -507,6 +526,7 @@ export function registerIpcHandlers(): void {
 
   // ── Item actions (cross-server aware) ─────────────────
   ipcMain.handle('item:mark-played', async (_, { itemId, serverId }: { itemId: string; serverId?: string }) => {
+    console.log(`[item:mark-played] handler entry, itemId=${itemId}, serverId=${serverId ?? '-'}`);
     try {
       const activeServer = serverManager.getActiveServer();
       if (!serverId || serverId === activeServer?.id) {
@@ -520,6 +540,8 @@ export function registerIpcHandlers(): void {
       updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0 });
       // Push to Trakt (silent no-op if not connected / sync disabled).
       // Cross-server cascade is naturally deduped on Trakt's side via tmdb id.
+      // Fire-and-forget so the IPC response isn't gated on Trakt's RTT.
+      console.log(`[trakt-history-push] handler dispatching pushHistoryAdd for ${itemId}`);
       void traktSync.pushHistoryAdd(itemId);
       return ok(undefined);
     } catch (e) {
@@ -628,13 +650,26 @@ export function registerIpcHandlers(): void {
   );
 
   // ── Player (mpv idle mode) ─────────────────────────────
+  type PlaybackSessionInfo = {
+    itemId: string;
+    mediaSourceId: string;
+    playSessionId: string;
+    serverId: string | null;
+    itemType: string | null;
+    seriesId: string | null;
+    seasonId: string | null;
+    seasonNumber: number | null;
+    episodeNumber: number | null;
+  };
+
   class PlaybackSession {
     private interval: ReturnType<typeof setInterval> | null = null;
-    private session: { itemId: string; mediaSourceId: string; playSessionId: string } | null = null;
+    private session: PlaybackSessionInfo | null = null;
     private _lastPosition = 0;
     private _durationSec = 0;
     private _lastPaused: boolean | null = null;
     private _transitioning = false;
+    private _advanceInProgress = false;
     private _sessionSeq = 0;
 
     get current() { return this.session; }
@@ -642,6 +677,8 @@ export function registerIpcHandlers(): void {
     get durationSec() { return this._durationSec; }
     get transitioning() { return this._transitioning; }
     set transitioning(v: boolean) { this._transitioning = v; }
+    get advanceInProgress() { return this._advanceInProgress; }
+    set advanceInProgress(v: boolean) { this._advanceInProgress = v; }
 
     start(
       itemId: string,
@@ -652,7 +689,18 @@ export function registerIpcHandlers(): void {
     ): void {
       this.stopReporting();
       this._sessionSeq++;
-      this.session = { itemId, mediaSourceId, playSessionId };
+      const cached = dbGetItem(itemId);
+      this.session = {
+        itemId,
+        mediaSourceId,
+        playSessionId,
+        serverId: cached?.server_id ?? null,
+        itemType: cached?.type ?? null,
+        seriesId: cached?.series_id ?? null,
+        seasonId: cached?.season_id ?? null,
+        seasonNumber: cached?.season_number ?? null,
+        episodeNumber: cached?.episode_number ?? null,
+      };
       this._lastPosition = startPosSec;
       this._durationSec = durationSec;
       this._lastPaused = false;
@@ -705,11 +753,228 @@ export function registerIpcHandlers(): void {
   }
   const playback = new PlaybackSession();
 
+  // ── Episode nav helpers ─────────────────────────────────
+  // Parse the first MediaSource id from the cached items.media_sources JSON.
+  function firstMediaSourceId(item: { media_sources: string | null } | null | undefined): string | null {
+    if (!item?.media_sources) return null;
+    try {
+      const arr = JSON.parse(item.media_sources) as Array<{ Id?: string }>;
+      return arr?.[0]?.Id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Push episode-nav context to the Lua scripts so nocturne_nav.lua knows the
+  // current adjacents (for keybinds + OSD) and modernz.lua can flip its
+  // playlist-prev/next buttons into "episode prev/next" mode.
+  function pushNavContextToMpv(itemId: string | null): void {
+    // [DEBUG]
+    console.log('[push-nav-context] itemId:', itemId, '| mpv.running:', mpvManager.running());
+    if (!mpvManager.running()) return;
+    let hasPrev = false;
+    let hasNext = false;
+    let prevTitle = '';
+    let nextTitle = '';
+    if (itemId) {
+      const item = dbGetItem(itemId);
+      console.log('[push-nav-context] cached item type:', item?.type);
+      if (item?.type === 'Episode') {
+        const adj = dbGetAdjacentEpisodes(itemId);
+        if (adj.prev) {
+          hasPrev = true;
+          prevTitle = formatEpisodeLabel(adj.prev);
+        }
+        if (adj.next) {
+          hasNext = true;
+          nextTitle = formatEpisodeLabel(adj.next);
+        }
+      }
+    }
+    console.log('[push-nav-context] sending hasPrev=', hasPrev, 'hasNext=', hasNext);
+    const ctx = JSON.stringify({ hasPrev, hasNext, prevTitle, nextTitle });
+    mpvManager
+      .command(['script-message-to', 'nocturne_nav', 'nocturne-set-context', ctx])
+      .catch(() => { /* nocturne_nav may not be loaded yet — best effort */ });
+    mpvManager
+      .command([
+        'script-message-to',
+        'modernz',
+        'nocturne-episode-nav',
+        hasPrev ? 'true' : 'false',
+        hasNext ? 'true' : 'false',
+      ])
+      .catch(() => { /* modernz may not be loaded — best effort */ });
+  }
+
+  function formatEpisodeLabel(item: import('./database').ItemRow): string {
+    const sn = item.season_number ?? 0;
+    const en = item.episode_number ?? 0;
+    const code = `S${String(sn).padStart(2, '0')}E${String(en).padStart(2, '0')}`;
+    return item.name ? `${code} — ${item.name}` : code;
+  }
+
+  // Shared advance logic: load adjacent episode in the existing mpv process
+  // without going through the show-main-window / hide-mpv cleanup. Returns
+  // true if it advanced, false if no adjacent episode in that direction.
+  async function advanceToEpisode(direction: 'next' | 'prev'): Promise<boolean> {
+    // [DEBUG]
+    console.log('[episode-nav] advanceToEpisode called, direction:', direction, '| cur:', JSON.stringify(playback.current));
+    const cur = playback.current;
+    if (!cur || cur.itemType !== 'Episode') {
+      console.log('[episode-nav] abort — no current session or itemType is not Episode');
+      return false;
+    }
+    const adj = dbGetAdjacentEpisodes(cur.itemId);
+    console.log('[episode-nav] adjacents:', JSON.stringify({ prev: adj.prev?.emby_id, next: adj.next?.emby_id }));
+    const target = direction === 'next' ? adj.next : adj.prev;
+    if (!target) {
+      console.log('[episode-nav] abort — no adjacent episode in direction', direction);
+      return false;
+    }
+
+    const targetServer = target.server_id ? serverManager.getServer(target.server_id) : null;
+    if (!targetServer) {
+      console.warn(`[player:advance] no server config for ${target.server_id} — abort`);
+      return false;
+    }
+    const mediaSourceId = firstMediaSourceId(target);
+    if (!mediaSourceId) {
+      console.warn(`[player:advance] no media source for ${target.emby_id} — abort`);
+      return false;
+    }
+
+    const finalPositionTicks = Math.floor((playback.lastPosition || 0) * 10_000_000);
+    const finalPositionSec = playback.lastPosition || 0;
+    const finalDurationSec = playback.durationSec;
+    const oldSession = playback.current;
+
+    // Set BEFORE any loadfile-replace so the synthetic end-file{reason:"stop"}
+    // that mpv emits for the old file is suppressed by the end-file handler.
+    playback.advanceInProgress = true;
+
+    // Hold advanceInProgress=true until mpv emits file-loaded for the new
+    // file. mpv emits events in order on a loadfile-replace:
+    //   end-file{stop} (old) → start-file → file-loaded (new).
+    // The end-file handler's suppression check is synchronous, so once
+    // file-loaded fires the synthetic stop is guaranteed to have been
+    // observed and suppressed. Without this gate, the flag clears the
+    // moment loadFile() resolves (mpv only ACKs the queued command, not the
+    // teardown), the queued end-file{stop} arrives later, and the cleanup
+    // path runs — showing the main window and de-fullscreening mpv.
+    const oldFileSuppressed = new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        mpvManager.off('file-loaded', onLoaded);
+        clearTimeout(timer);
+        resolve();
+      };
+      const onLoaded = () => finish();
+      const timer = setTimeout(() => {
+        console.warn('[episode-nav] file-loaded timeout — clearing advance flag defensively');
+        finish();
+      }, 5000);
+      mpvManager.on('file-loaded', onLoaded);
+    });
+
+    try {
+      // 1. Tell Emby + Trakt the current episode stopped (best-effort, non-blocking).
+      if (oldSession) {
+        embyClient
+          .reportPlaybackStopped({
+            ItemId: oldSession.itemId,
+            MediaSourceId: oldSession.mediaSourceId,
+            PlaySessionId: oldSession.playSessionId,
+            PositionTicks: finalPositionTicks,
+          })
+          .catch(() => { /* ignore */ });
+        void traktScrobbler.scrobble('stop', oldSession.itemId, finalPositionSec, finalDurationSec);
+      }
+
+      // 2. Build target stream URL for the (possibly different) server.
+      const url = embyClient.getStreamUrlForServer(
+        targetServer.url,
+        targetServer.accessToken,
+        target.emby_id,
+        mediaSourceId,
+      );
+      const playSessionId = `nocturne-${Date.now()}`;
+      const titleParts: string[] = [];
+      if (target.series_name) titleParts.push(target.series_name);
+      titleParts.push(formatEpisodeLabel(target));
+      const itemName = titleParts.join(' — ');
+
+      // 3. Hot-load into the existing mpv process. mpv emits end-file{stop}
+      //    for the old file during this — suppressed by the guard.
+      await mpvManager.loadFile(url, { startPositionTicks: 0, title: itemName });
+
+      // 4. Tell Emby + Trakt the new episode is starting.
+      embyClient
+        .reportPlaybackStart({
+          ItemId: target.emby_id,
+          MediaSourceId: mediaSourceId,
+          PlaySessionId: playSessionId,
+          PositionTicks: 0,
+          CanSeek: true,
+          PlayMethod: 'DirectPlay',
+        })
+        .catch(() => { /* ignore */ });
+
+      const durationSec =
+        target.runtime_ticks && target.runtime_ticks > 0 ? target.runtime_ticks / 10_000_000 : 0;
+      playback.start(target.emby_id, mediaSourceId, playSessionId, 0, durationSec);
+      void traktScrobbler.scrobble('start', target.emby_id, 0, durationSec);
+
+      // 5. Push refreshed adjacency to mpv so the OSC buttons update.
+      pushNavContextToMpv(target.emby_id);
+
+      // 6. Notify renderer so any in-progress player UI / store can sync.
+      const w = getMainWindow();
+      if (w && !w.isDestroyed()) {
+        w.webContents.send('player:now-playing', {
+          itemId: target.emby_id,
+          serverId: targetServer.id,
+          seriesId: target.series_id,
+          seasonNumber: target.season_number,
+          episodeNumber: target.episode_number,
+          name: target.name,
+          seriesName: target.series_name,
+        });
+      }
+
+      // 7. Wait for mpv to confirm the new file is loaded. By the time
+      //    file-loaded fires, the synthetic end-file{stop} for the old file
+      //    has already been observed (and suppressed) by the end-file
+      //    handler — so it's safe to clear the advance flag.
+      await oldFileSuppressed;
+
+      return true;
+    } finally {
+      playback.advanceInProgress = false;
+    }
+  }
+
   // Persistent listener: when mpv file ends (ESC/q = stop, or file finishes)
   mpvManager.on('end-file', async (data: unknown) => {
+    // [DEBUG]
+    console.log('[end-file] raw payload:', JSON.stringify(data));
     const reason = (data as { reason?: string })?.reason;
+    console.log(
+      '[end-file] reason resolved to:', reason,
+      '| current itemType:', playback.current?.itemType,
+      '| advanceInProgress:', playback.advanceInProgress,
+    );
     // Redirect is handled internally by mpv — ignore
     if (reason === 'redirect') return;
+    // Suppress the synthetic stop event mpv emits when advanceToEpisode does
+    // a loadfile-replace. Without this guard, the cleanup path runs in
+    // parallel with the advance flow and undoes its window state changes.
+    if (reason === 'stop' && playback.advanceInProgress) {
+      console.log('[end-file] suppressed during episode advance');
+      return;
+    }
 
     // Playback error — notify renderer
     if (reason === 'error') {
@@ -718,6 +983,19 @@ export function registerIpcHandlers(): void {
         w.webContents.send('player:playback-error', {
           message: 'Playback failed — file may be corrupt or codec unsupported',
         });
+      }
+    }
+
+    // Natural EOF on an episode → try to auto-advance without leaving mpv. If
+    // there's no next episode (last of season/series, or current isn't an
+    // episode) advanceToEpisode returns false and we fall through to the
+    // standard cleanup path. Errors during advance also fall through.
+    const isNaturalEnd = reason === 'eof';
+    if (isNaturalEnd && playback.current?.itemType === 'Episode' && getSettingValue('autoPlayNextEpisode') !== false) {
+      try {
+        if (await advanceToEpisode('next')) return;
+      } catch (err) {
+        console.warn('[player:advance] auto-advance failed, falling through to cleanup:', err);
       }
     }
 
@@ -802,6 +1080,119 @@ export function registerIpcHandlers(): void {
     }
   });
 
+  // Natural end-of-file. Under keep-open=yes, mpv does NOT emit end-file at
+  // EOF (it pauses on the last frame instead). Instead we observe the
+  // `eof-reached` property which mpv flips to true at natural end. This is
+  // the only signal we get for "the episode finished playing on its own."
+  mpvManager.on('eof-reached', async () => {
+    console.log('[eof-reached] fired | current itemType:', playback.current?.itemType);
+    if (playback.advanceInProgress) {
+      console.log('[eof-reached] ignored — advance already in progress');
+      return;
+    }
+    const isEpisode = playback.current?.itemType === 'Episode';
+    const autoplay = getSettingValue('autoPlayNextEpisode') !== false;
+    if (isEpisode && autoplay) {
+      try {
+        if (await advanceToEpisode('next')) {
+          // Reset eof-reached so the next episode's natural end fires the
+          // observer again.
+          await mpvManager.setProperty('eof-reached', 'no').catch(() => { /* ignore */ });
+          return;
+        }
+      } catch (err) {
+        console.warn('[eof-reached] auto-advance failed, falling through to cleanup:', err);
+      }
+    }
+
+    // No next episode (last of season/series), not an episode, or advance
+    // failed → run the same cleanup path the user-quit end-file handler does.
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) {
+      w.webContents.send('player:exited');
+      w.show();
+      w.focus();
+    }
+    await new Promise((r) => setTimeout(r, 100));
+    try {
+      await mpvManager.setProperty('fullscreen', false);
+      await mpvManager.setProperty('force-window', 'no');
+      await mpvManager.setProperty('eof-reached', 'no');
+    } catch {
+      /* ignore */
+    }
+
+    const finalPositionTicks = Math.floor((playback.lastPosition || 0) * 10_000_000);
+    const finalPositionSec = playback.lastPosition || 0;
+    const finalDurationSec = playback.durationSec;
+    const session = playback.take();
+    playback.stopReporting();
+    if (session) {
+      embyClient
+        .reportPlaybackStopped({
+          ItemId: session.itemId,
+          MediaSourceId: session.mediaSourceId,
+          PlaySessionId: session.playSessionId,
+          PositionTicks: finalPositionTicks,
+        })
+        .catch(() => { /* ignore */ });
+      void traktScrobbler.scrobble('stop', session.itemId, finalPositionSec, finalDurationSec);
+
+      if (serverManager.isCombinedMode()) {
+        try {
+          const item = dbGetItem(session.itemId);
+          if (item?.dedup_group_id) {
+            const versions = dbGetGroupVersions(item.dedup_group_id, item);
+            for (const version of versions) {
+              if (version.server_id !== item.server_id) {
+                const otherServer = serverManager.getServer(version.server_id);
+                if (otherServer) {
+                  embyClient
+                    .markPlayedOnServer(
+                      otherServer.url,
+                      otherServer.accessToken,
+                      otherServer.userId,
+                      version.emby_id,
+                    )
+                    .catch(() => { /* best effort */ });
+                }
+              }
+            }
+          }
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+  });
+
+  // Manual prev/next from mpv-side Lua scripts (> / < keybind, OSC buttons).
+  // Lua sends `mp.commandv("script-message", "nocturne-next")` which mpv
+  // emits as `client-message` on the JSON-IPC socket.
+  mpvManager.on('client-message', async (data: unknown) => {
+    // [DEBUG]
+    console.log('[client-message] raw payload:', JSON.stringify(data));
+    const args = ((data as { args?: unknown[] })?.args || []).map((a) => String(a));
+    const name = args[0];
+    console.log('[client-message] parsed args:', args, '| dispatching name=', name);
+    if (name === 'nocturne-next' || name === 'nocturne-prev') {
+      const direction = name === 'nocturne-next' ? 'next' : 'prev';
+      try {
+        const advanced = await advanceToEpisode(direction);
+        if (!advanced) {
+          await mpvManager
+            .command(['show-text', direction === 'next' ? 'No next episode' : 'No previous episode', '2000'])
+            .catch(() => { /* ignore */ });
+        }
+      } catch (err) {
+        console.warn(`[player:advance] manual ${direction} failed:`, err);
+      }
+    } else if (name === 'nocturne-context-request') {
+      // Lua script just (re)loaded and is asking for current adjacency state.
+      pushNavContextToMpv(playback.current?.itemId ?? null);
+    }
+  });
+
   ipcMain.handle(
     'player:play',
     async (
@@ -878,6 +1269,10 @@ export function registerIpcHandlers(): void {
 
         // Trakt scrobble:start (fires once per play). Silent no-op if not connected.
         void traktScrobbler.scrobble('start', itemId, startPosSec, durationSec);
+
+        // Tell mpv-side Lua scripts what the adjacent episodes are. Pushes
+        // hasNext=hasPrev=false for movies, which hides the OSC buttons.
+        pushNavContextToMpv(itemId);
 
         return ok(undefined);
       } catch (e) {
@@ -978,6 +1373,7 @@ export function registerIpcHandlers(): void {
   });
   syncEngine.on('complete', () => {
     checkpoint();
+    invalidateTraktWatchlistCache();
     const w = getMainWindow();
     if (w && !w.isDestroyed()) w.webContents.send('sync:complete');
   });
@@ -986,6 +1382,7 @@ export function registerIpcHandlers(): void {
     if (w && !w.isDestroyed()) w.webContents.send('sync:error', { message: err.message });
   });
   syncEngine.on('dedup-complete', (result: { groupsCreated: number; itemsMerged: number }) => {
+    invalidateTraktWatchlistCache();
     const w = getMainWindow();
     if (w && !w.isDestroyed()) w.webContents.send('dedup:complete', result);
   });
@@ -1481,6 +1878,13 @@ export function registerIpcHandlers(): void {
     try {
       traktClient.disconnect();
       clearTraktQueue();
+      // Clear all Trakt-side mirrors so a reconnect (possibly to a different
+      // account) starts from a clean slate. Fixes stale-watchlist visible in
+      // the sidebar after disconnect.
+      const { clearTraktWatched, clearTraktWatchlist, clearTraktRatings } = require('./database');
+      clearTraktWatched();
+      clearTraktWatchlist();
+      clearTraktRatings();
       return ok(undefined);
     } catch (e) {
       return fail(e);
@@ -1543,10 +1947,27 @@ export function registerIpcHandlers(): void {
   // ── Trakt Phase 2/3/4 ─────────────────────────────
 
   ipcMain.handle('trakt:fetch-preview', async () => {
+    console.log('[trakt-preview] handler entry');
+    const t0 = Date.now();
     try {
       const preview = await traktSync.fetchInitialPreview();
+      console.log(
+        `[trakt-preview] handler resolved in ${Date.now() - t0}ms — `
+          + `movies ${preview.movies.matchedInLibrary}/${preview.movies.totalOnTrakt}, `
+          + `episodes ${preview.episodes.matchedInLibrary}/${preview.episodes.totalOnTrakt}`,
+      );
       return ok(preview);
     } catch (e) {
+      console.error(`[trakt-preview] handler FAILED after ${Date.now() - t0}ms:`, e);
+      const err = e as { response?: { status?: number; data?: unknown }; code?: string; message?: string };
+      if (err?.response) {
+        console.error(
+          `[trakt-preview]   HTTP status=${err.response.status} `
+            + `body=${JSON.stringify(err.response.data).slice(0, 300)}`,
+        );
+      } else if (err?.code) {
+        console.error(`[trakt-preview]   axios code=${err.code} message=${err.message}`);
+      }
       return fail(e);
     }
   });
@@ -1556,6 +1977,15 @@ export function registerIpcHandlers(): void {
     try {
       const result = await traktSync.applyWatchedState(embyIds);
       return ok(result);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:cancel-apply', () => {
+    try {
+      traktSync.cancelApply();
+      return ok(undefined);
     } catch (e) {
       return fail(e);
     }
@@ -1673,6 +2103,13 @@ export function registerIpcHandlers(): void {
     if (w && !w.isDestroyed()) w.webContents.send('trakt:auth-success');
     // Re-arm sync timers now that we have credentials.
     traktSync.startTimers();
+    // Kick off the initial watchlist refresh in PARALLEL with whatever the
+    // user does next (review preview, apply, skip, etc.). No await — the
+    // resulting `watchlist-updated` event will refresh the sidebar count
+    // and the LibraryPage when it lands. Critical: do NOT chain after
+    // applyWatchedState — those are independent and parallel.
+    console.log('[trakt] auth-success — kicking initial watchlist refresh in parallel');
+    void traktSync.refreshWatchlist();
   });
   traktClient.on('token-refresh-failed', () => {
     const w = getMainWindow();
@@ -1695,5 +2132,9 @@ export function registerIpcHandlers(): void {
   traktSync.on('watchlist-updated', (data) => {
     const w = getMainWindow();
     if (w && !w.isDestroyed()) w.webContents.send('trakt:watchlist-updated', data);
+  });
+  traktSync.on('apply-progress', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('trakt:apply-progress', data);
   });
 }

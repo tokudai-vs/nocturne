@@ -77,6 +77,14 @@ class MpvManager {
 
     await this.waitAndConnect();
     this.isReady = true;
+    // Subscribe to eof-reached so we can drive auto-advance under
+    // keep-open=yes (which suppresses end-file at natural EOF). The id is
+    // arbitrary but used to identify the property-change event below.
+    try {
+      await this.command(['observe_property', 1, 'eof-reached']);
+    } catch (err) {
+      console.warn('[mpv] failed to observe eof-reached:', err);
+    }
     console.log('[mpv] Idle mode ready, waiting for commands');
   }
 
@@ -205,10 +213,19 @@ class MpvManager {
           if (!line.trim()) continue;
           try {
             const msg = JSON.parse(line);
+            // [DEBUG] Trace every event mpv pushes to the IPC socket. Remove
+            // once next/prev nav is verified end-to-end.
+            if (msg.event) {
+              console.log('[mpv-ipc-event]', msg.event, JSON.stringify(msg));
+            }
             if (msg.event === 'end-file') {
               this.emit('end-file', msg);
             } else if (msg.event === 'file-loaded') {
               this.emit('file-loaded', {});
+            } else if (msg.event === 'property-change' && msg.name === 'eof-reached' && msg.data === true) {
+              // Surfaced separately so ipc-handlers can drive the keep-open
+              // auto-advance off this signal instead of end-file.
+              this.emit('eof-reached', msg);
             } else if (msg.event) {
               this.emit(msg.event, msg);
             }
