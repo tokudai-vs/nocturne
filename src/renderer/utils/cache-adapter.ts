@@ -48,6 +48,8 @@ export function cachedToBaseItem(item: CachedItem): BaseItemDto {
     Studios: studios,
     ImageTags: imageTags,
     BackdropImageTags: backdropTags,
+    ImageFallbacks: item.image_fallbacks,
+    BackdropFallbacks: item.backdrop_fallbacks,
     SeriesId: item.series_id ?? undefined,
     SeriesName: item.series_name ?? undefined,
     SeasonId: item.season_id ?? undefined,

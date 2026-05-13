@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, shell } from 'electron';
 import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -52,11 +52,22 @@ import {
   updateItemUserData,
   checkpoint,
   clearTraktQueue,
+  clearTraktWatched,
+  clearTraktWatchlist,
+  clearTraktRatings,
+  countTraktWatched,
+  isMovieWatchedOnTrakt,
+  isEpisodeWatchedOnTrakt,
   type ItemFilters,
 } from './database';
+import { checkForUpdates, downloadUpdate, installUpdate, getUpdateStatus } from './updater';
 import { traktClient } from './trakt-client';
 import { traktScrobbler } from './trakt-scrobbler';
 import { traktSync } from './trakt-sync';
+import { attachFallbacksToItems } from './image-fallbacks';
+import { computeAnalytics, type AnalyticsLifetimeBlock } from './analytics';
+import { fetchSegments } from './introdb-client';
+import { toIso6391 } from '../shared/languages';
 import { TRAKT_BUNDLED_CLIENT_ID } from '../shared/trakt-config';
 import {
   getTraktWatchlistAsCachedItems,
@@ -98,10 +109,15 @@ const ALLOWED_SETTING_KEYS = new Set<string>([
   'subtitleSize', 'subtitleColor', 'subtitleBorderSize', 'subtitleBackground',
   'subtitlePosition', 'powerMode', 'startFullscreen', 'startPage', 'imageCacheMaxMB',
   'syncOnStartup', 'firstLaunchComplete', 'lastServerUrl',
+  // Skip segments (TheIntroDB) — per-type modes: 'button' | 'auto' | 'off'.
+  'skipIntroMode', 'skipRecapMode', 'skipCreditsMode',
+  // Auto-download subtitles (OpenSubtitles).
+  'autoDownloadSubtitles', 'preferredSubtitleLanguage',
   // Trakt — only the renderer-settable subset. Username/slug/connectedAt and
   // last-sync timestamps are written by the main process during sync work.
   'traktAutoScrobble', 'traktSyncWatchedState', 'traktShowWatchlistInSidebar',
   'traktClientIdOverride', 'traktClientSecretOverride',
+  'traktHistoryBackfillCap',
 ]);
 
 export function registerIpcHandlers(): void {
@@ -458,6 +474,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('emby:media:report-progress', async (_, data) => {
     try {
       await embyClient.reportPlaybackProgress(data);
+      const itemId = typeof data?.ItemId === 'string' ? data.ItemId : null;
+      if (itemId) updateItemUserData(itemId, { last_played_date: new Date().toISOString() });
       return ok(undefined);
     } catch (e) {
       return fail(e);
@@ -467,6 +485,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('emby:media:report-stop', async (_, data) => {
     try {
       await embyClient.reportPlaybackStopped(data);
+      const itemId = typeof data?.ItemId === 'string' ? data.ItemId : null;
+      if (itemId) updateItemUserData(itemId, { last_played_date: new Date().toISOString() });
       return ok(undefined);
     } catch (e) {
       return fail(e);
@@ -491,7 +511,7 @@ export function registerIpcHandlers(): void {
       // (legacy callers, useEmby hook, etc.) still pushes to Trakt and
       // updates local cache. Without this, a non-`item:mark-played` caller
       // would silently bypass Trakt sync.
-      updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0 });
+      updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0, last_played_date: new Date().toISOString() });
       console.log(`[trakt-history-push] handler dispatching pushHistoryAdd for ${itemId} (via emby:user:mark-played)`);
       void traktSync.pushHistoryAdd(itemId);
       return ok(undefined);
@@ -537,7 +557,7 @@ export function registerIpcHandlers(): void {
           await embyClient.markPlayedOnServer(server.url, server.accessToken, server.userId, itemId);
         }
       }
-      updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0 });
+      updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0, last_played_date: new Date().toISOString() });
       // Push to Trakt (silent no-op if not connected / sync disabled).
       // Cross-server cascade is naturally deduped on Trakt's side via tmdb id.
       // Fire-and-forget so the IPC response isn't gated on Trakt's RTT.
@@ -608,7 +628,7 @@ export function registerIpcHandlers(): void {
         } catch (err) {
           console.warn(`[remove-from-continue] ${t.server_id}/${t.emby_id} failed:`, err);
         }
-        updateItemUserData(t.emby_id, { played: 1, playback_position_ticks: 0, played_percentage: 0 });
+        updateItemUserData(t.emby_id, { played: 1, playback_position_ticks: 0, played_percentage: 0, last_played_date: new Date().toISOString() });
       }));
       return ok(undefined);
     } catch (e) {
@@ -814,6 +834,140 @@ export function registerIpcHandlers(): void {
     return item.name ? `${code} — ${item.name}` : code;
   }
 
+  // Fetch intro/recap/credits/preview segments from TheIntroDB and push them
+  // to the nocturne_skip Lua script. Fire-and-forget — never blocks playback
+  // start. For episodes the SHOW tmdb id is needed (items.tmdb_id on an
+  // Episode row is the *episode* tmdb id), so we walk back through series_id.
+  async function pushSegmentsToMpv(
+    itemId: string,
+    durationSec: number,
+    hasNext: boolean,
+  ): Promise<void> {
+    console.log('[introdb] pushSegmentsToMpv called for itemId:', itemId);
+    try {
+      const item = dbGetItem(itemId);
+      if (!item) {
+        console.log('[introdb] skip: item not in cache for', itemId);
+        return;
+      }
+      console.log('[introdb] item type:', item.type, 'series_id:', item.series_id, 'imdb_id:', item.imdb_id);
+
+      let imdbId: string | null = null;
+      let tmdbId: number | undefined;
+      let kind: 'movie' | 'show' = 'movie';
+      let seasonNum: number | undefined;
+      let episodeNum: number | undefined;
+
+      if (item.type === 'Episode') {
+        if (!item.series_id) {
+          console.log('[introdb] skip: episode has no series_id');
+          return;
+        }
+        const series = dbGetItem(item.series_id);
+        console.log('[introdb] series row:', series ? `name=${series.name} imdb_id=${series.imdb_id} tmdb_id=${series.tmdb_id}` : 'not found');
+        if (!series?.imdb_id) {
+          console.log('[introdb] skip: series imdb_id missing for series_id', item.series_id);
+          return;
+        }
+        imdbId = series.imdb_id;
+        tmdbId = series.tmdb_id ? parseInt(series.tmdb_id, 10) : undefined;
+        kind = 'show';
+        seasonNum = item.season_number ?? undefined;
+        episodeNum = item.episode_number ?? undefined;
+      } else if (item.type === 'Movie') {
+        if (!item.imdb_id) {
+          console.log('[introdb] skip: movie imdb_id missing');
+          return;
+        }
+        imdbId = item.imdb_id;
+        tmdbId = item.tmdb_id ? parseInt(item.tmdb_id, 10) : undefined;
+        kind = 'movie';
+      } else {
+        console.log('[introdb] skip: unsupported type', item.type);
+        return;
+      }
+      if (!imdbId) return;
+
+      console.log('[introdb] fetching segments:', { imdbId, kind, seasonNum, episodeNum, tmdbId });
+      const data = await fetchSegments(imdbId, kind, seasonNum, episodeNum, tmdbId);
+      console.log('[introdb] fetch result:', data ? 'data received' : 'null', 'mpv running:', mpvManager.running());
+      if (!data || !mpvManager.running()) return;
+
+      const settings = getSettings();
+
+      // The API returns a single object per type (or null), and uses "outro"
+      // for what the Lua/settings call "credits". Wrap into the segments
+      // array shape the Lua script expects.
+      const toSegments = (
+        seg: { start_sec: number | null; end_sec: number | null; start_ms?: number | null; end_ms?: number | null } | null | undefined,
+      ): Array<{ start_sec: number; end_sec: number }> => {
+        if (!seg) return [];
+        const startSec = seg.start_sec ?? (seg.start_ms != null ? seg.start_ms / 1000 : null);
+        const endSec = seg.end_sec ?? (seg.end_ms != null ? seg.end_ms / 1000 : null);
+        if (startSec == null || endSec == null || endSec <= startSec) return [];
+        return [{ start_sec: startSec, end_sec: endSec }];
+      };
+
+      const payload: Record<string, unknown> = {
+        has_next: hasNext,
+        intro: { segments: toSegments(data.intro), mode: settings.skipIntroMode || 'off' },
+        recap: { segments: toSegments(data.recap), mode: settings.skipRecapMode || 'off' },
+        credits: { segments: toSegments(data.outro), mode: settings.skipCreditsMode || 'off' },
+      };
+
+      console.log('[introdb] pushing payload to mpv:', JSON.stringify(payload));
+      mpvManager
+        .command(['script-message-to', 'nocturne_skip', 'nocturne-segments', JSON.stringify(payload)])
+        .catch(() => { /* nocturne_skip may not be loaded yet — best effort */ });
+    } catch (e) {
+      console.error('[introdb] pushSegmentsToMpv failed:', e);
+    }
+  }
+
+  // Per-session memo of items we've already auto-searched subtitles for.
+  // Prevents retrying on failure (and on rewinds / pause / resume) within
+  // the same Nocturne process.
+  const autoSubAttempted = new Set<string>();
+
+  // Auto-download a subtitle from OpenSubtitles when the user has enabled it
+  // and the playing file lacks a track in their preferred language. The
+  // open_subtitles.lua script handles the actual API call + sub-add; we just
+  // gate, resolve the language code, and dispatch.
+  async function maybeAutoDownloadSubtitles(itemId: string): Promise<void> {
+    const settings = getSettings();
+    if (!settings.autoDownloadSubtitles) return;
+    if (autoSubAttempted.has(itemId)) return;
+    autoSubAttempted.add(itemId);
+
+    const lang639_2B = (settings.preferredSubtitleLanguage || 'eng').toLowerCase();
+    if (!lang639_2B || lang639_2B === 'none') return;
+    const lang639_1 = toIso6391(lang639_2B);
+    if (!lang639_1) return;
+
+    // mpv needs a beat to parse tracks before track-list is populated.
+    await new Promise((r) => setTimeout(r, 4000));
+    if (!mpvManager.running()) return;
+
+    try {
+      const tracks = (await mpvManager.getProperty('track-list')) as
+        | Array<{ type?: string; lang?: string }>
+        | null;
+      if (Array.isArray(tracks)) {
+        for (const t of tracks) {
+          if (t?.type !== 'sub') continue;
+          const tl = (t.lang || '').toLowerCase();
+          if (tl === lang639_1 || tl === lang639_2B) return;
+        }
+      }
+    } catch {
+      /* fall through and try anyway */
+    }
+
+    mpvManager
+      .command(['script-message-to', 'open_subtitles', 'nocturne-auto-search', lang639_1])
+      .catch(() => { /* best effort */ });
+  }
+
   // Shared advance logic: load adjacent episode in the existing mpv process
   // without going through the show-main-window / hide-mpv cleanup. Returns
   // true if it advanced, false if no adjacent episode in that direction.
@@ -930,6 +1084,21 @@ export function registerIpcHandlers(): void {
       // 5. Push refreshed adjacency to mpv so the OSC buttons update.
       pushNavContextToMpv(target.emby_id);
 
+      // 5b. Refresh skip-segment data for the new episode. Fire-and-forget;
+      //     mpv keeps playing while we wait on TheIntroDB.
+      console.log('[introdb] CALL SITE REACHED (advanceToEpisode) itemId:', target.emby_id);
+      let targetAdj: { next: unknown; prev: unknown } = { next: null, prev: null };
+      try {
+        targetAdj = dbGetAdjacentEpisodes(target.emby_id);
+      } catch (adjErr) {
+        console.error('[introdb] dbGetAdjacentEpisodes threw (advanceToEpisode):', adjErr);
+      }
+      void pushSegmentsToMpv(target.emby_id, durationSec, targetAdj.next != null);
+
+      // 5c. Auto-download subtitles if enabled and the new file lacks a
+      //     preferred-language track.
+      void maybeAutoDownloadSubtitles(target.emby_id);
+
       // 6. Notify renderer so any in-progress player UI / store can sync.
       const w = getMainWindow();
       if (w && !w.isDestroyed()) {
@@ -1025,6 +1194,7 @@ export function registerIpcHandlers(): void {
     const session = playback.take();
     playback.stopReporting();
     if (session) {
+      updateItemUserData(session.itemId, { last_played_date: new Date().toISOString() });
       embyClient
         .reportPlaybackStopped({
           ItemId: session.itemId,
@@ -1128,6 +1298,7 @@ export function registerIpcHandlers(): void {
     const session = playback.take();
     playback.stopReporting();
     if (session) {
+      updateItemUserData(session.itemId, { last_played_date: new Date().toISOString() });
       embyClient
         .reportPlaybackStopped({
           ItemId: session.itemId,
@@ -1190,6 +1361,13 @@ export function registerIpcHandlers(): void {
     } else if (name === 'nocturne-context-request') {
       // Lua script just (re)loaded and is asking for current adjacency state.
       pushNavContextToMpv(playback.current?.itemId ?? null);
+    } else if (name === 'nocturne-skip-debug') {
+      // mpv runs with --really-quiet so mp.msg.warn from Lua is invisible.
+      // Lua scripts route debug strings through script-message so they reach
+      // the main-process console.
+      console.log('[skip]', ...args.slice(1));
+    } else if (name === 'nocturne-nav-debug') {
+      console.log('[nav]', ...args.slice(1));
     }
   });
 
@@ -1274,8 +1452,28 @@ export function registerIpcHandlers(): void {
         // hasNext=hasPrev=false for movies, which hides the OSC buttons.
         pushNavContextToMpv(itemId);
 
+        // Push skip-segment data (intro / recap / credits / preview) to the
+        // nocturne_skip Lua script. Fire-and-forget — TheIntroDB lookup must
+        // never block playback start. Movies pass hasNext=false; episodes
+        // resolve adjacency from the cache.
+        console.log('[introdb] CALL SITE REACHED (player:play) itemId:', itemId, 'cached type:', cached?.type);
+        const isEpisode = cached?.type === 'Episode';
+        let adj: { next: unknown; prev: unknown } | null = null;
+        try {
+          adj = isEpisode ? dbGetAdjacentEpisodes(itemId) : null;
+        } catch (adjErr) {
+          console.error('[introdb] dbGetAdjacentEpisodes threw:', adjErr);
+        }
+        console.log('[introdb] about to call pushSegmentsToMpv, adj.next:', adj?.next != null);
+        void pushSegmentsToMpv(itemId, durationSec, adj?.next != null);
+
+        // Auto-download subtitles via OpenSubtitles if enabled and the file
+        // lacks a track in the user's preferred language.
+        void maybeAutoDownloadSubtitles(itemId);
+
         return ok(undefined);
       } catch (e) {
+        console.error('[player:play] handler threw:', e);
         const win = getMainWindow();
         if (win && !win.isDestroyed()) {
           win.show();
@@ -1395,7 +1593,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('cache:get-item', async (_, { itemId }: { itemId: string }) => {
     try {
       const cached = dbGetItem(itemId);
-      if (cached) return ok(cached);
+      if (cached) {
+        attachFallbacksToItems([cached]);
+        return ok(cached);
+      }
       // Fall back to API
       const item = await embyClient.getItem(itemId);
       return ok(item);
@@ -1407,6 +1608,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('cache:get-library-items', (_, { filters }: { filters: ItemFilters }) => {
     try {
       const result = dbGetItems(filters);
+      attachFallbacksToItems(result.items);
       return ok(result);
     } catch (e) {
       return fail(e);
@@ -1415,7 +1617,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('cache:get-resume-items', () => {
     try {
-      return ok(dbGetResumeItemsDeduped());
+      const items = dbGetResumeItemsDeduped();
+      attachFallbacksToItems(items);
+      return ok(items);
     } catch (e) {
       return fail(e);
     }
@@ -1423,7 +1627,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('cache:get-latest-items', (_, { libraryId, limit }: { libraryId: string; limit?: number }) => {
     try {
-      return ok(dbGetLatestItems(libraryId, limit));
+      const items = dbGetLatestItems(libraryId, limit);
+      attachFallbacksToItems(items);
+      return ok(items);
     } catch (e) {
       return fail(e);
     }
@@ -1431,7 +1637,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('cache:search', (_, { query }: { query: string }) => {
     try {
-      return ok(dbSearchItemsDeduped(query));
+      const items = dbSearchItemsDeduped(query);
+      attachFallbacksToItems(items);
+      return ok(items);
     } catch (e) {
       return fail(e);
     }
@@ -1644,6 +1852,7 @@ export function registerIpcHandlers(): void {
         searchTerm: args.searchTerm,
         itemType: args.itemType,
       });
+      attachFallbacksToItems(result.items);
       return ok(result);
     } catch (e) {
       return fail(e);
@@ -1655,7 +1864,9 @@ export function registerIpcHandlers(): void {
       if (vlibId === TRAKT_WATCHLIST_VLIB_ID) {
         return ok(getTraktWatchlistAsCachedItems().slice(0, limit || 20));
       }
-      return ok(getVirtualLibraryLatest(vlibId, limit || 20));
+      const items = getVirtualLibraryLatest(vlibId, limit || 20);
+      attachFallbacksToItems(items);
+      return ok(items);
     } catch (e) {
       return fail(e);
     }
@@ -1663,7 +1874,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('vlib:get-heroes', (_, { vlibId, limit }: { vlibId?: string; limit?: number }) => {
     try {
-      return ok(getVirtualLibraryHeroes(vlibId || null, limit || 20));
+      const items = getVirtualLibraryHeroes(vlibId || null, limit || 20);
+      attachFallbacksToItems(items);
+      return ok(items);
     } catch (e) {
       return fail(e);
     }
@@ -1809,7 +2022,6 @@ export function registerIpcHandlers(): void {
   // ── Updater ─────────────────────────────────────────
   ipcMain.handle('updater:check', () => {
     try {
-      const { checkForUpdates } = require('./updater');
       checkForUpdates();
       return ok(undefined);
     } catch (e) {
@@ -1819,7 +2031,6 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('updater:download', () => {
     try {
-      const { downloadUpdate } = require('./updater');
       downloadUpdate();
       return ok(undefined);
     } catch (e) {
@@ -1829,7 +2040,6 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('updater:install', () => {
     try {
-      const { installUpdate } = require('./updater');
       installUpdate();
       return ok(undefined);
     } catch (e) {
@@ -1839,7 +2049,6 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('updater:get-status', () => {
     try {
-      const { getUpdateStatus } = require('./updater');
       return ok(getUpdateStatus());
     } catch (e) {
       return fail(e);
@@ -1881,7 +2090,6 @@ export function registerIpcHandlers(): void {
       // Clear all Trakt-side mirrors so a reconnect (possibly to a different
       // account) starts from a clean slate. Fixes stale-watchlist visible in
       // the sidebar after disconnect.
-      const { clearTraktWatched, clearTraktWatchlist, clearTraktRatings } = require('./database');
       clearTraktWatched();
       clearTraktWatchlist();
       clearTraktRatings();
@@ -1903,6 +2111,23 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('trakt:get-queue-count', () => {
     try {
       return ok(traktScrobbler.getQueueCount());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:get-failed-queue-count', () => {
+    try {
+      return ok(traktScrobbler.getQueueCount());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('trakt:clear-failed-queue', () => {
+    try {
+      const cleared = traktScrobbler.clearQueue();
+      return ok({ cleared });
     } catch (e) {
       return fail(e);
     }
@@ -1936,7 +2161,6 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('trakt:open-verification', (_, { url }: { url: string }) => {
     if (!isValidUrl(url)) return fail('Invalid URL');
     try {
-      const { shell } = require('electron');
       shell.openExternal(url);
       return ok(undefined);
     } catch (e) {
@@ -2084,14 +2308,79 @@ export function registerIpcHandlers(): void {
     if (!isNonEmptyString(tmdbId)) return ok(false);
     try {
       if (type === 'movie') {
-        const { isMovieWatchedOnTrakt } = require('./database');
         return ok(isMovieWatchedOnTrakt(tmdbId));
       }
       if (type === 'episode' && typeof season === 'number' && typeof episode === 'number') {
-        const { isEpisodeWatchedOnTrakt } = require('./database');
         return ok(isEpisodeWatchedOnTrakt(tmdbId, season, episode));
       }
       return ok(false);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  // ── Analytics ────────────────────────────────────────
+  ipcMain.handle(
+    'analytics:get-stats',
+    async (_, args: { rangeStart: string; rangeEnd: string; source?: 'local' | 'trakt' | 'combined' }) => {
+      if (!isNonEmptyString(args?.rangeStart) || !isNonEmptyString(args?.rangeEnd)) {
+        return fail('rangeStart and rangeEnd are required');
+      }
+      const t0 = Date.now();
+      const source = args.source ?? 'local';
+      console.log(`[analytics:get-stats] source=${source} range=${args.rangeStart}..${args.rangeEnd}`);
+      try {
+        // Lifetime block: Trakt /users/me/stats, cached 1h. Local mode skips
+        // the call entirely so users without Trakt connected pay nothing.
+        let lifetime: AnalyticsLifetimeBlock | null = null;
+        if ((source === 'trakt' || source === 'combined') && traktClient.isConnected()) {
+          const stats = await traktSync.getCachedUserStats();
+          if (stats) {
+            lifetime = {
+              movies: stats.movies?.watched ?? 0,
+              episodes: stats.episodes?.watched ?? 0,
+              watchTimeMinutes: (stats.movies?.minutes ?? 0) + (stats.episodes?.minutes ?? 0),
+              distinctShows: stats.shows?.watched ?? 0,
+            };
+          }
+        }
+        const result = computeAnalytics(
+          { rangeStart: args.rangeStart, rangeEnd: args.rangeEnd },
+          source,
+          lifetime,
+        );
+        console.log(
+          `[analytics:get-stats] ok (+${Date.now() - t0}ms) — totals=${result.totalWatched.movies}m/${result.totalWatched.episodes}e, `
+            + `watchSec=${result.totalWatchTimeSeconds}, activityDays=${result.activityByDay.length}, `
+            + `topSeries=${result.topSeries.length}, topMovies=${result.topMovies.length}, `
+            + `genres=${result.genreBreakdown.length}, lifetime=${lifetime ? 'yes' : 'no'}, `
+            + `unmatchedTrakt=${result.unmatchedTraktCount ?? 0}`,
+        );
+        return ok(result);
+      } catch (e) {
+        console.error(`[analytics:get-stats] FAILED after ${Date.now() - t0}ms:`, e);
+        return fail(e);
+      }
+    },
+  );
+
+  ipcMain.handle('analytics:get-backfill-status', () => {
+    try {
+      return ok({
+        backfilled: Boolean(getSettingValue('traktHistoryBackfilled')),
+        cap: (getSettingValue('traktHistoryBackfillCap') as string | undefined) ?? 'two-years',
+        eventCount: countTraktWatched(),
+      });
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('analytics:trigger-backfill', async () => {
+    if (!traktClient.isConnected()) return fail('Not connected to Trakt');
+    try {
+      const result = await traktSync.backfillHistory();
+      return ok(result);
     } catch (e) {
       return fail(e);
     }
@@ -2136,5 +2425,17 @@ export function registerIpcHandlers(): void {
   traktSync.on('apply-progress', (data) => {
     const w = getMainWindow();
     if (w && !w.isDestroyed()) w.webContents.send('trakt:apply-progress', data);
+  });
+  traktSync.on('backfill-progress', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('analytics:backfill-progress', data);
+  });
+  traktSync.on('backfill-complete', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('analytics:backfill-complete', data);
+  });
+  traktSync.on('backfill-failed', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('analytics:backfill-failed', data);
   });
 }

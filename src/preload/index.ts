@@ -215,6 +215,8 @@ const api = {
     disconnect: () => ipcRenderer.invoke('trakt:disconnect'),
     drainQueue: () => ipcRenderer.invoke('trakt:drain-queue'),
     getQueueCount: () => ipcRenderer.invoke('trakt:get-queue-count'),
+    getFailedQueueCount: () => ipcRenderer.invoke('trakt:get-failed-queue-count'),
+    clearFailedQueue: () => ipcRenderer.invoke('trakt:clear-failed-queue'),
     getAdvancedConfig: () => ipcRenderer.invoke('trakt:get-advanced-config'),
     setAdvancedConfig: (cfg: { clientId: string; clientSecret: string }) =>
       ipcRenderer.invoke('trakt:set-advanced-config', cfg),
@@ -280,6 +282,27 @@ const api = {
       const handler = (_: unknown, data: { count: number }) => cb(data);
       ipcRenderer.on('trakt:watchlist-updated', handler);
       return () => ipcRenderer.removeListener('trakt:watchlist-updated', handler);
+    },
+  },
+  analytics: {
+    getStats: (args: { rangeStart: string; rangeEnd: string; source?: 'local' | 'trakt' | 'combined' }) =>
+      ipcRenderer.invoke('analytics:get-stats', args),
+    getBackfillStatus: () => ipcRenderer.invoke('analytics:get-backfill-status'),
+    triggerBackfill: () => ipcRenderer.invoke('analytics:trigger-backfill'),
+    onBackfillProgress: (cb: (data: { current: number; total: number }) => void) => {
+      const handler = (_: unknown, data: { current: number; total: number }) => cb(data);
+      ipcRenderer.on('analytics:backfill-progress', handler);
+      return () => ipcRenderer.removeListener('analytics:backfill-progress', handler);
+    },
+    onBackfillComplete: (cb: (data: { inserted: number; total: number }) => void) => {
+      const handler = (_: unknown, data: { inserted: number; total: number }) => cb(data);
+      ipcRenderer.on('analytics:backfill-complete', handler);
+      return () => ipcRenderer.removeListener('analytics:backfill-complete', handler);
+    },
+    onBackfillFailed: (cb: (err: { message: string }) => void) => {
+      const handler = (_: unknown, err: { message: string }) => cb(err);
+      ipcRenderer.on('analytics:backfill-failed', handler);
+      return () => ipcRenderer.removeListener('analytics:backfill-failed', handler);
     },
   },
   app: {

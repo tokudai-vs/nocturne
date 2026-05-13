@@ -199,3 +199,29 @@ export interface TraktItemDetails {
   votes?: number;
   ids: TraktMovieIds | TraktShowIds;
 }
+
+// ── Analytics (lifetime stats + paginated history) ──
+
+export interface TraktUserStats {
+  movies: { plays: number; watched: number; minutes: number; collected: number; ratings: number; comments: number };
+  shows: { watched: number; collected: number; ratings: number; comments: number };
+  seasons?: { ratings: number; comments: number };
+  episodes: { plays: number; watched: number; minutes: number; ratings: number; comments: number };
+  network?: { friends: number; followers: number; following: number };
+  ratings?: { total: number; distribution: Record<string, number> };
+}
+
+export interface TraktHistoryPage {
+  items: TraktHistoryItem[];
+  page: number;
+  pageCount: number;
+  itemCount: number;
+}
+
+export interface TraktHistoryQuery {
+  type?: 'movies' | 'episodes';
+  startAt?: string; // ISO 8601
+  endAt?: string;   // ISO 8601
+  page?: number;
+  limit?: number;
+}

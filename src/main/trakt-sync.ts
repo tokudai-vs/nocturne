@@ -25,10 +25,12 @@ import {
   type TraktWatchlistRow,
 } from './database';
 import type {
+  TraktHistoryItem,
   TraktHistoryPreview,
   TraktMatchedEpisode,
   TraktMatchedMovie,
   TraktRatingResult,
+  TraktUserStats,
   TraktWatchedMovie,
   TraktWatchedShow,
   TraktWatchlistMovie,
@@ -587,6 +589,122 @@ class TraktSync extends EventEmitter {
       console.warn('[trakt-sync] rating fetch failed:', err);
       return null;
     }
+  }
+
+  // ── Analytics: lifetime stats (cached) + history backfill ──
+
+  /** GET /users/me/stats with a 1h disk cache. The renderer hits this on
+   *  every Analytics page mount; without the cache, tab switches would
+   *  hammer Trakt. Returns null when offline / not connected. */
+  async getCachedUserStats(forceRefresh = false): Promise<TraktUserStats | null> {
+    if (!traktClient.isConnected()) return null;
+    if (!forceRefresh) {
+      const cachedJson = getSettingValue('traktUserStatsCache');
+      const cachedAt = getSettingValue('traktUserStatsCachedAt');
+      if (cachedJson && cachedAt) {
+        const age = Date.now() - new Date(cachedAt).getTime();
+        if (age < 60 * 60 * 1000) {
+          try { return JSON.parse(cachedJson) as TraktUserStats; } catch { /* fall through */ }
+        }
+      }
+    }
+    try {
+      const stats = await traktClient.getUserStats();
+      setSetting('traktUserStatsCache', JSON.stringify(stats));
+      setSetting('traktUserStatsCachedAt', new Date().toISOString());
+      return stats;
+    } catch (err) {
+      console.warn('[trakt-sync] getUserStats failed:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Page through GET /sync/history and UPSERT every event into
+   * `trakt_watched_history`. Idempotent — the synthesized `key` column
+   * collapses re-runs. Emits 'backfill-progress' events between pages so
+   * the renderer can show "Syncing Trakt history… 1230/4500".
+   *
+   * Honors `traktHistoryBackfillCap`:
+   *   - 'two-years': start_at = (now - 730 days), single bounded run
+   *   - 'full':      no start_at, walks back to user's earliest history
+   */
+  async backfillHistory(): Promise<{ inserted: number; total: number }> {
+    if (!traktClient.isConnected()) return { inserted: 0, total: 0 };
+
+    const cap = (getSettingValue('traktHistoryBackfillCap') as 'two-years' | 'full' | undefined) ?? 'two-years';
+    const startAt = cap === 'two-years'
+      ? new Date(Date.now() - 730 * 24 * 60 * 60 * 1000).toISOString()
+      : undefined;
+
+    const PAGE_LIMIT = 1000;
+    let page = 1;
+    let total = 0;
+    let inserted = 0;
+    this.emit('backfill-progress', { current: 0, total: 0 });
+
+    while (true) {
+      let res;
+      try {
+        res = await traktClient.getHistory({ startAt, page, limit: PAGE_LIMIT });
+      } catch (err) {
+        console.warn(`[trakt-sync] backfill page ${page} failed:`, err);
+        this.emit('backfill-failed', { message: errorMessage(err) });
+        return { inserted, total };
+      }
+
+      if (page === 1) total = res.itemCount;
+
+      const rows = this.historyItemsToWatchedRows(res.items);
+      if (rows.length > 0) {
+        bulkUpsertTraktWatched(rows);
+        inserted += rows.length;
+      }
+
+      this.emit('backfill-progress', { current: inserted, total });
+
+      if (page >= res.pageCount || res.items.length === 0) break;
+      page++;
+    }
+
+    setSetting('traktHistoryBackfilled', true);
+    this.emit('backfill-complete', { inserted, total });
+    return { inserted, total };
+  }
+
+  private historyItemsToWatchedRows(items: TraktHistoryItem[]): TraktWatchedRow[] {
+    const out: TraktWatchedRow[] = [];
+    for (const ev of items) {
+      if (ev.type === 'movie' && ev.movie) {
+        const tmdb = ev.movie.ids.tmdb ? String(ev.movie.ids.tmdb) : null;
+        const imdb = ev.movie.ids.imdb || null;
+        if (!tmdb && !imdb) continue;
+        out.push({
+          key: tmdb ? `movie:${tmdb}` : `movie:imdb:${imdb}`,
+          trakt_type: 'movie',
+          tmdb_id: tmdb,
+          imdb_id: imdb,
+          show_tmdb_id: null,
+          season_number: null,
+          episode_number: null,
+          watched_at: ev.watched_at,
+        });
+      } else if (ev.type === 'episode' && ev.episode && ev.show) {
+        const showTmdb = ev.show.ids.tmdb ? String(ev.show.ids.tmdb) : null;
+        if (!showTmdb) continue;
+        out.push({
+          key: `episode:${showTmdb}:${ev.episode.season}:${ev.episode.number}`,
+          trakt_type: 'episode',
+          tmdb_id: null,
+          imdb_id: null,
+          show_tmdb_id: showTmdb,
+          season_number: ev.episode.season,
+          episode_number: ev.episode.number,
+          watched_at: ev.watched_at,
+        });
+      }
+    }
+    return out;
   }
 
   // ── Stats ──────────────────────────────────────────

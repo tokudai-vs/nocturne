@@ -5,7 +5,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { APP_VERSION, CLIENT_NAME, DEVICE_NAME } from '../shared/constants';
 
-const ITEM_FIELDS = 'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags';
+const ITEM_FIELDS = 'Overview,People,Genres,Studios,MediaSources,UserData,ImageTags,BackdropImageTags,RemoteTrailers';
 const ITEM_FIELDS_LIGHT = 'Overview,UserData,ImageTags,BackdropImageTags';
 
 function getDeviceId(): string {

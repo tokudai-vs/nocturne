@@ -12,6 +12,7 @@ import LibraryPage from './pages/LibraryPage';
 import DetailPage from './pages/DetailPage';
 import SearchPage from './pages/SearchPage';
 import SettingsPage from './pages/SettingsPage';
+import AnalyticsPage from './pages/AnalyticsPage';
 import { useLibraryStore } from './stores/library-store';
 
 const router = createHashRouter([
@@ -30,6 +31,7 @@ const router = createHashRouter([
           { path: '/detail/:id', element: <DetailPage /> },
           { path: '/search', element: <SearchPage /> },
           { path: '/settings', element: <SettingsPage /> },
+          { path: '/analytics', element: <AnalyticsPage /> },
         ],
       },
     ],

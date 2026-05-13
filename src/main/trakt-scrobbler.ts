@@ -1,12 +1,14 @@
 import { EventEmitter } from 'events';
 import { traktClient } from './trakt-client';
 import {
+  clearTraktQueue,
   countTraktQueue,
   deleteTraktScrobble,
   enqueueTraktScrobble,
   getItem as dbGetItem,
   getNextTraktScrobble,
   markTraktScrobbleAttempt,
+  pruneStaleTraktQueue,
   type ItemRow,
 } from './database';
 import { getSettingValue } from './settings';
@@ -28,12 +30,26 @@ class TraktScrobbler extends EventEmitter {
   private draining = false;
 
   init(): void {
+    const pruned = pruneStaleTraktQueue();
+    if (pruned.lowProgress > 0) {
+      console.log(`[trakt] pruned ${pruned.lowProgress} stale queue events (progress=0 stop/pause)`);
+    }
+    if (pruned.pauseHighProgress > 0) {
+      console.log(`[trakt] pruned ${pruned.pauseHighProgress} stale queue events (pause action with progress >= 80%)`);
+    }
     // Wait briefly so app/network can settle before draining queued scrobbles.
     this.scheduleDrain(INITIAL_DRAIN_DELAY_MS);
   }
 
   getQueueCount(): number {
     return countTraktQueue();
+  }
+
+  /** Wipe the entire failed-event queue. Returns the number of entries cleared. */
+  clearQueue(): number {
+    const count = countTraktQueue();
+    clearTraktQueue();
+    return count;
   }
 
   /** Public scrobble entry. Silently no-ops when disabled / not connected / unsupported item. */
@@ -51,7 +67,23 @@ class TraktScrobbler extends EventEmitter {
       console.log(`[trakt-scrobbler] skip ${action}: ${itemId} not in cache`);
       return;
     }
-    const progress = this.progressPct(positionSec, durationSec);
+    let progress = this.progressPct(positionSec, durationSec);
+    // Trakt requires progress >= 1.0% on stop/pause (422 otherwise). On ESC
+    // the position polling loop may have already stopped, leaving stale
+    // values, but if we're sending stop the user has been watching — clamp
+    // up so the event isn't rejected.
+    if ((action === 'stop' || action === 'pause') && progress < 1) {
+      progress = 1;
+    }
+    // Trakt rejects /scrobble/pause with progress >= 80% — at that threshold
+    // it expects /scrobble/stop so the event auto-marks watched. Convert in
+    // place so the user-initiated pause still records as a finished watch
+    // rather than getting queued + retried forever.
+    let effectiveAction = action;
+    if (action === 'pause' && progress >= 80) {
+      console.log(`[trakt] progress ${progress.toFixed(2)}% — converting pause to stop`);
+      effectiveAction = 'stop';
+    }
     const payload = this.resolvePayload(item, progress);
     if (!payload) {
       console.log(
@@ -61,15 +93,15 @@ class TraktScrobbler extends EventEmitter {
     }
 
     try {
-      const result = await traktClient.scrobble(action, payload);
+      const result = await traktClient.scrobble(effectiveAction, payload);
       if (result.ok) {
         this.scheduleDrain(0);
       }
     } catch (err) {
       const msg = errorMessage(err);
-      console.warn(`[trakt-scrobbler] ${action} failed, queueing — ${msg}`);
-      enqueueTraktScrobble(action, JSON.stringify(payload), itemId, msg);
-      this.emit('scrobble-error', { action, itemId, message: msg });
+      console.warn(`[trakt-scrobbler] ${effectiveAction} failed, queueing — ${msg}`);
+      enqueueTraktScrobble(effectiveAction, JSON.stringify(payload), itemId, msg);
+      this.emit('scrobble-error', { action: effectiveAction, itemId, message: msg });
       this.scheduleDrain(MIN_RETRY_DELAY_MS);
     }
   }

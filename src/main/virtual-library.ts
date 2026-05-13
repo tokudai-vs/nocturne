@@ -316,6 +316,7 @@ export function getTraktWatchlistAsCachedItems(): TraktWatchlistItem[] {
         server_id: '',
         library_id: TRAKT_WATCHLIST_VLIB_ID,
         library_name: 'Trakt Watchlist',
+        last_played_date: null,
         type: localType,
         name: entry.title ?? '(unknown)',
         sort_name: entry.title,

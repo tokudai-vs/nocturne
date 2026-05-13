@@ -21,10 +21,14 @@ import type {
   ScrobbleAction,
   ScrobblePayload,
   TraktDeviceCodeResponse,
+  TraktHistoryItem,
+  TraktHistoryPage,
+  TraktHistoryQuery,
   TraktStatus,
   TraktTokenResponse,
   TraktTokens,
   TraktUserMe,
+  TraktUserStats,
   TraktWatchedMovie,
   TraktWatchedShow,
   TraktWatchlistMovie,
@@ -343,6 +347,36 @@ class TraktClient extends EventEmitter {
       if (status === 404) return null;
       throw err;
     }
+  }
+
+  // ── Analytics ──────────────────────────────────────
+
+  async getUserStats(): Promise<TraktUserStats> {
+    const headers = await this.authedHeaders();
+    if (!headers) throw new Error('Not connected to Trakt');
+    const { data } = await this.http.get<TraktUserStats>('/users/me/stats', { headers });
+    return data;
+  }
+
+  /**
+   * Paginated GET /sync/history. Trakt returns at most `limit` events per
+   * page and exposes total counts via X-Pagination-* headers. Caller is
+   * responsible for iterating until exhaustion or hitting a cap.
+   */
+  async getHistory(query: TraktHistoryQuery = {}): Promise<TraktHistoryPage> {
+    const headers = await this.authedHeaders();
+    if (!headers) throw new Error('Not connected to Trakt');
+    const params: Record<string, string | number> = {};
+    if (query.startAt) params.start_at = query.startAt;
+    if (query.endAt) params.end_at = query.endAt;
+    if (query.page) params.page = query.page;
+    if (query.limit) params.limit = query.limit;
+    const path = query.type ? `/sync/history/${query.type}` : '/sync/history';
+    const res = await this.http.get<TraktHistoryItem[]>(path, { headers, params });
+    const page = Number(res.headers['x-pagination-page'] ?? query.page ?? 1);
+    const pageCount = Number(res.headers['x-pagination-page-count'] ?? 1);
+    const itemCount = Number(res.headers['x-pagination-item-count'] ?? res.data.length);
+    return { items: res.data, page, pageCount, itemCount };
   }
 
   // ── Disconnect ─────────────────────────────────────

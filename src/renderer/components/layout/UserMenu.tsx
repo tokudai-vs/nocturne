@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, LogOut, Settings, Server, Layers } from 'lucide-react';
+import { RefreshCw, LogOut, Settings, Server, Layers, BarChart3 } from 'lucide-react';
 import { useAuthStore } from '../../stores/auth-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import styles from './UserMenu.module.css';
@@ -87,6 +87,10 @@ export default function UserMenu({ onClose }: Props) {
           Switch Server
         </button>
       )}
+      <button className={styles.item} onClick={() => { onClose(); navigate('/analytics'); }}>
+        <span className={styles.itemIcon}><BarChart3 size={16} /></span>
+        Analytics
+      </button>
       <button className={styles.item} onClick={() => { onClose(); navigate('/settings'); }}>
         <span className={styles.itemIcon}><Settings size={16} /></span>
         Settings

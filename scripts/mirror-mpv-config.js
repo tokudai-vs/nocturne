@@ -21,6 +21,7 @@ const FILES = [
   'script-opts/modernz.conf',
   'scripts/nocturne_select.lua',
   'scripts/nocturne_nav.lua',
+  'scripts/nocturne_skip.lua',
   'scripts/open-subtitles.lua',
 ];
 

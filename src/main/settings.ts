@@ -54,6 +54,8 @@ export interface NocturneSettings {
   subtitleBorderSize: number;
   subtitleBackground: 'none' | 'semi' | 'opaque';
   subtitlePosition: number;
+  autoDownloadSubtitles: boolean;
+  preferredSubtitleLanguage: string;
   powerMode: 'performance' | 'balanced' | 'efficiency';
   startFullscreen: boolean;
   startPage: 'home' | 'last-visited';
@@ -61,6 +63,10 @@ export interface NocturneSettings {
   syncOnStartup: boolean;
   firstLaunchComplete: boolean;
   lastServerUrl: string;
+  // ── Skip segments (TheIntroDB) ──
+  skipIntroMode: 'button' | 'auto' | 'off';
+  skipRecapMode: 'button' | 'auto' | 'off';
+  skipCreditsMode: 'button' | 'auto' | 'off';
   // ── Trakt ──
   traktAutoScrobble: boolean;
   traktSyncWatchedState: boolean;
@@ -72,6 +78,10 @@ export interface NocturneSettings {
   traktLastWatchlistSyncAt: string | null;
   traktClientIdOverride: string;
   traktClientSecretOverride: string;
+  traktHistoryBackfilled: boolean;
+  traktHistoryBackfillCap: 'two-years' | 'full';
+  traktUserStatsCache: string | null;        // JSON-encoded TraktUserStats
+  traktUserStatsCachedAt: string | null;     // ISO 8601
 }
 
 const DEFAULTS: NocturneSettings = {
@@ -92,6 +102,8 @@ const DEFAULTS: NocturneSettings = {
   subtitleBorderSize: 2.5,
   subtitleBackground: 'none',
   subtitlePosition: 95,
+  autoDownloadSubtitles: false,
+  preferredSubtitleLanguage: 'eng',
   powerMode: 'balanced',
   startFullscreen: true,
   startPage: 'home',
@@ -99,6 +111,9 @@ const DEFAULTS: NocturneSettings = {
   syncOnStartup: true,
   firstLaunchComplete: false,
   lastServerUrl: '',
+  skipIntroMode: 'button',
+  skipRecapMode: 'auto',
+  skipCreditsMode: 'button',
   traktAutoScrobble: true,
   traktSyncWatchedState: true,
   traktShowWatchlistInSidebar: true,
@@ -109,6 +124,10 @@ const DEFAULTS: NocturneSettings = {
   traktLastWatchlistSyncAt: null,
   traktClientIdOverride: '',
   traktClientSecretOverride: '',
+  traktHistoryBackfilled: false,
+  traktHistoryBackfillCap: 'two-years',
+  traktUserStatsCache: null,
+  traktUserStatsCachedAt: null,
 };
 
 let settings: NocturneSettings = { ...DEFAULTS };

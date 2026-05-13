@@ -5,7 +5,13 @@ import { formatRuntime } from '../../utils/format';
 import type { BaseItemDto } from '../../api/types';
 import { useContextMenuStore } from '../../stores/context-menu-store';
 import styles from './MediaCard.module.css';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+
+// Session-level cache of image URLs known to 404/fail. Prevents the same
+// broken primary from being re-attempted on every card mount, and lets us
+// pre-skip past it to the first working fallback. In-memory only — never
+// persisted; cleared on full reload.
+const KNOWN_BAD_IMAGE_URLS = new Set<string>();
 
 interface Props {
   item: BaseItemDto & {
@@ -58,12 +64,41 @@ function resolveImageSrc(item: BaseItemDto, isLandscape: boolean): string {
 
 export default function MediaCard({ item, orientation = 'portrait', onClick, onExternalClick }: Props) {
   const navigate = useNavigate();
-  const [imgError, setImgError] = useState(false);
-  const [imgLoaded, setImgLoaded] = useState(false);
   const isLandscape = orientation === 'landscape';
   const isExternal = item.isExternal === true;
 
-  const src = !imgError ? resolveImageSrc(item, isLandscape) : '';
+  // Build the full URL chain once per item: [primary, ...fallbacks], filtered
+  // through KNOWN_BAD_IMAGE_URLS so we never re-attempt a URL we've already
+  // confirmed dead in this session.
+  const chain = useMemo(() => {
+    const primary = resolveImageSrc(item, isLandscape);
+    const fallbacks = (item.ImageFallbacks ?? []).filter(Boolean);
+    const all = (primary ? [primary, ...fallbacks] : fallbacks)
+      .filter((u) => u && !KNOWN_BAD_IMAGE_URLS.has(u));
+    return all;
+    // ImageFallbacks identity is stable per-item from the IPC payload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.Id, item.ImageFallbacks, isLandscape]);
+
+  const [attempt, setAttempt] = useState(0);
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const [exhausted, setExhausted] = useState(false);
+
+  const src = !exhausted && attempt < chain.length ? chain[attempt] : '';
+
+  const onImgError = () => {
+    const failed = chain[attempt];
+    if (failed) KNOWN_BAD_IMAGE_URLS.add(failed);
+    if (attempt + 1 < chain.length) {
+      // eslint-disable-next-line no-console
+      console.log(`[image-fallback] card ${item.Id} URL failed, advancing to fallback ${attempt}/${chain.length - 1}`);
+      setAttempt(attempt + 1);
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(`[image-fallback] card ${item.Id} all ${chain.length} URL(s) exhausted, showing letter placeholder`);
+      setExhausted(true);
+    }
+  };
 
   const playedPct = item.UserData?.PlayedPercentage ?? 0;
   const played = item.UserData?.Played ?? false;
@@ -111,7 +146,8 @@ export default function MediaCard({ item, orientation = 'portrait', onClick, onE
             className={`${styles.image} ${imgLoaded ? styles.imageLoaded : ''}`}
             loading="lazy"
             onLoad={() => setImgLoaded(true)}
-            onError={() => setImgError(true)}
+            onError={onImgError}
+            key={src}
           />
         ) : (
           <div className={styles.fallback}>

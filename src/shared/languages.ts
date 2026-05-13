@@ -85,3 +85,29 @@ export const SUBTITLE_LANGUAGE_OPTIONS = [
 
 /** Options for audio language dropdown (no 'none') */
 export const AUDIO_LANGUAGE_OPTIONS = SUBTITLE_LANGUAGE_OPTIONS.filter((o) => o.value !== 'none');
+
+/**
+ * Map ISO 639-2/B (used throughout Nocturne UI) → ISO 639-1 (required by
+ * OpenSubtitles v1 API). Only covers the subset surfaced in
+ * SUBTITLE_LANGUAGE_OPTIONS; anything else returns null.
+ */
+const ISO_639_1_MAP: Record<string, string> = {
+  eng: 'en', hin: 'hi', spa: 'es',
+  fra: 'fr', fre: 'fr',
+  deu: 'de', ger: 'de',
+  ita: 'it', jpn: 'ja', kor: 'ko',
+  zho: 'zh', chi: 'zh',
+  por: 'pt', rus: 'ru', ara: 'ar',
+  tha: 'th', tam: 'ta', tel: 'te',
+  ben: 'bn', urd: 'ur', tur: 'tr',
+  pol: 'pl',
+  nld: 'nl', dut: 'nl',
+  swe: 'sv',
+};
+
+export function toIso6391(code: string): string | null {
+  if (!code) return null;
+  const lower = code.toLowerCase();
+  if (lower.length === 2) return lower; // already 639-1
+  return ISO_639_1_MAP[lower] || null;
+}

@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Play, Heart, Check, Bookmark } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Play, Heart, Check, Bookmark, Film } from 'lucide-react';
 import { buildImageUrl } from '../utils/image-url';
 import { formatRuntime, formatFileSize, formatBitrate, formatEpisodeNumber } from '../utils/format';
 import { cachedToBaseItem } from '../utils/cache-adapter';
@@ -15,6 +15,32 @@ import LoadingSpinner from '../components/ui/LoadingSpinner';
 import type { BaseItemDto, CachedItem, EpisodeVersionGroup, ItemsResult, MediaSource as MediaSourceType, ServerConfig, TraktRating } from '../api/types';
 import styles from './DetailPage.module.css';
 import pickerStyles from '../components/ui/MediaSourcePicker.module.css';
+
+// Emby's RemoteTrailers entries are { Url, Name } — no type discriminator —
+// so prefer the most "official" trailer by name heuristic. Skip teasers,
+// behind-the-scenes, featurettes, etc.; fall back to the first YouTube link.
+const SKIP_TRAILER_RE = /\b(teaser|behind|clip|featurette|interview|deleted|sneak|preview|making)\b/i;
+const TRAILER_NAME_RE = /\btrailer\b/i;
+const YOUTUBE_ID_RE = /(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
+
+function extractYouTubeId(url: string): string | null {
+  const m = url.match(YOUTUBE_ID_RE);
+  return m ? m[1] : null;
+}
+
+function pickYouTubeTrailer(remoteTrailers: { Url: string; Name: string }[] | undefined): string | null {
+  if (!remoteTrailers || remoteTrailers.length === 0) return null;
+  const youtube = remoteTrailers
+    .map((t) => ({ name: t.Name || '', id: extractYouTubeId(t.Url || '') }))
+    .filter((t): t is { name: string; id: string } => t.id != null);
+  if (youtube.length === 0) return null;
+
+  const official = youtube.find((t) => TRAILER_NAME_RE.test(t.name) && !SKIP_TRAILER_RE.test(t.name));
+  if (official) return official.id;
+  const nonSkip = youtube.find((t) => !SKIP_TRAILER_RE.test(t.name));
+  if (nonSkip) return nonSkip.id;
+  return youtube[0].id;
+}
 
 interface ParsedMediaSource {
   Id?: string;
@@ -111,6 +137,7 @@ export default function DetailPage() {
   // Toggle states
   const [isFavorite, setIsFavorite] = useState(false);
   const [isPlayed, setIsPlayed] = useState(false);
+  const trailerVideoId = useMemo(() => pickYouTubeTrailer(item?.RemoteTrailers), [item]);
   const [overviewExpanded, setOverviewExpanded] = useState(false);
   const [favBounce, setFavBounce] = useState(false);
   const [playedBounce, setPlayedBounce] = useState(false);
@@ -439,7 +466,7 @@ export default function DetailPage() {
         <ArrowLeft size={20} />
       </button>
 
-      <HeroBackdrop itemId={backdropId} tag={backdropTag} height="55vh">
+      <HeroBackdrop itemId={backdropId} tag={backdropTag} backdropFallbacks={item.BackdropFallbacks} height="55vh">
         <div className={styles.heroInner}>
           <div className={styles.poster}>
             {isEpisode ? (
@@ -522,6 +549,14 @@ export default function DetailPage() {
                   {versions.length > 1 && (
                     <span className={styles.playQualityHint}>{getQualityLabel(pickPreferredVersion(versions, preferredQuality))}</span>
                   )}
+                </button>
+              )}
+              {trailerVideoId && (
+                <button
+                  className={styles.actionBtn}
+                  onClick={() => window.api.window.openExternal(`https://www.youtube.com/watch?v=${trailerVideoId}`)}
+                >
+                  <Film size={16} /> Play Trailer
                 </button>
               )}
               <button
@@ -696,6 +731,7 @@ export default function DetailPage() {
           onCancel={() => setEpPickerSiblings(null)}
         />
       )}
+
     </div>
   );
 }

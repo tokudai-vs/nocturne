@@ -53,8 +53,13 @@ export interface ItemRow {
   played_percentage: number;
   date_created: string | null;
   date_modified: string | null;
+  last_played_date: string | null;
   cached_at: string | null;
   dedup_group_id: string | null;
+  // Attached on IPC return only — never persisted. Holds dedup-sibling image
+  // URLs the renderer cycles through if the primary fails to load.
+  image_fallbacks?: string[];
+  backdrop_fallbacks?: string[];
 }
 
 export interface ItemFilters {
@@ -150,6 +155,7 @@ export function initDatabase(): void {
       played_percentage REAL DEFAULT 0,
       date_created TEXT,
       date_modified TEXT,
+      last_played_date TEXT,
       cached_at TEXT DEFAULT (datetime('now')),
       dedup_group_id TEXT
     );
@@ -161,6 +167,9 @@ export function initDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_items_series ON items(series_id);
     CREATE INDEX IF NOT EXISTS idx_items_dedup ON items(dedup_group_id);
     CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
+    -- idx_items_last_played is created AFTER the ALTER-TABLE migration below,
+    -- so existing DBs predating the column don't hit a missing-column error
+    -- while this bulk exec runs.
 
     CREATE TABLE IF NOT EXISTS dedup_groups (
       group_id TEXT PRIMARY KEY,
@@ -247,6 +256,17 @@ export function initDatabase(): void {
       PRIMARY KEY (tmdb_id, trakt_type)
     );
   `);
+
+  // Migrations for existing DBs predating columns added above. SQLite has no
+  // "ADD COLUMN IF NOT EXISTS", so we probe table_info first.
+  const itemCols = db.prepare(`PRAGMA table_info(items)`).all() as Array<{ name: string }>;
+  const itemColNames = new Set(itemCols.map((c) => c.name));
+  if (!itemColNames.has('last_played_date')) {
+    db.exec(`ALTER TABLE items ADD COLUMN last_played_date TEXT`);
+  }
+  // Indexes referencing migrated columns must run AFTER the ALTER above. Fresh
+  // installs hit this too (no-op via IF NOT EXISTS).
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_items_last_played ON items(last_played_date) WHERE last_played_date IS NOT NULL`);
 }
 
 export function closeDatabase(): void {
@@ -266,7 +286,7 @@ const UPSERT_SQL = `
     image_tags, backdrop_tags, series_id, series_name, season_id,
     season_number, episode_number, media_sources, played, play_count,
     is_favorite, playback_position_ticks, played_percentage,
-    date_created, date_modified, cached_at
+    date_created, date_modified, last_played_date, cached_at
   ) VALUES (
     @emby_id, @server_id, @library_id, @library_name, @type, @name, @sort_name,
     @overview, @tmdb_id, @imdb_id, @tvdb_id, @production_year, @premiere_date,
@@ -274,7 +294,7 @@ const UPSERT_SQL = `
     @image_tags, @backdrop_tags, @series_id, @series_name, @season_id,
     @season_number, @episode_number, @media_sources, @played, @play_count,
     @is_favorite, @playback_position_ticks, @played_percentage,
-    @date_created, @date_modified, datetime('now')
+    @date_created, @date_modified, @last_played_date, datetime('now')
   ) ON CONFLICT(emby_id) DO UPDATE SET
     server_id=excluded.server_id, library_id=excluded.library_id,
     library_name=excluded.library_name, type=excluded.type, name=excluded.name,
@@ -291,6 +311,7 @@ const UPSERT_SQL = `
     is_favorite=excluded.is_favorite, playback_position_ticks=excluded.playback_position_ticks,
     played_percentage=excluded.played_percentage,
     date_created=excluded.date_created, date_modified=excluded.date_modified,
+    last_played_date=COALESCE(excluded.last_played_date, items.last_played_date),
     cached_at=datetime('now')
 `;
 
@@ -343,6 +364,7 @@ function mapEmbyItem(item: any, serverId: string, libraryId: string, libraryName
     played_percentage: userData.PlayedPercentage || 0,
     date_created: item.DateCreated || null,
     date_modified: item.DateLastSaved || item.DateModified || null,
+    last_played_date: userData.LastPlayedDate || null,
   };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -439,6 +461,7 @@ export function getResumeItemsDeduped(limit = 12): ItemRow[] {
 
 const ALLOWED_USER_DATA_COLUMNS = new Set([
   'played', 'play_count', 'is_favorite', 'playback_position_ticks', 'played_percentage',
+  'last_played_date',
 ]);
 
 export function updateItemUserData(
@@ -449,6 +472,7 @@ export function updateItemUserData(
     is_favorite: number;
     playback_position_ticks: number;
     played_percentage: number;
+    last_played_date: string;
   }>,
 ): void {
   const fields: string[] = [];
@@ -1153,6 +1177,12 @@ export function checkpoint(): void {
   getDb().pragma('wal_checkpoint(PASSIVE)');
 }
 
+/** Hand the shared db handle to the analytics module. Lives here so the
+ *  analytics module can avoid a top-level circular import on `db`. */
+export function getDbForAnalytics(): Database.Database {
+  return getDb();
+}
+
 // ── Trakt scrobble queue ────────────────────────────
 
 export interface TraktQueueRow {
@@ -1207,6 +1237,45 @@ export function deleteTraktScrobble(id: number): void {
 
 export function clearTraktQueue(): void {
   getDb().exec(`DELETE FROM trakt_scrobble_queue`);
+}
+
+/**
+ * Drop queued scrobble events that will never succeed in their stored form:
+ *   - stop/pause with progress < 1.0   → 422 "progress >= 1.0% required"
+ *   - pause with progress >= 80        → 422 "Use stop to scrobble"
+ * Both classes retry until MAX_ATTEMPTS otherwise. One-shot boot cleanup.
+ * Returns counts per bucket so the caller can log a useful summary.
+ */
+export function pruneStaleTraktQueue(): { lowProgress: number; pauseHighProgress: number } {
+  const d = getDb();
+  const rows = d
+    .prepare(`SELECT id, action, payload FROM trakt_scrobble_queue WHERE action IN ('stop', 'pause')`)
+    .all() as Array<{ id: number; action: string; payload: string }>;
+  if (rows.length === 0) return { lowProgress: 0, pauseHighProgress: 0 };
+  const del = d.prepare(`DELETE FROM trakt_scrobble_queue WHERE id = ?`);
+  let lowProgress = 0;
+  let pauseHighProgress = 0;
+  const tx = d.transaction(() => {
+    for (const row of rows) {
+      let progress = 0;
+      try {
+        const p = JSON.parse(row.payload) as { progress?: unknown };
+        if (typeof p.progress === 'number') progress = p.progress;
+      } catch {
+        // malformed entries are dropped by drainQueue on next pass — leave alone here
+        continue;
+      }
+      if (progress < 1) {
+        del.run(row.id);
+        lowProgress++;
+      } else if (row.action === 'pause' && progress >= 80) {
+        del.run(row.id);
+        pauseHighProgress++;
+      }
+    }
+  });
+  tx();
+  return { lowProgress, pauseHighProgress };
 }
 
 export function countTraktQueue(): number {

@@ -50,3 +50,13 @@ npm-debug.log*
 # Dev-only AI session state
 CLAUDE.md
 .omc/
+
+# Ad-hoc local verification scripts written during debug sessions.
+# Canonical guards live under scripts/ and ARE committed — this only
+# excludes one-off scratch files dropped at the repo root.
+/verify-*.cjs
+/verify-*.js
+/verify-*.mjs
+
+# Audit log + memory artifacts
+/docs/AUDIT-*.md.bak

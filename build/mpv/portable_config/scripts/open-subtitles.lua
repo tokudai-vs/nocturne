@@ -66,14 +66,17 @@ local function http_get_curl(url, headers)
   return result.stdout
 end
 
-local function search_subtitles(query)
-  show_message("Searching subtitles for: " .. query, 5)
+local function search_subtitles(query, lang_override, silent)
+  local lang = lang_override or LANGUAGES
+  if not silent then
+    show_message("Searching subtitles for: " .. query, 5)
+  end
 
   local search_url = string.format(
     "%s/subtitles?query=%s&languages=%s&order_by=download_count&order_direction=desc",
     API_URL,
     query:gsub(" ", "+"),
-    LANGUAGES
+    lang
   )
 
   local headers = {
@@ -89,13 +92,13 @@ local function search_subtitles(query)
   end
 
   if not response then
-    show_message("Failed to search subtitles", 3)
+    if not silent then show_message("Failed to search subtitles", 3) end
     return nil
   end
 
   local data = utils.parse_json(response)
   if not data or not data.data then
-    show_message("No subtitles found", 3)
+    if not silent then show_message("No subtitles found", 3) end
     return nil
   end
 
@@ -245,6 +248,53 @@ local function select_and_download()
     show_message("Subtitle search cancelled", 2)
   end)
 end
+
+-- Build a clean search query from mpv's media-title (strip year, quality
+-- tags, separators). Shared with the manual flow above.
+local function clean_query()
+  local title = mp.get_property("media-title") or mp.get_property("filename/no-ext") or ""
+  if title == "" then return nil end
+  return title
+    :gsub("%([^)]*%)", "")
+    :gsub("%[[^%]]*%]", "")
+    :gsub("%d%d%d%d%d+p?", "")
+    :gsub("[%.%_]", " ")
+    :gsub("%s+", " ")
+    :match("^%s*(.-)%s*$")
+end
+
+local LANG_LABELS = {
+  en = "English", es = "Spanish", fr = "French", de = "German",
+  it = "Italian", pt = "Portuguese", ru = "Russian", ja = "Japanese",
+  ko = "Korean", zh = "Chinese", ar = "Arabic", hi = "Hindi",
+  th = "Thai", ta = "Tamil", te = "Telugu", bn = "Bengali",
+  ur = "Urdu", tr = "Turkish", pl = "Polish", nl = "Dutch", sv = "Swedish",
+}
+
+-- Non-interactive auto-search. Driven by main process via:
+--   script-message-to open_subtitles nocturne-auto-search <iso-639-1>
+-- Picks the highest download-count result and applies it without a menu.
+mp.register_script_message("nocturne-auto-search", function(lang)
+  if not lang or lang == "" then return end
+  local query = clean_query()
+  if not query or query == "" then return end
+
+  local results = search_subtitles(query, lang, true)
+  if not results or #results == 0 then return end
+
+  local top = results[1]
+  local files = top.attributes and top.attributes.files
+  if not files or #files == 0 then return end
+
+  local file = files[1]
+  local filename = file.file_name or ("subtitle." .. lang .. ".srt")
+  local path = download_subtitle(file.file_id, filename)
+  if not path then return end
+
+  mp.commandv("sub-add", path, "auto")
+  local label = LANG_LABELS[lang] or lang:upper()
+  mp.osd_message("Subtitles downloaded: " .. label, 1.5)
+end)
 
 -- Bind 'b' to trigger subtitle search
 mp.add_forced_key_binding("b", "opensub-search", select_and_download)

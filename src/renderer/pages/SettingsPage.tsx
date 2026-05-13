@@ -86,6 +86,12 @@ const POWER_MODE_OPTIONS = [
   { value: 'efficiency', label: 'Efficiency' },
 ];
 
+const SKIP_MODE_OPTIONS = [
+  { value: 'button', label: 'Show Button' },
+  { value: 'auto', label: 'Auto-Skip' },
+  { value: 'off', label: 'Off' },
+];
+
 const CACHE_SIZE_OPTIONS = [
   { value: '250', label: '250 MB' },
   { value: '500', label: '500 MB' },
@@ -136,6 +142,8 @@ export default function SettingsPage() {
   const [traktAdvancedSaved, setTraktAdvancedSaved] = useState(false);
   const [traktDraining, setTraktDraining] = useState(false);
   const [traktSyncingNow, setTraktSyncingNow] = useState(false);
+  const [showClearQueueConfirm, setShowClearQueueConfirm] = useState(false);
+  const [traktClearingQueue, setTraktClearingQueue] = useState(false);
 
   // Library mapping state
   const [mappings, setMappings] = useState<Record<string, LibraryMapping>>({});
@@ -621,6 +629,24 @@ export default function SettingsPage() {
     loadTraktStatus();
   }
 
+  async function handleClearTraktQueueConfirm() {
+    setShowClearQueueConfirm(false);
+    setTraktClearingQueue(true);
+    const res = await window.api.trakt.clearFailedQueue();
+    setTraktClearingQueue(false);
+    if (res.success && res.data) {
+      addToast(
+        res.data.cleared === 0
+          ? 'Trakt queue was already empty'
+          : `Cleared ${res.data.cleared} Trakt event${res.data.cleared === 1 ? '' : 's'}`,
+        'success',
+      );
+    } else {
+      addToast(`Failed to clear queue: ${res.error ?? 'unknown error'}`, 'error');
+    }
+    loadTraktStatus();
+  }
+
   async function handleDrainTraktQueue() {
     setTraktDraining(true);
     const res = await window.api.trakt.drainQueue();
@@ -1001,6 +1027,36 @@ export default function SettingsPage() {
         </SettingsRow>
       </div>
 
+      {/* Skip Segments */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>Skip Segments</div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '4px 0 8px' }}>
+          Timestamps from TheIntroDB. &ldquo;Show Button&rdquo; surfaces a prompt during the segment;
+          &ldquo;Auto-Skip&rdquo; jumps past it silently.
+        </div>
+        <SettingsRow label="Intro">
+          <Select
+            value={settings.skipIntroMode ?? 'button'}
+            options={SKIP_MODE_OPTIONS}
+            onChange={(v) => handleSettingChange('skipIntroMode', v)}
+          />
+        </SettingsRow>
+        <SettingsRow label="Recap">
+          <Select
+            value={settings.skipRecapMode ?? 'auto'}
+            options={SKIP_MODE_OPTIONS}
+            onChange={(v) => handleSettingChange('skipRecapMode', v)}
+          />
+        </SettingsRow>
+        <SettingsRow label="Credits" description="With a next episode queued, the button reads &ldquo;Next Episode&rdquo;.">
+          <Select
+            value={settings.skipCreditsMode ?? 'button'}
+            options={SKIP_MODE_OPTIONS}
+            onChange={(v) => handleSettingChange('skipCreditsMode', v)}
+          />
+        </SettingsRow>
+      </div>
+
       {/* Trakt */}
       <div className={styles.section}>
         <div className={styles.sectionHeader}>Trakt</div>
@@ -1126,6 +1182,41 @@ export default function SettingsPage() {
             Advanced
           </summary>
           <div style={{ paddingTop: 'var(--space-2)' }}>
+            {/* History backfill range for the Analytics page */}
+            <SettingsRow
+              label="Trakt history backfill range"
+              description="Controls how far back the Analytics page pulls when syncing Trakt history. Full history may take minutes for heavy users."
+            >
+              <Select
+                value={settings.traktHistoryBackfillCap ?? 'two-years'}
+                options={[
+                  { value: 'two-years', label: 'Last 2 years' },
+                  { value: 'full', label: 'Full history' },
+                ]}
+                onChange={(v) => handleSettingChange('traktHistoryBackfillCap', v as 'two-years' | 'full')}
+              />
+            </SettingsRow>
+
+            {/* Failed-event queue maintenance */}
+            <div style={{ paddingBottom: 'var(--space-3)' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', paddingBottom: 'var(--space-2)' }}>
+                Drop every pending Trakt event. Useful when poison events get stuck
+                retrying — for example, scrobble stops sent with 0% progress that
+                Trakt's API rejects.
+              </div>
+              <button
+                className={styles.actionBtn}
+                onClick={() => setShowClearQueueConfirm(true)}
+                disabled={(traktStatus?.queueCount ?? 0) === 0 || traktClearingQueue}
+              >
+                {traktClearingQueue
+                  ? 'Clearing…'
+                  : (traktStatus?.queueCount ?? 0) === 0
+                    ? 'Queue empty'
+                    : `Clear failed event queue (${traktStatus?.queueCount} pending)`}
+              </button>
+            </div>
+
             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', paddingBottom: 'var(--space-2)' }}>
               Override the bundled Trakt application credentials. Register an app at
               {' '}<a
@@ -1234,6 +1325,22 @@ export default function SettingsPage() {
             step={1}
             label={`${settings.subtitlePosition}%`}
             onChange={(v) => handleSettingChange('subtitlePosition', v)}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label="Auto-download"
+          description="On playback start, fetch a subtitle from OpenSubtitles when none is present in the preferred language."
+        >
+          <Toggle
+            value={settings.autoDownloadSubtitles ?? false}
+            onChange={(v) => handleSettingChange('autoDownloadSubtitles', v)}
+          />
+        </SettingsRow>
+        <SettingsRow label="Preferred language" description="Used for auto-download lookups.">
+          <Select
+            value={settings.preferredSubtitleLanguage || 'eng'}
+            options={AUDIO_LANGUAGE_OPTIONS}
+            onChange={(v) => handleSettingChange('preferredSubtitleLanguage', v)}
           />
         </SettingsRow>
       </div>
@@ -1457,6 +1564,18 @@ export default function SettingsPage() {
           danger
           onConfirm={handleTraktConfirmDisconnect}
           onCancel={() => setShowTraktDisconnect(false)}
+        />
+      )}
+
+      {/* Trakt Clear Queue Confirmation */}
+      {showClearQueueConfirm && (
+        <ConfirmDialog
+          title="Clear failed event queue?"
+          message={`Drop ${traktStatus?.queueCount ?? 0} pending Trakt event${(traktStatus?.queueCount ?? 0) === 1 ? '' : 's'}. They will not be sent to Trakt. This cannot be undone.`}
+          confirmLabel="Clear queue"
+          danger
+          onConfirm={handleClearTraktQueueConfirm}
+          onCancel={() => setShowClearQueueConfirm(false)}
         />
       )}
     </div>

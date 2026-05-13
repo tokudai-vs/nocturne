@@ -58,8 +58,13 @@ export interface BaseItemDto {
   }[];
   ImageTags?: Record<string, string>;
   BackdropImageTags?: string[];
+  // Dedup-sibling URLs cycled when the primary fails to load. Attached
+  // server-side via attachFallbacksToItems(); passed through cache-adapter.
+  ImageFallbacks?: string[];
+  BackdropFallbacks?: string[];
   UserData?: UserItemData;
   MediaSources?: MediaSource[];
+  RemoteTrailers?: { Url: string; Name: string }[];
   SeriesId?: string;
   SeriesName?: string;
   SeasonId?: string;
@@ -174,6 +179,10 @@ export interface CachedItem {
   cached_at: string | null;
   dedup_group_id: string | null;
   version_count?: number;
+  // Dedup-sibling fallback URLs attached at IPC return time; cycled by
+  // MediaCard / HeroBackdrop when the primary image fails to load.
+  image_fallbacks?: string[];
+  backdrop_fallbacks?: string[];
   // Phase 3: Trakt watchlist sentinel rows.
   is_external?: boolean;
   trakt_key?: string;
@@ -269,6 +278,8 @@ export interface NocturneSettings {
   subtitleBorderSize: number;
   subtitleBackground: 'none' | 'semi' | 'opaque';
   subtitlePosition: number;
+  autoDownloadSubtitles: boolean;
+  preferredSubtitleLanguage: string;
   powerMode: 'performance' | 'balanced' | 'efficiency';
   startFullscreen: boolean;
   startPage: 'home' | 'last-visited';
@@ -276,6 +287,9 @@ export interface NocturneSettings {
   syncOnStartup: boolean;
   firstLaunchComplete: boolean;
   lastServerUrl: string;
+  skipIntroMode: 'button' | 'auto' | 'off';
+  skipRecapMode: 'button' | 'auto' | 'off';
+  skipCreditsMode: 'button' | 'auto' | 'off';
   traktAutoScrobble: boolean;
   traktSyncWatchedState: boolean;
   traktShowWatchlistInSidebar: boolean;
@@ -286,6 +300,7 @@ export interface NocturneSettings {
   traktLastWatchlistSyncAt: string | null;
   traktClientIdOverride: string;
   traktClientSecretOverride: string;
+  traktHistoryBackfillCap: 'two-years' | 'full';
 }
 
 // Updater types
@@ -390,6 +405,37 @@ export interface TraktSyncStats {
 export interface TraktRating {
   rating: number | null;
   votes: number | null;
+}
+
+// ── Analytics ──
+export type AnalyticsSource = 'local' | 'trakt' | 'combined';
+
+export interface AnalyticsRangeRequest {
+  rangeStart: string;
+  rangeEnd: string;
+  source?: AnalyticsSource;
+}
+
+export interface AnalyticsLifetimeBlock {
+  movies: number;
+  episodes: number;
+  watchTimeMinutes: number;
+  distinctShows: number;
+}
+
+export interface AnalyticsStats {
+  source: AnalyticsSource;
+  range: { rangeStart: string; rangeEnd: string };
+  totalWatched: { movies: number; episodes: number };
+  totalWatchTimeSeconds: number;
+  inProgressSeriesCount: number;
+  avgPerWeekSeconds: number;
+  activityByDay: Array<{ date: string; count: number; watchTimeSeconds: number }>;
+  topSeries: Array<{ id: string; name: string; imageUrl: string | null; episodeCount: number }>;
+  topMovies: Array<{ id: string; name: string; imageUrl: string | null; lastPlayed: string | null }>;
+  genreBreakdown: Array<{ genre: string; watchTimeSeconds: number; pct: number }>;
+  lifetime: AnalyticsLifetimeBlock | null;
+  unmatchedTraktCount?: number;
 }
 
 // Window API type declaration
@@ -549,6 +595,8 @@ declare global {
         disconnect: () => Promise<IpcResponse<void>>;
         drainQueue: () => Promise<IpcResponse<{ remaining: number }>>;
         getQueueCount: () => Promise<IpcResponse<number>>;
+        getFailedQueueCount: () => Promise<IpcResponse<number>>;
+        clearFailedQueue: () => Promise<IpcResponse<{ cleared: number }>>;
         getAdvancedConfig: () => Promise<IpcResponse<TraktAdvancedConfig>>;
         setAdvancedConfig: (cfg: { clientId: string; clientSecret: string }) => Promise<IpcResponse<void>>;
         openVerification: (url: string) => Promise<IpcResponse<void>>;
@@ -578,6 +626,14 @@ declare global {
         ) => Promise<IpcResponse<boolean>>;
         onSyncComplete: (cb: (data: { newlyWatched: number; failed: number }) => void) => () => void;
         onWatchlistUpdated: (cb: (data: { count: number }) => void) => () => void;
+      };
+      analytics: {
+        getStats: (args: AnalyticsRangeRequest) => Promise<IpcResponse<AnalyticsStats>>;
+        getBackfillStatus: () => Promise<IpcResponse<{ backfilled: boolean; cap: string; eventCount: number }>>;
+        triggerBackfill: () => Promise<IpcResponse<{ inserted: number; total: number }>>;
+        onBackfillProgress: (cb: (data: { current: number; total: number }) => void) => () => void;
+        onBackfillComplete: (cb: (data: { inserted: number; total: number }) => void) => () => void;
+        onBackfillFailed: (cb: (err: { message: string }) => void) => () => void;
       };
       app: {
         onVisibilityChange: (cb: (data: { visible: boolean }) => void) => () => void;

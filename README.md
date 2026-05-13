@@ -46,6 +46,24 @@
 - **Failure queue** with exponential backoff — scrobbles and history pushes survive offline periods
 - **Bundled `client_id`** with optional override under Settings → Trakt → Advanced
 
+### :bar_chart: Watch History Analytics
+- **`/analytics` page** accessible from the user menu — visualizes your watch history
+- **Three data sources**: Local (Emby cache only), Trakt (mirrored history), Combined (union with Trakt timestamps preferred)
+- **Time range selector**: Last 30 / 90 days, Last year, All time
+- **Stat cards** — total watched, total watch time, currently-watching series count, average per week
+- **Lifetime stats** (Trakt mode) — lifetime movies / episodes / hours / distinct shows from `/users/me/stats`, cached 1h
+- **Activity heatmap** — GitHub-style grid with range-adaptive cell sizing, month + day-of-week labels, 5 quantile-based intensity buckets
+- **Watch frequency bar chart** — daily bars for short ranges, weekly aggregation for long ranges, Y-axis in hours with gridlines
+- **Top series / top movies / genre breakdown** — all range-filtered
+- **On-demand Trakt history backfill** with configurable cap (Last 2 years / Full)
+
+### :forward: Skip Intro / Credits / Recap
+- **TheIntroDB-backed** segment detection — no upload needed; everything happens client-side
+- **Clickable amber skip button** (mouse or Enter key) — matches the ModernZ OSC theme
+- **Per-segment re-arm on backward seek** — seek back before the segment, the prompt fires again
+- **"Next Episode" mode** for credits — credits prompt advances to the next episode instead of skipping forward in the current one
+- Configurable per segment type (Settings → Playback)
+
 ### :card_index_dividers: Library Deduplication
 - Matches duplicates by **TMDB ID → IMDB ID → Name+Year** fallback chain
 - **Version picker** on detail pages showing quality, codec, and file size per copy
@@ -184,6 +202,7 @@ The installer will be at `dist/Nocturne Setup 3.0.0.exe`.
 - **First sync time scales with library size** — a 1M-item library takes roughly 4–5 hours for the initial full sync. Incremental syncs after that are minutes.
 - **Combined mode requires 2+ servers** to be configured before it can be enabled in Settings.
 - **Manual rebuild dedup** may be needed after major library reorganizations on the server (renaming libraries, large bulk imports). It's available in Settings → Cache.
+- **Pre-release smoke test** — before shipping any change that touches the main process or IPC, walk the checklist in `AGENTS.md` ("Pre-release smoke test"). It exists because two ship-stoppers in v3 cleared every static check and only failed at runtime. `prebuild` and `postbuild` now run guards (`scripts/check-relative-requires.js`, `scripts/check-bundling.js`) but the smoke test catches the rest.
 
 ## Architecture
 
@@ -248,16 +267,18 @@ The installer will be at `dist/Nocturne Setup 3.0.0.exe`.
 
 ## Roadmap
 
-### v3 (current)
+### v3 (shipped)
 - [x] Trakt.tv integration — scrobbling, bidirectional watched-state sync, watchlist, ratings, drift indicator
+- [x] Skip intro / credits / recap (TheIntroDB) — clickable amber skip button, per-segment re-arm on backward seek
+- [x] Next / Previous episode navigation — `>` / `<` keybinds in mpv, EOF auto-advance
+- [x] Trailer playback in detail pages
+- [x] Subtitle auto-download — preferred-language setting + automatic OpenSubtitles lookup
+- [x] Watch History analytics — `/analytics` page with Local / Trakt / Combined sources
 
 ### v3.x (planned)
-- [ ] Trailer playback in detail pages
 - [ ] Smart collections (rules-based grouping)
-- [ ] Watch history analytics
-- [ ] Skip intro / outro
 - [ ] "Continue listening" for music libraries
-- [ ] Subtitle auto-download
+- [ ] Watch history Trakt enrichments — rating distribution chart, friends/followers stats
 - [ ] Watch party — Cloudflare Tunnel + HLS for low-friction co-viewing
 
 ### v4 (planned)

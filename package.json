@@ -1,29 +1,30 @@
 {
   "name": "nocturne",
   "version": "3.0.0",
-  "description": "Desktop Emby media client",
+  "description": "Desktop Emby media client with multi-server support, SQLite cache, library deduplication, Trakt.tv integration, and a watch-history analytics page.",
   "main": "./out/main/index.js",
   "scripts": {
     "start": "electron-vite dev",
-    "prebuild": "npm run mirror-mpv-config",
+    "prebuild": "npm run mirror-mpv-config && npm run check-relative-requires",
     "build": "electron-vite build",
+    "postbuild": "node scripts/check-bundling.js",
     "package:win": "npm run build && electron-builder --win",
     "download-mpv": "node scripts/download-mpv.js",
     "download-modernz": "node scripts/download-modernz.js",
     "patch-modernz": "node scripts/patch-modernz.js",
     "mirror-mpv-config": "node scripts/mirror-mpv-config.js",
     "generate-icons": "node scripts/generate-icons.js",
-    "lint": "eslint src/",
+    "lint": "eslint scripts/ eslint.config.js && node scripts/check-relative-requires.js",
+    "check-relative-requires": "node scripts/check-relative-requires.js",
+    "check-bundling": "node scripts/check-bundling.js",
     "setup": "node scripts/setup-dev.js"
   },
-  "author": "",
+  "author": "Vishal <github.com/tokudai-vs>",
   "license": "MIT",
   "dependencies": {
-    "@rollup/rollup-linux-x64-gnu": "^4.60.1",
     "axios": "^1.15.0",
     "better-sqlite3": "^12.8.0",
     "date-fns": "^4.1.0",
-    "electron-store": "^11.0.2",
     "electron-updater": "^6.8.3",
     "lucide-react": "^1.8.0",
     "react": "^19.2.5",
@@ -47,6 +48,7 @@
     "vite": "^7.3.2"
   },
   "optionalDependencies": {
-    "@esbuild/linux-x64": "^0.28.0"
+    "@esbuild/linux-x64": "^0.28.0",
+    "@rollup/rollup-linux-x64-gnu": "^4.60.1"
   }
 }
