@@ -12,6 +12,7 @@ import PersonCard from '../components/ui/PersonCard';
 import MediaRow from '../components/ui/MediaRow';
 import MediaSourcePicker from '../components/ui/MediaSourcePicker';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import WatchPartyButton from '../components/ui/WatchPartyButton';
 import type { BaseItemDto, CachedItem, EpisodeVersionGroup, ItemsResult, MediaSource as MediaSourceType, ServerConfig, TraktRating } from '../api/types';
 import styles from './DetailPage.module.css';
 import pickerStyles from '../components/ui/MediaSourcePicker.module.css';
@@ -559,6 +560,7 @@ export default function DetailPage() {
                   <Film size={16} /> Play Trailer
                 </button>
               )}
+              {!isSeries && <WatchPartyButton />}
               <button
                 className={`${styles.actionBtn} ${isFavorite ? styles.actionActive : ''} ${favBounce ? styles.bounce : ''}`}
                 onClick={toggleFavorite}

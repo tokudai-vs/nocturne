@@ -82,6 +82,8 @@ export interface NocturneSettings {
   traktHistoryBackfillCap: 'two-years' | 'full';
   traktUserStatsCache: string | null;        // JSON-encoded TraktUserStats
   traktUserStatsCachedAt: string | null;     // ISO 8601
+  // ── Watch Party ──
+  watchPartyMaxGuestsUnlocked: boolean;
 }
 
 const DEFAULTS: NocturneSettings = {
@@ -128,6 +130,7 @@ const DEFAULTS: NocturneSettings = {
   traktHistoryBackfillCap: 'two-years',
   traktUserStatsCache: null,
   traktUserStatsCachedAt: null,
+  watchPartyMaxGuestsUnlocked: false,
 };
 
 let settings: NocturneSettings = { ...DEFAULTS };

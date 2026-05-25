@@ -1,0 +1,20 @@
+/* Mirrors DetailPage .actionBtn dimensions, but always amber-themed
+   (the "actionActive" look from DetailPage.module.css). Keeps the Play
+   button visually primary — this is a secondary action with amber accent. */
+.button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.button:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent-hover);
+}

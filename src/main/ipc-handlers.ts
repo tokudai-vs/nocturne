@@ -67,6 +67,8 @@ import { traktSync } from './trakt-sync';
 import { attachFallbacksToItems } from './image-fallbacks';
 import { computeAnalytics, type AnalyticsLifetimeBlock } from './analytics';
 import { fetchSegments } from './introdb-client';
+import { watchPartyBinaryManager } from './watchparty-binary-manager';
+import { watchPartyEncoderProbe } from './watchparty-encoder-probe';
 import { toIso6391 } from '../shared/languages';
 import { TRAKT_BUNDLED_CLIENT_ID } from '../shared/trakt-config';
 import {
@@ -118,6 +120,8 @@ const ALLOWED_SETTING_KEYS = new Set<string>([
   'traktAutoScrobble', 'traktSyncWatchedState', 'traktShowWatchlistInSidebar',
   'traktClientIdOverride', 'traktClientSecretOverride',
   'traktHistoryBackfillCap',
+  // Watch Party — Danger Zone unlock for the guest-count limit.
+  'watchPartyMaxGuestsUnlocked',
 ]);
 
 export function registerIpcHandlers(): void {
@@ -2384,6 +2388,43 @@ export function registerIpcHandlers(): void {
     } catch (e) {
       return fail(e);
     }
+  });
+
+  // ── Watch Party (v3.5) ────────────────────────────────
+  // First-launch binary manager for ffmpeg + cloudflared. All work is lazy;
+  // no setup runs until the renderer invokes watchparty:setup-binaries.
+  ipcMain.handle('watchparty:binaries-ready', () => {
+    try {
+      return ok(watchPartyBinaryManager.isReady());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('watchparty:setup-binaries', async () => {
+    try {
+      const paths = await watchPartyBinaryManager.ensureBinaries();
+      return ok(paths);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('watchparty:probe-encoder', async () => {
+    try {
+      return ok(await watchPartyEncoderProbe.probe());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  watchPartyBinaryManager.on('progress', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('watchparty:setup-progress', data);
+  });
+  watchPartyBinaryManager.on('error', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('watchparty:setup-error', data);
   });
 
   // Forward Trakt events to renderer

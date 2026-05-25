@@ -149,7 +149,7 @@ Add v2 screenshots here:
 
 ### Windows (Recommended)
 
-1. Download the latest `Nocturne-Setup-3.0.0.exe` from the [Releases page](../../releases)
+1. Download the latest `Nocturne-Setup-3.5.0.exe` from the [Releases page](../../releases)
 2. Run the installer
 3. Launch Nocturne from the Start Menu or Desktop shortcut
 4. Enter your Emby server address and sign in
@@ -195,7 +195,7 @@ npm run generate-icons
 npm run package:win
 ```
 
-The installer will be at `dist/Nocturne Setup 3.0.0.exe`.
+The installer will be at `dist/Nocturne Setup 3.5.0.exe`.
 
 ### Notes for Development
 

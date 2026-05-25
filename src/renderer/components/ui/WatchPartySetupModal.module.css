@@ -1,0 +1,122 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 150ms ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* position: relative + overflow: hidden so the absolute-positioned bottom
+   progress bar is clipped by the modal's 12px border-radius. */
+.modal {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  width: 420px;
+  max-width: 90vw;
+  padding: var(--space-8) var(--space-6) var(--space-6);
+  text-align: center;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  animation: modalIn 200ms ease;
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.iconWrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-4);
+}
+
+.icon {
+  color: var(--accent);
+}
+
+.title {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.subtitle {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  min-height: 1.6em;
+  margin-bottom: var(--space-5);
+}
+
+.cancelRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cancelBtn {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  background: transparent;
+  padding: 6px 10px;
+  transition: color 150ms ease;
+}
+
+.cancelBtn:hover {
+  color: var(--text-primary);
+}
+
+/* Bottom-flush. No border-radius on the bar — modal's overflow:hidden
+   + 12px radius clips the corners. Track color matches the convention
+   from TraktHistoryPreviewModal.progressBar. */
+.progressBar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--bg-tertiary);
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms ease-out;
+}
+
+.error {
+  font-size: var(--text-sm);
+  color: var(--danger);
+  margin-bottom: var(--space-4);
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.retryBtn {
+  padding: 8px 18px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: #000;
+  background: var(--accent);
+  border-radius: var(--radius);
+  transition: background 150ms ease;
+}
+
+.retryBtn:hover {
+  background: var(--accent-hover);
+}

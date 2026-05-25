@@ -1,3 +1,5 @@
+import type { EncoderResult } from '../../shared/watchparty-types';
+
 // Server
 export interface EmbyServerInfo {
   ServerName: string;
@@ -301,6 +303,7 @@ export interface NocturneSettings {
   traktClientIdOverride: string;
   traktClientSecretOverride: string;
   traktHistoryBackfillCap: 'two-years' | 'full';
+  watchPartyMaxGuestsUnlocked: boolean;
 }
 
 // Updater types
@@ -634,6 +637,15 @@ declare global {
         onBackfillProgress: (cb: (data: { current: number; total: number }) => void) => () => void;
         onBackfillComplete: (cb: (data: { inserted: number; total: number }) => void) => () => void;
         onBackfillFailed: (cb: (err: { message: string }) => void) => () => void;
+      };
+      watchparty: {
+        binariesReady: () => Promise<IpcResponse<boolean>>;
+        setupBinaries: () => Promise<IpcResponse<{ ffmpegPath: string; cloudflaredPath: string }>>;
+        probeEncoder: () => Promise<IpcResponse<EncoderResult>>;
+        onSetupProgress: (
+          cb: (data: { phase: 'ffmpeg' | 'cloudflared' | 'unzip'; percent: number }) => void,
+        ) => () => void;
+        onSetupError: (cb: (err: { phase: string; message: string }) => void) => () => void;
       };
       app: {
         onVisibilityChange: (cb: (data: { visible: boolean }) => void) => () => void;

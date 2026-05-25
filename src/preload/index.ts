@@ -305,6 +305,26 @@ const api = {
       return () => ipcRenderer.removeListener('analytics:backfill-failed', handler);
     },
   },
+  watchparty: {
+    binariesReady: () => ipcRenderer.invoke('watchparty:binaries-ready'),
+    setupBinaries: () => ipcRenderer.invoke('watchparty:setup-binaries'),
+    probeEncoder: () => ipcRenderer.invoke('watchparty:probe-encoder'),
+    onSetupProgress: (
+      cb: (data: { phase: 'ffmpeg' | 'cloudflared' | 'unzip'; percent: number }) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        data: { phase: 'ffmpeg' | 'cloudflared' | 'unzip'; percent: number },
+      ) => cb(data);
+      ipcRenderer.on('watchparty:setup-progress', handler);
+      return () => ipcRenderer.removeListener('watchparty:setup-progress', handler);
+    },
+    onSetupError: (cb: (err: { phase: string; message: string }) => void) => {
+      const handler = (_: unknown, err: { phase: string; message: string }) => cb(err);
+      ipcRenderer.on('watchparty:setup-error', handler);
+      return () => ipcRenderer.removeListener('watchparty:setup-error', handler);
+    },
+  },
   app: {
     onVisibilityChange: (cb: (data: { visible: boolean }) => void) => {
       const handler = (_: unknown, data: { visible: boolean }) => cb(data);

@@ -16,6 +16,7 @@ import AddServerModal from '../components/ui/AddServerModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import TraktAuthModal from '../components/ui/TraktAuthModal';
 import TraktHistoryPreviewModal from '../components/ui/TraktHistoryPreviewModal';
+import WatchPartyUnlockModal from '../components/ui/WatchPartyUnlockModal';
 import { SUBTITLE_LANGUAGE_OPTIONS, AUDIO_LANGUAGE_OPTIONS } from '../../shared/languages';
 import type { BaseItemDto, LibraryMapping, DbStats, DedupStats, UpdateStatus, CombinedMapping, CombinedLibraryRef, ServerConfig, SyncStatus, TraktStatus, TraktAdvancedConfig, TraktSyncStats } from '../api/types';
 import { formatDistanceToNow } from 'date-fns';
@@ -128,6 +129,7 @@ export default function SettingsPage() {
   const [serverStatus, setServerStatus] = useState<Record<string, 'online' | 'offline' | 'auth-expired' | undefined>>({});
   const [reloginUrl, setReloginUrl] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showWatchPartyUnlock, setShowWatchPartyUnlock] = useState(false);
   const [resetting, setResetting] = useState(false);
 
   // Trakt state
@@ -1468,6 +1470,31 @@ export default function SettingsPage() {
             {resetting ? 'Resetting...' : 'Reset App'}
           </button>
         </div>
+        <div className={styles.statRow}>
+          <span>
+            Watch Party guest limit
+            <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+              {settings?.watchPartyMaxGuestsUnlocked
+                ? 'Sessions can have unlimited guests. You are responsible for legal compliance and bandwidth.'
+                : 'Sessions are limited to 10 guests by default. You can remove this limit if you understand the legal and technical risks.'}
+            </div>
+          </span>
+          {settings?.watchPartyMaxGuestsUnlocked ? (
+            <button
+              className={styles.actionBtn}
+              onClick={() => updateSetting('watchPartyMaxGuestsUnlocked', false)}
+            >
+              Restore Limit
+            </button>
+          ) : (
+            <button
+              className={`${styles.actionBtn} ${styles.actionBtnDanger}`}
+              onClick={() => setShowWatchPartyUnlock(true)}
+            >
+              Remove Limit
+            </button>
+          )}
+        </div>
       </div>
 
       {/* About */}
@@ -1533,6 +1560,11 @@ export default function SettingsPage() {
           onConfirm={handleResetFull}
           onCancel={() => setShowResetConfirm(false)}
         />
+      )}
+
+      {/* Watch Party guest-cap unlock */}
+      {showWatchPartyUnlock && (
+        <WatchPartyUnlockModal onClose={() => setShowWatchPartyUnlock(false)} />
       )}
 
       {/* Trakt OAuth Modal */}
