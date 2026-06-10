@@ -27,6 +27,7 @@ export default function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const { setTopBarSolid } = useUiStore();
+  const cinemaMode = useUiStore((s) => s.cinemaMode);
   const { fetchSettings } = useSettingsStore();
   const { logout } = useAuthStore();
   const { addToast } = useToastStore();
@@ -67,10 +68,15 @@ export default function AppShell() {
     return unsub;
   }, [logout, navigate, addToast]);
 
+  // Cinema mode: zero chrome. The Watch Party host page sets this when
+  // LIVE; the embedded player + overlays own the viewport. Page-padding
+  // and TopBar are both dropped — the page is free to use 100vh.
   return (
     <div className={styles.shell}>
-      <TopBar />
-      <main className={`${styles.content} content-scroll ${!transparent ? styles.contentPadded : ''}`}>
+      {!cinemaMode && <TopBar />}
+      <main
+        className={`${styles.content} content-scroll ${!cinemaMode && !transparent ? styles.contentPadded : ''} ${cinemaMode ? styles.contentCinema : ''}`}
+      >
         <Outlet />
       </main>
       <SidebarOverlay />

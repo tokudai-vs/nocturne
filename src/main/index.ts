@@ -9,6 +9,7 @@ import { initSettings } from './settings';
 import { initUpdater, checkForUpdates } from './updater';
 import { traktScrobbler } from './trakt-scrobbler';
 import { traktSync } from './trakt-sync';
+import { watchPartySessionManager } from './watchparty-session';
 
 app.setAppUserModelId('com.nocturne.desktop');
 
@@ -86,5 +87,17 @@ app.on('before-quit', (e) => {
   syncEngine.cancel();
   traktSync.stopTimers();
   closeDatabase();
-  mpvManager.quit().finally(() => app.exit());
+  // Tear down any in-flight Watch Party so ffmpeg + cloudflared don't
+  // outlive the app (including the "host closed the window during the
+  // 10s end-grace countdown" path — main still has LIVE state then).
+  // Called unconditionally: endSession is a no-op on IDLE and, when a
+  // teardown is already mid-flight (host clicked End and quit immediately),
+  // returns that same promise so we wait for the children to die instead
+  // of app.exit() orphaning them.
+  const wpTeardown = watchPartySessionManager
+    .endSession('error', 'App quitting')
+    .catch((err) => {
+      console.warn('[main] watchparty teardown on quit failed:', err);
+    });
+  Promise.allSettled([mpvManager.quit(), wpTeardown]).finally(() => app.exit());
 });

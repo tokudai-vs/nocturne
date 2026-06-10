@@ -14,6 +14,7 @@ import MediaSourcePicker from '../components/ui/MediaSourcePicker';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import WatchPartyButton from '../components/ui/WatchPartyButton';
 import type { BaseItemDto, CachedItem, EpisodeVersionGroup, ItemsResult, MediaSource as MediaSourceType, ServerConfig, TraktRating } from '../api/types';
+import type { WatchPartySource, WatchPartyVersion } from '../../shared/watchparty-types';
 import styles from './DetailPage.module.css';
 import pickerStyles from '../components/ui/MediaSourcePicker.module.css';
 
@@ -139,6 +140,72 @@ export default function DetailPage() {
   const [isFavorite, setIsFavorite] = useState(false);
   const [isPlayed, setIsPlayed] = useState(false);
   const trailerVideoId = useMemo(() => pickYouTubeTrailer(item?.RemoteTrailers), [item]);
+
+  // Build Watch Party source context from dedup versions. Thread identifiers
+  // (not a resolved URL) — tokens live in main, and the cross-server lookup
+  // happens later in the session manager via embyClient.getStreamUrlForServer.
+  // Episode title gets the canonical "Series — S01E03 — Title" form when the
+  // fields are present; falls back to item.Name otherwise.
+  const watchPartySource = useMemo<WatchPartySource | null>(() => {
+    if (!item || versions.length === 0) return null;
+    const wpVersions: WatchPartyVersion[] = [];
+    for (const v of versions) {
+      if (!v.media_sources) continue;
+      let mediaSourceId: string | null = null;
+      let widthPx = 0;
+      try {
+        const parsed = JSON.parse(v.media_sources) as Array<{ Id?: string; Width?: number }>;
+        const first = parsed[0];
+        if (first?.Id) mediaSourceId = first.Id;
+        widthPx = first?.Width ?? 0;
+      } catch {
+        continue;
+      }
+      if (!mediaSourceId) continue;
+      wpVersions.push({
+        serverId: v.server_id,
+        itemId: v.emby_id,
+        mediaSourceId,
+        widthPx,
+        qualityLabel: getQualityLabel(v),
+      });
+    }
+    if (wpVersions.length === 0) return null;
+    const isEp = item.Type === 'Episode';
+    const title = isEp && item.SeriesName && item.ParentIndexNumber != null && item.IndexNumber != null
+      ? `${item.SeriesName} — ${formatEpisodeNumber(item.ParentIndexNumber, item.IndexNumber)} — ${item.Name}`
+      : item.Name;
+    // 10_000_000 ticks per second. 0 when runtime is missing (older rows).
+    const durationSec =
+      item.RunTimeTicks && item.RunTimeTicks > 0 ? item.RunTimeTicks / 10_000_000 : 0;
+    // Resume position: prefer the freshly-fetched BaseItemDto (what the
+    // user sees on this page), fall back to the cached versions row if
+    // the live fetch is missing UserData. Treat near-end (>95%) as
+    // already-watched and skip the resume offer there.
+    const livePositionTicks = item.UserData?.PlaybackPositionTicks;
+    const cachedPositionTicks = versions[0]?.playback_position_ticks;
+    const positionTicks = livePositionTicks ?? cachedPositionTicks ?? 0;
+    let resumeSec = positionTicks > 0 ? positionTicks / 10_000_000 : 0;
+    const beforeGate = resumeSec;
+    let gateZeroed = false;
+    if (durationSec > 0 && resumeSec > durationSec * 0.95) {
+      resumeSec = 0;
+      gateZeroed = true;
+    }
+    console.log('[wp:detail] resumeSec computation', {
+      itemId: item.Id,
+      serverId: versions[0]?.server_id,
+      livePositionTicks,
+      cachedPositionTicks,
+      positionTicks,
+      durationSec,
+      beforeGate,
+      gateZeroed,
+      resumeSec,
+    });
+    return { title, versions: wpVersions, durationSec, resumeSec };
+  }, [item, versions]);
+
   const [overviewExpanded, setOverviewExpanded] = useState(false);
   const [favBounce, setFavBounce] = useState(false);
   const [playedBounce, setPlayedBounce] = useState(false);
@@ -560,7 +627,7 @@ export default function DetailPage() {
                   <Film size={16} /> Play Trailer
                 </button>
               )}
-              {!isSeries && <WatchPartyButton />}
+              {!isSeries && watchPartySource && <WatchPartyButton source={watchPartySource} />}
               <button
                 className={`${styles.actionBtn} ${isFavorite ? styles.actionActive : ''} ${favBounce ? styles.bounce : ''}`}
                 onClick={toggleFavorite}

@@ -1,4 +1,30 @@
-import type { EncoderResult } from '../../shared/watchparty-types';
+import type { EncoderResult, WatchPartySource } from '../../shared/watchparty-types';
+
+// Mirror of the main-process session manager's public state. Kept in
+// renderer/api/types.ts so it's reachable from both pre-flight modal +
+// host page without a separate shared module.
+export type WatchPartySessionState = 'IDLE' | 'INITIALIZING' | 'WAITING' | 'LIVE' | 'ENDED';
+
+export interface WatchPartyPublicState {
+  state: WatchPartySessionState;
+  sessionId: string | null;
+  title: string | null;
+  tunnelUrl: string | null;
+  localUrl: string | null;
+  durationSec: number | null;
+  transcodedSeconds: number;
+  canStart: boolean;
+  guestCount: number;
+  maxGuests: number | 'unlimited' | null;
+  errorMessage: string | null;
+  startedAt: number | null;
+  /** Movie-time offset of the transcode's t=0. Resume = positive; else 0. */
+  startOffsetSec: number;
+  /** Whether progress is being reported to Emby + Trakt for this session. */
+  trackHistory: boolean;
+  /** Resume transcode shows no progress — server likely refuses HTTP range. */
+  slowSeekWarning: boolean;
+}
 
 // Server
 export interface EmbyServerInfo {
@@ -304,6 +330,9 @@ export interface NocturneSettings {
   traktClientSecretOverride: string;
   traktHistoryBackfillCap: 'two-years' | 'full';
   watchPartyMaxGuestsUnlocked: boolean;
+  watchPartyPrefer4kSource: boolean;
+  watchPartyAllow4kOutput: boolean;
+  watchPartyAllowCpuEncoder: boolean;
 }
 
 // Updater types
@@ -642,6 +671,19 @@ declare global {
         binariesReady: () => Promise<IpcResponse<boolean>>;
         setupBinaries: () => Promise<IpcResponse<{ ffmpegPath: string; cloudflaredPath: string }>>;
         probeEncoder: () => Promise<IpcResponse<EncoderResult>>;
+        startSession: (payload: {
+          source: WatchPartySource;
+          durationSec?: number;
+          maxGuests?: number | 'unlimited';
+          qualityHeight?: 720 | 1080 | 2160;
+          startOffsetSec?: number;
+          trackHistory?: boolean;
+        }) => Promise<IpcResponse<WatchPartyPublicState>>;
+        startShow: () => Promise<IpcResponse<WatchPartyPublicState>>;
+        endSession: () => Promise<IpcResponse<void>>;
+        getState: () => Promise<IpcResponse<WatchPartyPublicState>>;
+        hostEvent: (payload: { type: 'play' | 'pause' | 'seek' | 'time-update'; position: number }) => Promise<IpcResponse<void>>;
+        onState: (cb: (state: WatchPartyPublicState) => void) => () => void;
         onSetupProgress: (
           cb: (data: { phase: 'ffmpeg' | 'cloudflared' | 'unzip'; percent: number }) => void,
         ) => () => void;

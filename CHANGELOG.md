@@ -1,12 +1,44 @@
 # Changelog
 
-## v3.5.0 — Unreleased
+## v3.5.0 — 2026-06-10
 
 ### Added
 
+**Watch Party** — host a synchronized watch party from your library; friends join with a link, no install:
+
+- One-click hosting from any movie detail page. Pick an item, click Watch Party, share the invite URL; guests watch in any modern browser (Chrome 80+ / Firefox 78+ / Edge 80+ / Safari 14+).
+- **First-run setup** downloads pinned ffmpeg + cloudflared binaries with checksum verification (one time, ~80 MB). Nothing Watch-Party-related runs at app boot — setup, probe, and sessions are all behind explicit clicks.
+- **Hardware encoder probe** (NVENC → Quick Sync → AMF → libx264) with cached result drives encoder-specific ffmpeg arguments.
+- **Two-phase start.** *Start Session* spawns the transcoder and the Cloudflare Quick Tunnel, then drops you in a waiting room (shareable URL + copy button, live guest count, transcode-buffer progress). *Start the Show* unlocks once a 60-second head start is transcoded and begins playback for everyone at once.
+- **VOD transcode-ahead pipeline.** The whole file is transcoded ahead of playback to H.264 HLS (4s segments, framerate-independent keyframe alignment via `-force_key_frames`), so the transcode outruns playback and seeking is instant on the finished range. Bitrate ladder: 2.5 / 5 / 20 Mbps for 720p / 1080p / 4K. Input probing is trimmed (`-probesize 1M -analyzeduration 1M -fflags +nobuffer`) to cut remote-source cold-start by tens of seconds.
+- **Cinema-mode host player.** The host watches via an embedded hls.js player inside Nocturne (solo playback stays on mpv, untouched): zero-chrome fullscreen stage, auto-hiding overlay controls with cursor hide, keyboard shortcuts (Space/K play-pause, ←/→ seek 10s, M mute, F fullscreen), guest counter, and a movie-time seek bar that distinguishes played / transcoded / not-yet-transcoded ranges.
+- **Guest cinema page** — self-contained HTML + bundled hls.js (no CDN) served through the tunnel: waiting room, auto-reconnecting WebSocket, volume-only controls ("Host controls playback"), ended state.
+- **Tight sync.** Host play/pause/seek broadcast over WebSocket; ~1s heartbeats feed a guest-side deadzone-ladder drift corrector (<0.5s: leave it; 0.5–3s: playback-rate nudge; ≥3s: hard seek). Guests preload the stream during the waiting room — the transcode head start doubles as their buffer head start, so the show starts in about a second instead of paying HLS startup through the tunnel. Late joiners drop in at the host's current position.
+- **Resume support.** Start the party from your saved Emby resume position (fast `-ss` input-seek over HTTP range). A watchdog detects servers that refuse range requests and explains the slow start in the waiting room.
+- **Watch-history reporting (optional).** Progress reports to the picked version's Emby server every 10s plus Trakt scrobbling (start/pause/stop with edge de-duplication), matching solo-playback semantics — including the cross-server mark-played cascade in combined mode.
+- **Session hygiene.** Server-side guest-cap enforcement; per-session file log at `{userData}/watch-party/session.log` with tokens redacted; stale-session sweep; teardown kills ffmpeg + cloudflared and deletes the session dir on End, on errors, and on app quit (including quitting mid-teardown). Navigating away from the host page mid-session asks to end-for-everyone first — no stranded sessions.
+- **CPU-only systems are blocked by default** in pre-flight with an explanation: software encoding cannot reliably outrun playback. A Danger Zone override exists for testing.
+
+**Danger Zone (Settings)** — four explicit Watch Party unlocks, each behind a TL;DR-first warning modal with checkbox acknowledgment:
+
+- **Remove the 10-guest limit** — copyright, tunnel fair-use, and bandwidth implications spelled out.
+- **Prefer the 4K version as transcode input** — better downscale master at the cost of a much heavier transcode and higher source bandwidth; output unchanged.
+- **Allow 4K (2160p) output** — adds a 4K ceiling to pre-flight quality (~20 Mbps upload per guest). Output is always min(source resolution, ceiling); Nocturne never upscales.
+- **Enable Watch Party on CPU-only systems** — testing override; sessions are expected to stall.
+
 ### Changed
 
+- Renderer CSP gains exactly `media-src 'self' blob:` and `worker-src 'self' blob:` for hls.js MSE playback — no other widening.
+- AppShell supports a chrome-less cinema mode (no TopBar, no padding) used by the Watch Party host page during LIVE.
+- 720p Watch Party streams now encode at 2.5 Mbps instead of inheriting the 1080p 5 Mbps target.
+
 ### Technical
+
+- New main-process modules: `watchparty-binary-manager`, `watchparty-encoder-probe`, `watchparty-transcoder`, `watchparty-http-server`, `watchparty-sync-server`, `watchparty-tunnel`, `watchparty-session` (state machine: IDLE → INITIALIZING → WAITING → LIVE → teardown), `watchparty-guest-page`, `watchparty-logger`.
+- `hls.js` and `ws` are bundled dependencies — no CDN fetches. Stream URLs are built in the main process from version identifiers; Emby tokens never reach the renderer or guests.
+- Single localhost HTTP server (OS-assigned port) serves HLS, the guest page, and the WebSocket upgrade on one origin through one tunnel. Strict path allowlist for session-dir files.
+- HLS playback uses `startPosition` pinning — hls.js otherwise treats the growing EVENT playlist as live and parks new players at the live edge instead of the show's timeline.
+- Watch Party session log is the survivable diagnostics channel for packaged builds (GUI-subsystem Windows Electron detaches stdout).
 
 ---
 

@@ -84,6 +84,12 @@ export interface NocturneSettings {
   traktUserStatsCachedAt: string | null;     // ISO 8601
   // ── Watch Party ──
   watchPartyMaxGuestsUnlocked: boolean;
+  // Danger Zone toggles. Each gated behind its own warning modal in
+  // Settings; the main process re-checks them at session start (the
+  // renderer's word is not trusted for safety gates).
+  watchPartyPrefer4kSource: boolean;
+  watchPartyAllow4kOutput: boolean;
+  watchPartyAllowCpuEncoder: boolean;
 }
 
 const DEFAULTS: NocturneSettings = {
@@ -131,6 +137,9 @@ const DEFAULTS: NocturneSettings = {
   traktUserStatsCache: null,
   traktUserStatsCachedAt: null,
   watchPartyMaxGuestsUnlocked: false,
+  watchPartyPrefer4kSource: false,
+  watchPartyAllow4kOutput: false,
+  watchPartyAllowCpuEncoder: false,
 };
 
 let settings: NocturneSettings = { ...DEFAULTS };

@@ -1,6 +1,6 @@
 {
   "name": "nocturne",
-  "version": "3.5.0-dev",
+  "version": "3.5.0",
   "description": "Desktop Emby media client with multi-server support, SQLite cache, library deduplication, Trakt.tv integration, and a watch-history analytics page.",
   "main": "./out/main/index.js",
   "scripts": {
@@ -26,16 +26,19 @@
     "better-sqlite3": "^12.8.0",
     "date-fns": "^4.1.0",
     "electron-updater": "^6.8.3",
+    "hls.js": "^1.5.17",
     "lucide-react": "^1.8.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-router-dom": "^7.14.0",
+    "ws": "^8.18.0",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^33.4.11",
     "electron-builder": "^26.8.1",

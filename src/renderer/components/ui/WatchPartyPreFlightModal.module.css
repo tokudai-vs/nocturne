@@ -125,6 +125,37 @@
   font-weight: 700;
 }
 
+.toggleRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  cursor: pointer;
+  padding: var(--space-3);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.toggleRow input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.toggleLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+.toggleHint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 .legalBox {
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
@@ -209,6 +240,38 @@
   color: var(--text-secondary);
   text-align: center;
   margin-bottom: var(--space-4);
+}
+
+/* CPU-only blocked state — shown instead of the form when the probe finds
+   no hardware encoder and the Danger Zone override is off. */
+.blockedBox {
+  background: rgba(229, 184, 91, 0.08);
+  border: 1px solid rgba(229, 184, 91, 0.35);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  text-align: left;
+}
+
+.blockedHeading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--accent);
+  margin: 0 0 var(--space-2);
+}
+
+.blockedBody {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin: 0 0 var(--space-2);
+}
+
+.blockedBody:last-child {
+  margin-bottom: 0;
 }
 
 .probingState {

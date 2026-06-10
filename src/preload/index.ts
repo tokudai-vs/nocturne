@@ -309,6 +309,24 @@ const api = {
     binariesReady: () => ipcRenderer.invoke('watchparty:binaries-ready'),
     setupBinaries: () => ipcRenderer.invoke('watchparty:setup-binaries'),
     probeEncoder: () => ipcRenderer.invoke('watchparty:probe-encoder'),
+    startSession: (payload: {
+      source: unknown;
+      durationSec?: number;
+      maxGuests?: number | 'unlimited';
+      qualityHeight?: 720 | 1080 | 2160;
+      startOffsetSec?: number;
+      trackHistory?: boolean;
+    }) => ipcRenderer.invoke('watchparty:start-session', payload),
+    startShow: () => ipcRenderer.invoke('watchparty:start-show'),
+    endSession: () => ipcRenderer.invoke('watchparty:end-session'),
+    getState: () => ipcRenderer.invoke('watchparty:get-state'),
+    hostEvent: (payload: { type: 'play' | 'pause' | 'seek' | 'time-update'; position: number }) =>
+      ipcRenderer.invoke('watchparty:host-event', payload),
+    onState: (cb: (state: unknown) => void) => {
+      const handler = (_: unknown, state: unknown) => cb(state);
+      ipcRenderer.on('watchparty:state', handler);
+      return () => ipcRenderer.removeListener('watchparty:state', handler);
+    },
     onSetupProgress: (
       cb: (data: { phase: 'ffmpeg' | 'cloudflared' | 'unzip'; percent: number }) => void,
     ) => {

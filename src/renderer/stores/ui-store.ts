@@ -10,6 +10,13 @@ interface UiState {
   /** Splash screen visible */
   splashVisible: boolean;
   dismissSplash: () => void;
+  /**
+   * Cinema mode hides the AppShell's TopBar (and zeroes content padding) so
+   * a player can take the full viewport. Set by the Watch Party host page
+   * when state transitions to LIVE; cleared when leaving LIVE / unmounting.
+   */
+  cinemaMode: boolean;
+  setCinemaMode: (on: boolean) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -20,4 +27,6 @@ export const useUiStore = create<UiState>((set) => ({
   setTopBarSolid: (solid) => set({ topBarSolid: solid }),
   splashVisible: true,
   dismissSplash: () => set({ splashVisible: false }),
+  cinemaMode: false,
+  setCinemaMode: (on) => set({ cinemaMode: on }),
 }));

@@ -1,0 +1,590 @@
+.page {
+  width: 100%;
+  min-height: 100%;
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-8);
+  color: var(--text-secondary);
+}
+
+.spinner {
+  animation: spin 0.9s linear infinite;
+  color: var(--accent);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.backBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  transition: color 150ms ease, background 150ms ease;
+}
+.backBtn:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+
+.headerTitle {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.headerIcon { color: var(--accent); }
+
+.headerRight {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.guestPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(229, 184, 91, 0.12);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.endBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: transparent;
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  font-size: var(--text-sm);
+  transition: background 150ms ease, color 150ms ease;
+}
+.endBtn:hover { background: rgba(239, 68, 68, 0.1); color: #f87171; }
+
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* graceOverlay positions absolute against this. */
+  position: relative;
+}
+
+/* ── Waiting room ─────────────────────────────────────── */
+
+.waitingRoom {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding-top: var(--space-5);
+}
+
+.waitingTitle {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.shareCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.shareLabel {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.shareRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.shareInput {
+  flex: 1;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+}
+.copyBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  transition: background 150ms ease, color 150ms ease;
+}
+.copyBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.copyBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.bufferCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.bufferHead {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.bufferTrack {
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.bufferFill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, transparent));
+  border-radius: 999px;
+  transition: width 200ms ease;
+}
+.bufferCaption {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.waitingFooter {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-3);
+}
+
+.startBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--accent);
+  color: #000;
+  border-radius: var(--radius);
+  font-size: var(--text-md);
+  font-weight: 500;
+  transition: background 150ms ease;
+}
+.startBtn:hover:not(:disabled) { background: var(--accent-hover); }
+.startBtn:disabled {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.errorBox {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+}
+
+/* Resume watchdog hint — amber, not red: the session isn't failing, the
+   transcoder is just paying for a server that won't range-seek. */
+.slowSeekNote {
+  margin-top: var(--space-3);
+  background: rgba(229, 184, 91, 0.08);
+  border: 1px solid rgba(229, 184, 91, 0.35);
+  color: var(--accent);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* ── Cinema (LIVE) stage ──────────────────────────────── */
+
+/* When LIVE, the .page itself drops its padding so the cinema container
+   takes the full viewport (AppShell hides TopBar via cinemaMode). */
+.pageCinema {
+  padding: 0;
+  gap: 0;
+  height: 100%;
+}
+
+.cinema {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  cursor: default;
+}
+/* Hide the cursor when controls are auto-hidden, like a real player. */
+.cinemaIdle { cursor: none; }
+
+.cinemaVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+
+.cinemaTopBar,
+.cinemaBottomBar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: #fff;
+  transition: opacity 250ms ease, transform 250ms ease;
+  /* Above the seek/play interactive surface but below the grace overlay. */
+  z-index: 5;
+  pointer-events: auto;
+}
+.cinemaTopBar {
+  top: 0;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0));
+  -webkit-app-region: drag;
+}
+.cinemaTopBar > * { -webkit-app-region: no-drag; }
+.cinemaBottomBar {
+  bottom: 0;
+  background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0));
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: 20px 24px 16px;
+}
+
+.cinemaOverlayHidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.cinemaTopBar.cinemaOverlayHidden { transform: translateY(-8px); }
+.cinemaBottomBar.cinemaOverlayHidden { transform: translateY(8px); }
+
+.cinemaTitleGroup {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.cinemaTitleIcon { color: var(--accent); flex-shrink: 0; }
+.cinemaTitleText {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cinemaGuests {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(229, 184, 91, 0.18);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cinemaSeekRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.cinemaTime {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  min-width: 56px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* The seek bar is a stack:
+   - .cinemaTrackBase   — full-span dim track (not-yet-transcoded "ghost")
+   - .cinemaTrackBuffered — transcoded extent (startOffset .. bufferedEnd)
+   - .cinemaTrackPlayed   — played span (startOffset .. moviePosition)
+   - <input type="range"> — invisible track, native thumb on top
+   All four share the same horizontal coordinate system. The fills use %
+   widths anchored to .cinemaSeekStack's full width. */
+.cinemaSeekStack {
+  position: relative;
+  flex: 1;
+  height: 16px;
+  display: flex;
+  align-items: center;
+}
+.cinemaTrackBase,
+.cinemaTrackBuffered,
+.cinemaTrackPlayed {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 4px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+.cinemaTrackBase {
+  left: 0;
+  right: 0;
+  background: rgba(255, 255, 255, 0.12);
+}
+/* Transcoded extent. Needs to read clearly against the base "ghost" tier
+   at a glance — 0.36 vs 0.18 white was too subtle on a 4px track. */
+.cinemaTrackBuffered { background: rgba(255, 255, 255, 0.5); }
+.cinemaTrackPlayed { background: var(--accent); }
+
+.cinemaSeek {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  z-index: 2;
+}
+.cinemaSeek:disabled { cursor: not-allowed; }
+.cinemaSeek::-webkit-slider-runnable-track {
+  background: transparent;
+  border: 0;
+  height: 4px;
+}
+.cinemaSeek::-moz-range-track {
+  background: transparent;
+  border: 0;
+  height: 4px;
+}
+.cinemaSeek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  cursor: pointer;
+  margin-top: -5px; /* center on 4px track */
+}
+.cinemaSeek::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  cursor: pointer;
+}
+
+.cinemaActionsRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cinemaPlayBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #000;
+  transition: background 150ms ease;
+}
+.cinemaPlayBtn:hover { background: var(--accent-hover); }
+
+.cinemaIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  transition: background 150ms ease, color 150ms ease;
+}
+.cinemaIconBtn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+
+.cinemaVolumeWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cinemaVolume {
+  width: 100px;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cinemaSpacer { flex: 1; }
+
+.cinemaEndBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  background: transparent;
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: background 150ms ease, color 150ms ease;
+}
+.cinemaEndBtn:hover { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
+
+.endedCard {
+  margin: var(--space-8) auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+.endedTitle {
+  font-size: var(--text-xl);
+  color: var(--text-secondary);
+}
+
+/* ── End-session grace overlay ────────────────────────── */
+
+.graceOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 10, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  animation: fadeIn 200ms ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.graceCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: var(--space-6);
+  width: 380px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+.graceTitle {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.graceCountdown {
+  font-size: 56px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  margin: var(--space-2) 0;
+}
+
+.graceCaption {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.graceActions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  width: 100%;
+  justify-content: center;
+}
+
+.resumeBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  background: var(--accent);
+  color: #000;
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: background 150ms ease;
+}
+.resumeBtn:hover { background: var(--accent-hover); }
+
+.goHomeBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: color 150ms ease, background 150ms ease;
+}
+.goHomeBtn:hover { color: var(--text-primary); background: var(--bg-tertiary); }

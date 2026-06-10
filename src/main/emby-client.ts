@@ -441,6 +441,24 @@ class EmbyClient {
     await this.standalone.post(url, data, { headers: this.standaloneHeaders(token) });
   }
 
+  async reportPlaybackStartToServer(
+    serverUrl: string,
+    token: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const url = `${serverUrl}/emby/Sessions/Playing`;
+    await this.standalone.post(url, data, { headers: this.standaloneHeaders(token) });
+  }
+
+  async reportPlaybackProgressToServer(
+    serverUrl: string,
+    token: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const url = `${serverUrl}/emby/Sessions/Playing/Progress`;
+    await this.standalone.post(url, data, { headers: this.standaloneHeaders(token) });
+  }
+
   getStreamUrlForServer(
     serverUrl: string,
     token: string,

@@ -69,8 +69,11 @@ import { computeAnalytics, type AnalyticsLifetimeBlock } from './analytics';
 import { fetchSegments } from './introdb-client';
 import { watchPartyBinaryManager } from './watchparty-binary-manager';
 import { watchPartyEncoderProbe } from './watchparty-encoder-probe';
+import { watchPartySessionManager } from './watchparty-session';
+import { watchPartyLogger } from './watchparty-logger';
 import { toIso6391 } from '../shared/languages';
 import { TRAKT_BUNDLED_CLIENT_ID } from '../shared/trakt-config';
+import type { WatchPartySource } from '../shared/watchparty-types';
 import {
   getTraktWatchlistAsCachedItems,
   invalidateTraktWatchlistCache,
@@ -120,8 +123,12 @@ const ALLOWED_SETTING_KEYS = new Set<string>([
   'traktAutoScrobble', 'traktSyncWatchedState', 'traktShowWatchlistInSidebar',
   'traktClientIdOverride', 'traktClientSecretOverride',
   'traktHistoryBackfillCap',
-  // Watch Party — Danger Zone unlock for the guest-count limit.
+  // Watch Party — Danger Zone unlocks: guest-count limit, 4K source input,
+  // 4K output ceiling, CPU-only override.
   'watchPartyMaxGuestsUnlocked',
+  'watchPartyPrefer4kSource',
+  'watchPartyAllow4kOutput',
+  'watchPartyAllowCpuEncoder',
 ]);
 
 export function registerIpcHandlers(): void {
@@ -2416,6 +2423,137 @@ export function registerIpcHandlers(): void {
     } catch (e) {
       return fail(e);
     }
+  });
+
+  // ── Watch Party — session-spawn pipeline (v3.5) ───────
+  // The setup half (binary manager, encoder probe, pre-flight modal) is
+  // upstream of this. These handlers drive the session manager state
+  // machine: startSession → WAITING → startShow → LIVE → endSession.
+
+  // IPC boundary input validation — the renderer sends a serialised
+  // WatchPartySource and we trust the wire shape to nothing.
+  function isValidWatchPartySource(s: unknown): s is WatchPartySource {
+    if (!s || typeof s !== 'object') return false;
+    const o = s as Record<string, unknown>;
+    if (typeof o.title !== 'string') return false;
+    if (!Array.isArray(o.versions) || o.versions.length === 0) return false;
+    for (const v of o.versions) {
+      if (!v || typeof v !== 'object') return false;
+      const vv = v as Record<string, unknown>;
+      if (typeof vv.serverId !== 'string') return false;
+      if (typeof vv.itemId !== 'string') return false;
+      if (typeof vv.mediaSourceId !== 'string') return false;
+      if (typeof vv.widthPx !== 'number') return false;
+      if (typeof vv.qualityLabel !== 'string') return false;
+    }
+    return true;
+  }
+
+  ipcMain.handle(
+    'watchparty:start-session',
+    async (
+      _,
+      payload: {
+        source: unknown;
+        durationSec?: number;
+        maxGuests?: number | 'unlimited';
+        qualityHeight?: 720 | 1080 | 2160;
+        startOffsetSec?: number;
+        trackHistory?: boolean;
+      },
+    ) => {
+      // Log via the logger BEFORE any return path so we always see it —
+      // the logger buffers pre-startSessionLog lines and flushes once the
+      // file opens, so this lands in the on-disk log too.
+      watchPartyLogger.info('ipc', 'watchparty:start-session received');
+      try {
+        if (!isValidWatchPartySource(payload?.source)) {
+          watchPartyLogger.warn('ipc', 'watchparty:start-session rejected — invalid source payload');
+          return fail('Invalid source payload');
+        }
+        const durationSec = typeof payload.durationSec === 'number' && payload.durationSec > 0 ? payload.durationSec : 0;
+        const maxGuests = payload.maxGuests ?? 4;
+        // 2160 is only honoured while the 4K-output Danger Zone toggle is
+        // on — a stale or hand-crafted payload degrades to 1080.
+        const qualityHeight =
+          payload.qualityHeight === 720
+            ? 720
+            : payload.qualityHeight === 2160 && getSettingValue('watchPartyAllow4kOutput')
+              ? 2160
+              : 1080;
+        const startOffsetSec =
+          typeof payload.startOffsetSec === 'number' && payload.startOffsetSec > 0
+            ? Math.floor(payload.startOffsetSec)
+            : 0;
+        const trackHistory = payload.trackHistory !== false; // default ON
+        await watchPartySessionManager.startSession({
+          source: payload.source,
+          durationSec,
+          maxGuests,
+          qualityHeight,
+          startOffsetSec,
+          trackHistory,
+        });
+        return ok(watchPartySessionManager.getPublicState());
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        watchPartyLogger.error('ipc', `watchparty:start-session threw: ${msg}`);
+        return fail(e);
+      }
+    },
+  );
+
+  ipcMain.handle('watchparty:start-show', async () => {
+    watchPartyLogger.info('ipc', 'watchparty:start-show received');
+    try {
+      await watchPartySessionManager.startShow();
+      return ok(watchPartySessionManager.getPublicState());
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      watchPartyLogger.error('ipc', `watchparty:start-show threw: ${msg}`);
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('watchparty:end-session', async () => {
+    watchPartyLogger.info('ipc', 'watchparty:end-session received');
+    try {
+      await watchPartySessionManager.endSession('host');
+      return ok(undefined);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      watchPartyLogger.error('ipc', `watchparty:end-session threw: ${msg}`);
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle('watchparty:get-state', () => {
+    try {
+      return ok(watchPartySessionManager.getPublicState());
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  ipcMain.handle(
+    'watchparty:host-event',
+    (
+      _,
+      payload: { type: 'play' | 'pause' | 'seek' | 'time-update'; position: number },
+    ) => {
+      try {
+        if (!payload || typeof payload.type !== 'string') return fail('Invalid host event');
+        watchPartySessionManager.recordHostEvent(payload);
+        return ok(undefined);
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  watchPartySessionManager.on('state', (state) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('watchparty:state', state);
   });
 
   watchPartyBinaryManager.on('progress', (data) => {

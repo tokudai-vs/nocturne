@@ -14,3 +14,11 @@
 .contentPadded {
   padding-top: 44px;
 }
+
+/* Cinema mode: drop padding + scroll. The page inside (Watch Party host)
+   uses 100% of the available height and positions its own overlays. */
+.contentCinema {
+  padding: 0;
+  overflow: hidden;
+  background: #000;
+}

@@ -2,9 +2,14 @@ import { useCallback, useState } from 'react';
 import { Popcorn } from 'lucide-react';
 import WatchPartyPreFlightModal from './WatchPartyPreFlightModal';
 import WatchPartySetupModal from './WatchPartySetupModal';
+import type { WatchPartySource } from '../../../shared/watchparty-types';
 import styles from './WatchPartyButton.module.css';
 
-export default function WatchPartyButton() {
+interface Props {
+  source: WatchPartySource;
+}
+
+export default function WatchPartyButton({ source }: Props) {
   const [setupOpen, setSetupOpen] = useState(false);
   const [preFlightOpen, setPreFlightOpen] = useState(false);
 
@@ -32,7 +37,9 @@ export default function WatchPartyButton() {
         <Popcorn size={16} /> Watch Party
       </button>
       {setupOpen && <WatchPartySetupModal onClose={() => setSetupOpen(false)} />}
-      {preFlightOpen && <WatchPartyPreFlightModal onClose={() => setPreFlightOpen(false)} />}
+      {preFlightOpen && (
+        <WatchPartyPreFlightModal source={source} onClose={() => setPreFlightOpen(false)} />
+      )}
     </>
   );
 }

@@ -17,6 +17,11 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import TraktAuthModal from '../components/ui/TraktAuthModal';
 import TraktHistoryPreviewModal from '../components/ui/TraktHistoryPreviewModal';
 import WatchPartyUnlockModal from '../components/ui/WatchPartyUnlockModal';
+import {
+  WatchParty4kSourceModal,
+  WatchParty4kOutputModal,
+  WatchPartyCpuEncoderModal,
+} from '../components/ui/WatchPartyDangerModals';
 import { SUBTITLE_LANGUAGE_OPTIONS, AUDIO_LANGUAGE_OPTIONS } from '../../shared/languages';
 import type { BaseItemDto, LibraryMapping, DbStats, DedupStats, UpdateStatus, CombinedMapping, CombinedLibraryRef, ServerConfig, SyncStatus, TraktStatus, TraktAdvancedConfig, TraktSyncStats } from '../api/types';
 import { formatDistanceToNow } from 'date-fns';
@@ -130,6 +135,9 @@ export default function SettingsPage() {
   const [reloginUrl, setReloginUrl] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showWatchPartyUnlock, setShowWatchPartyUnlock] = useState(false);
+  const [showWp4kSource, setShowWp4kSource] = useState(false);
+  const [showWp4kOutput, setShowWp4kOutput] = useState(false);
+  const [showWpCpuEncoder, setShowWpCpuEncoder] = useState(false);
   const [resetting, setResetting] = useState(false);
 
   // Trakt state
@@ -1495,13 +1503,88 @@ export default function SettingsPage() {
             </button>
           )}
         </div>
+        <div className={styles.statRow}>
+          <span>
+            Watch Party 4K source input
+            <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+              {settings?.watchPartyPrefer4kSource
+                ? 'Transcoding from the 4K version when one exists. Expect a much heavier transcode for a marginal quality gain.'
+                : 'Sessions transcode from the 1080p version by default. You can prefer the 4K master if your hardware and connection can take it.'}
+            </div>
+          </span>
+          {settings?.watchPartyPrefer4kSource ? (
+            <button
+              className={styles.actionBtn}
+              onClick={() => updateSetting('watchPartyPrefer4kSource', false)}
+            >
+              Use 1080p Source
+            </button>
+          ) : (
+            <button
+              className={`${styles.actionBtn} ${styles.actionBtnDanger}`}
+              onClick={() => setShowWp4kSource(true)}
+            >
+              Prefer 4K Source
+            </button>
+          )}
+        </div>
+        <div className={styles.statRow}>
+          <span>
+            Watch Party 4K output
+            <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+              {settings?.watchPartyAllow4kOutput
+                ? '4K (2160p) is available as a quality ceiling. Roughly 20–25 Mbps of upload per guest — watch your connection.'
+                : 'Output is capped at 1080p by default. You can raise the ceiling to 4K if you understand the bandwidth cost per guest.'}
+            </div>
+          </span>
+          {settings?.watchPartyAllow4kOutput ? (
+            <button
+              className={styles.actionBtn}
+              onClick={() => updateSetting('watchPartyAllow4kOutput', false)}
+            >
+              Restore 1080p Cap
+            </button>
+          ) : (
+            <button
+              className={`${styles.actionBtn} ${styles.actionBtnDanger}`}
+              onClick={() => setShowWp4kOutput(true)}
+            >
+              Allow 4K Output
+            </button>
+          )}
+        </div>
+        <div className={styles.statRow}>
+          <span>
+            Watch Party on CPU-only systems
+            <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+              {settings?.watchPartyAllowCpuEncoder
+                ? 'Sessions can run on software encoding. Expect stalls and desync — this is a testing override.'
+                : 'Blocked without a hardware encoder (NVIDIA, Intel, or AMD), because software encoding usually cannot keep pace with playback.'}
+            </div>
+          </span>
+          {settings?.watchPartyAllowCpuEncoder ? (
+            <button
+              className={styles.actionBtn}
+              onClick={() => updateSetting('watchPartyAllowCpuEncoder', false)}
+            >
+              Restore Block
+            </button>
+          ) : (
+            <button
+              className={`${styles.actionBtn} ${styles.actionBtnDanger}`}
+              onClick={() => setShowWpCpuEncoder(true)}
+            >
+              Enable on CPU
+            </button>
+          )}
+        </div>
       </div>
 
       {/* About */}
       <div className={styles.section}>
         <div className={styles.sectionHeader}>About</div>
         <div className={styles.aboutInfo}>
-          <div className={styles.aboutVersion}>Nocturne v3.0.0</div>
+          <div className={styles.aboutVersion}>Nocturne v3.5.0</div>
           <div className={styles.aboutLine}>Desktop Emby client built with Electron + React + mpv</div>
           <div className={styles.aboutUpdate}>
             {updateStatus?.state === 'available' && (
@@ -1565,6 +1648,17 @@ export default function SettingsPage() {
       {/* Watch Party guest-cap unlock */}
       {showWatchPartyUnlock && (
         <WatchPartyUnlockModal onClose={() => setShowWatchPartyUnlock(false)} />
+      )}
+
+      {/* Watch Party Danger Zone toggles (v3.5) */}
+      {showWp4kSource && (
+        <WatchParty4kSourceModal onClose={() => setShowWp4kSource(false)} />
+      )}
+      {showWp4kOutput && (
+        <WatchParty4kOutputModal onClose={() => setShowWp4kOutput(false)} />
+      )}
+      {showWpCpuEncoder && (
+        <WatchPartyCpuEncoderModal onClose={() => setShowWpCpuEncoder(false)} />
       )}
 
       {/* Trakt OAuth Modal */}
