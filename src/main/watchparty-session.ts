@@ -278,6 +278,20 @@ class WatchPartySessionManager extends EventEmitter {
       syncServer.onDisconnection(({ client }) => {
         watchPartyLogger.info('sync', `Guest disconnected id=${client.id}`);
       });
+      syncServer.onMessage(({ client, msg }) => {
+        // Guest-side diagnostics → session.log. The guest browser's console
+        // is invisible in packaged builds; this is the only window into a
+        // guest that can't play. Wire payload is untrusted: clamp the
+        // details string, ignore everything else.
+        if (msg.type !== 'client_error') return;
+        const guest = client.id.slice(0, 5);
+        const details = typeof msg.details === 'string' ? msg.details.slice(0, 200) : '';
+        if (msg.kind === 'hls_fatal') {
+          watchPartyLogger.warn('sync', `guest ${guest} hls fatal: ${details}`);
+        } else if (msg.kind === 'stall') {
+          watchPartyLogger.warn('sync', `guest ${guest} stalled ${details}`);
+        }
+      });
       syncServer.onCountChanged((n) => {
         watchPartyLogger.info('sync', `Guest count=${n}`);
         // Server-side cap enforcement. If the host set "5 guests" we close
@@ -773,11 +787,19 @@ function sweepStaleSessions(baseDir: string, keepId: string | null): void {
       try {
         fs.rmSync(full, { recursive: true, force: true });
       } catch (err) {
-        console.warn('[watchparty-session] failed to sweep', full, err);
+        // Through the logger, not console — a partially-swept husk dir was
+        // invisible in packaged builds (GUI subsystem swallows stdout).
+        watchPartyLogger.warn(
+          'session',
+          `failed to sweep stale dir ${full}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
   } catch (err) {
-    console.warn('[watchparty-session] sweep walk failed:', err);
+    watchPartyLogger.warn(
+      'session',
+      `stale-session sweep walk failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

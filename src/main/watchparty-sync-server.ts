@@ -31,7 +31,17 @@ export type ServerToClientMessage =
 
 export type ClientToServerMessage =
   | { type: 'join'; clientId?: string }
-  | { type: 'ack'; clientId: string; drift: number };
+  | { type: 'ack'; clientId: string; drift: number }
+  // Guest-side diagnostics. Packaged builds can't see the guest browser's
+  // console, so hls.js fatals and starvation get posted back here and the
+  // session manager routes them into session.log. Guest throttles stall
+  // reports; the server additionally clamps the details string.
+  | {
+      type: 'client_error';
+      kind: 'hls_fatal' | 'stall';
+      details?: string;
+      readyState?: number;
+    };
 
 interface Client {
   id: string;

@@ -224,6 +224,28 @@ export const GUEST_PAGE_HTML = `<!doctype html>
     var hlsRetryTimer = null;
     var ended = false;
     var reconnectTimer = null;
+    var lastStallReportAt = 0; // throttle: starving guests report once per 5s
+    var lowReadySince = null;  // when readyState first dropped below 3
+
+    // ── Guest → host diagnostics ──────────────────────────
+    // The host can't see this browser's console; post hls.js fatals and
+    // starvation back over the sync socket so they land in session.log.
+    function reportClientError(kind, details, readyState) {
+      var now = Date.now();
+      if (kind === 'stall') {
+        if (now - lastStallReportAt < 5000) return;
+        lastStallReportAt = now;
+      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      try {
+        ws.send(JSON.stringify({
+          type: 'client_error',
+          kind: kind,
+          details: details,
+          readyState: typeof readyState === 'number' ? readyState : undefined,
+        }));
+      } catch (e) { /* diagnostics only — never break playback over them */ }
+    }
     // Movie-time offset where the transcode starts. Resume = positive;
     // populated from session_info. Guest has no progress bar today, so
     // this is currently informational only — keep it for protocol parity
@@ -305,9 +327,16 @@ export const GUEST_PAGE_HTML = `<!doctype html>
         // (the transcoded frontier) instead of where the host is.
         hls = new window.Hls({ enableWorker: true, lowLatencyMode: false, startPosition: pos });
         hls.on(window.Hls.Events.ERROR, function (_, data) {
-          if (!data || !data.fatal) return;
+          if (!data) return;
+          // bufferStalledError is non-fatal but is exactly the "guest can't
+          // keep up with the stream bitrate" signal — report it (throttled).
+          if (data.details === 'bufferStalledError' && !ended) {
+            reportClientError('stall', 'bufferStalledError', video.readyState);
+          }
+          if (!data.fatal) return;
           console.warn('[watchparty] HLS fatal:', data.type, data.details);
           if (ended) return;
+          reportClientError('hls_fatal', (data.type || '?') + '/' + (data.details || '?'), video.readyState);
           if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
             try { hls.recoverMediaError(); } catch (e) { /* fall through to retry */ }
             return;
@@ -413,6 +442,33 @@ export const GUEST_PAGE_HTML = `<!doctype html>
       }
     }
     setInterval(applyDriftCorrection, 500);
+
+    // ── Starvation watchdog ───────────────────────────────
+    // readyState < 3 (HAVE_FUTURE_DATA) means the element can't play
+    // forward from here. Sitting there >2s while the show is live is
+    // starvation — report it (reportClientError throttles to one per 5s).
+    setInterval(function () {
+      if (sessionState !== 'LIVE' || !hostPlaying || ended || !hlsAttached) {
+        lowReadySince = null;
+        return;
+      }
+      if (video.readyState >= 3) {
+        lowReadySince = null;
+        return;
+      }
+      var now = Date.now();
+      if (lowReadySince === null) {
+        lowReadySince = now;
+        return;
+      }
+      if (now - lowReadySince >= 2000) {
+        reportClientError(
+          'stall',
+          'readyState=' + video.readyState + ' for ' + Math.round((now - lowReadySince) / 1000) + 's',
+          video.readyState
+        );
+      }
+    }, 1000);
 
     // ── WS message dispatch ───────────────────────────────
     function handleMessage(msg) {
