@@ -6,11 +6,11 @@ export function usePlay() {
   const { setCurrentItem, setPlaying, setError } = usePlayerStore();
 
   const play = useCallback(
-    async (item: BaseItemDto, mediaSource?: MediaSource) => {
+    async (item: BaseItemDto, mediaSource?: MediaSource, serverId?: string) => {
       let sourceId = mediaSource?.Id;
 
       if (!sourceId) {
-        const result = await window.api.media.getPlaybackInfo(item.Id);
+        const result = await window.api.media.getPlaybackInfo(item.Id, serverId);
         if (!result.success || !result.data?.MediaSources?.length) {
           setError('No media source available');
           return;
@@ -35,6 +35,7 @@ export function usePlay() {
         mediaSourceId: sourceId,
         startPositionTicks: item.UserData?.PlaybackPositionTicks || 0,
         itemName,
+        serverId,
       });
 
       if (!result.success) {

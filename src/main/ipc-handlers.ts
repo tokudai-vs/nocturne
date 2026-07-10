@@ -452,14 +452,33 @@ export function registerIpcHandlers(): void {
   );
 
   // ── Media ─────────────────────────────────────────────
-  ipcMain.handle('emby:media:playback-info', async (_, { itemId }: { itemId: string }) => {
-    try {
-      const info = await embyClient.getPlaybackInfo(itemId);
-      return ok(info);
-    } catch (e) {
-      return fail(e);
-    }
-  });
+  ipcMain.handle(
+    'emby:media:playback-info',
+    async (_, { itemId, serverId }: { itemId: string; serverId?: string }) => {
+      try {
+        // Cross-server: dedup version picks can target an item on a server
+        // other than the active one. Route through that server's config —
+        // the active client would 404/500 on a foreign item id.
+        const activeServer = serverManager.getActiveServer();
+        if (serverId && serverId !== activeServer?.id) {
+          const server = serverManager.getServer(serverId);
+          if (!server) return fail(`Unknown server ${serverId}`);
+          const info = await embyClient.getPlaybackInfoForServer(
+            server.url,
+            server.accessToken,
+            server.userId,
+            itemId,
+          );
+          return ok(info);
+        }
+        const info = await embyClient.getPlaybackInfo(itemId);
+        return ok(info);
+      } catch (e) {
+        console.error(`[media:playback-info] failed for item ${itemId} (serverId=${serverId ?? 'active'}):`, e instanceof Error ? e.message : e);
+        return fail(e);
+      }
+    },
+  );
 
   ipcMain.handle(
     'emby:media:stream-url',
@@ -693,6 +712,15 @@ export function registerIpcHandlers(): void {
     episodeNumber: number | null;
   };
 
+  // Resolve which server a playback session should report to. Null means
+  // the item lives on the active server — use the default embyClient paths.
+  function foreignServerFor(serverId: string | null | undefined) {
+    if (!serverId) return null;
+    const active = serverManager.getActiveServer();
+    if (!active || serverId === active.id) return null;
+    return serverManager.getServer(serverId) ?? null;
+  }
+
   class PlaybackSession {
     private interval: ReturnType<typeof setInterval> | null = null;
     private session: PlaybackSessionInfo | null = null;
@@ -748,7 +776,7 @@ export function registerIpcHandlers(): void {
             const dur = (await mpvManager.getProperty('duration')) as number | null;
             if (dur != null && dur > 0) this._durationSec = dur;
           }
-          await embyClient.reportPlaybackProgress({
+          const progressPayload = {
             ItemId: itemId,
             MediaSourceId: mediaSourceId,
             PlaySessionId: playSessionId,
@@ -756,7 +784,13 @@ export function registerIpcHandlers(): void {
             IsPaused: paused,
             CanSeek: true,
             PlayMethod: 'DirectPlay',
-          });
+          };
+          const progressServer = foreignServerFor(this.session?.serverId);
+          if (progressServer) {
+            await embyClient.reportPlaybackProgressToServer(progressServer.url, progressServer.accessToken, progressPayload);
+          } else {
+            await embyClient.reportPlaybackProgress(progressPayload);
+          }
           // Trakt scrobble: detect pause / resume edges
           if (this._lastPaused !== null && paused !== this._lastPaused) {
             const action = paused ? 'pause' : 'start';
@@ -1206,16 +1240,21 @@ export function registerIpcHandlers(): void {
     playback.stopReporting();
     if (session) {
       updateItemUserData(session.itemId, { last_played_date: new Date().toISOString() });
-      embyClient
-        .reportPlaybackStopped({
+      {
+        const stopPayload = {
           ItemId: session.itemId,
           MediaSourceId: session.mediaSourceId,
           PlaySessionId: session.playSessionId,
           PositionTicks: finalPositionTicks,
-        })
-        .catch(() => {
+        };
+        const stopServer = foreignServerFor(session.serverId);
+        (stopServer
+          ? embyClient.reportPlaybackStoppedToServer(stopServer.url, stopServer.accessToken, stopPayload)
+          : embyClient.reportPlaybackStopped(stopPayload)
+        ).catch(() => {
           /* ignore */
         });
+      }
 
       // Trakt scrobble:stop fires once per playback (regardless of dedup cascade).
       // Trakt auto-marks watched at >= 80% on stop; below that it's discarded.
@@ -1310,14 +1349,19 @@ export function registerIpcHandlers(): void {
     playback.stopReporting();
     if (session) {
       updateItemUserData(session.itemId, { last_played_date: new Date().toISOString() });
-      embyClient
-        .reportPlaybackStopped({
+      {
+        const stopPayload = {
           ItemId: session.itemId,
           MediaSourceId: session.mediaSourceId,
           PlaySessionId: session.playSessionId,
           PositionTicks: finalPositionTicks,
-        })
-        .catch(() => { /* ignore */ });
+        };
+        const stopServer = foreignServerFor(session.serverId);
+        (stopServer
+          ? embyClient.reportPlaybackStoppedToServer(stopServer.url, stopServer.accessToken, stopPayload)
+          : embyClient.reportPlaybackStopped(stopPayload)
+        ).catch(() => { /* ignore */ });
+      }
       void traktScrobbler.scrobble('stop', session.itemId, finalPositionSec, finalDurationSec);
 
       if (serverManager.isCombinedMode()) {
@@ -1391,11 +1435,13 @@ export function registerIpcHandlers(): void {
         mediaSourceId,
         startPositionTicks,
         itemName,
+        serverId,
       }: {
         itemId: string;
         mediaSourceId: string;
         startPositionTicks?: number;
         itemName?: string;
+        serverId?: string;
       },
     ) => {
       if (!isNonEmptyString(itemId) || !isNonEmptyString(mediaSourceId)) return fail('Missing itemId or mediaSourceId');
@@ -1405,13 +1451,25 @@ export function registerIpcHandlers(): void {
         const win = getMainWindow();
         if (!win) return fail('No window');
 
+        // Cross-server: a dedup version pick can live on a non-active
+        // server. Resolve the stream + reporting against that server's
+        // config; null means the active-server fast path.
+        const activeServer = serverManager.getActiveServer();
+        const foreignServer =
+          serverId && serverId !== activeServer?.id ? serverManager.getServer(serverId) : null;
+        if (serverId && serverId !== activeServer?.id && !foreignServer) {
+          return fail(`Unknown server ${serverId}`);
+        }
+
         // Trigger fade to black
         win.webContents.send('player:starting');
 
         // Wait for fade-in animation to complete (350ms transition + buffer)
         await new Promise((r) => setTimeout(r, 450));
 
-        const url = embyClient.getStreamUrl(itemId, mediaSourceId);
+        const url = foreignServer
+          ? embyClient.getStreamUrlForServer(foreignServer.url, foreignServer.accessToken, itemId, mediaSourceId)
+          : embyClient.getStreamUrl(itemId, mediaSourceId);
         const playSessionId = `nocturne-${Date.now()}`;
 
         // Load file into hot mpv — instant via IPC
@@ -1434,15 +1492,20 @@ export function registerIpcHandlers(): void {
           });
         }
 
-        // Report playback start to Emby
-        await embyClient.reportPlaybackStart({
+        // Report playback start to Emby (to the server that owns the item)
+        const startPayload = {
           ItemId: itemId,
           MediaSourceId: mediaSourceId,
           PlaySessionId: playSessionId,
           PositionTicks: startPositionTicks || 0,
           CanSeek: true,
           PlayMethod: 'DirectPlay',
-        });
+        };
+        if (foreignServer) {
+          await embyClient.reportPlaybackStartToServer(foreignServer.url, foreignServer.accessToken, startPayload);
+        } else {
+          await embyClient.reportPlaybackStart(startPayload);
+        }
 
         // Resolve duration for Trakt progress percentage. Cache is the fast
         // path; mpv's `duration` property is the fallback inside the polling

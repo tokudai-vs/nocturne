@@ -450,6 +450,21 @@ class EmbyClient {
     await this.standalone.post(url, data, { headers: this.standaloneHeaders(token) });
   }
 
+  async getPlaybackInfoForServer(
+    serverUrl: string,
+    token: string,
+    userId: string,
+    itemId: string,
+  ) {
+    const url = `${serverUrl}/emby/Items/${itemId}/PlaybackInfo`;
+    const { data } = await this.standalone.post(
+      url,
+      { DeviceProfile: {} },
+      { params: { UserId: userId }, headers: this.standaloneHeaders(token) },
+    );
+    return data;
+  }
+
   async reportPlaybackProgressToServer(
     serverUrl: string,
     token: string,

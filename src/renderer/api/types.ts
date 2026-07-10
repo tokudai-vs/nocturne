@@ -515,7 +515,7 @@ declare global {
         }>>;
       };
       media: {
-        getPlaybackInfo: (itemId: string) => Promise<IpcResponse<{ MediaSources: MediaSource[] }>>;
+        getPlaybackInfo: (itemId: string, serverId?: string) => Promise<IpcResponse<{ MediaSources: MediaSource[] }>>;
         getStreamUrl: (itemId: string, mediaSourceId: string) => Promise<IpcResponse<string>>;
         reportStart: (data: Record<string, unknown>) => Promise<IpcResponse<void>>;
         reportProgress: (data: Record<string, unknown>) => Promise<IpcResponse<void>>;
@@ -540,7 +540,7 @@ declare global {
         getUrl: (itemId: string, imageType: string, params?: Record<string, unknown>) => Promise<IpcResponse<string>>;
       };
       player: {
-        play: (args: { itemId: string; mediaSourceId: string; startPositionTicks?: number; itemName?: string }) => Promise<IpcResponse<void>>;
+        play: (args: { itemId: string; mediaSourceId: string; startPositionTicks?: number; itemName?: string; serverId?: string }) => Promise<IpcResponse<void>>;
         stop: () => Promise<IpcResponse<void>>;
         onExited: (cb: () => void) => () => void;
         onStarting: (cb: () => void) => () => void;

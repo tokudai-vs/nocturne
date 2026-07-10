@@ -186,23 +186,9 @@ export default function DetailPage() {
     const cachedPositionTicks = versions[0]?.playback_position_ticks;
     const positionTicks = livePositionTicks ?? cachedPositionTicks ?? 0;
     let resumeSec = positionTicks > 0 ? positionTicks / 10_000_000 : 0;
-    const beforeGate = resumeSec;
-    let gateZeroed = false;
     if (durationSec > 0 && resumeSec > durationSec * 0.95) {
       resumeSec = 0;
-      gateZeroed = true;
     }
-    console.log('[wp:detail] resumeSec computation', {
-      itemId: item.Id,
-      serverId: versions[0]?.server_id,
-      livePositionTicks,
-      cachedPositionTicks,
-      positionTicks,
-      durationSec,
-      beforeGate,
-      gateZeroed,
-      resumeSec,
-    });
     return { title, versions: wpVersions, durationSec, resumeSec };
   }, [item, versions]);
 
@@ -220,6 +206,7 @@ export default function DetailPage() {
   // Media source picker
   const [pickerSources, setPickerSources] = useState<MediaSourceType[] | null>(null);
   const [pickerItem, setPickerItem] = useState<BaseItemDto | null>(null);
+  const [pickerServerId, setPickerServerId] = useState<string | undefined>(undefined);
 
   // Derived (safe before item loads — item?. access)
   const isEpisode = item?.Type === 'Episode';
@@ -447,59 +434,50 @@ export default function DetailPage() {
     await window.api.item.markPlayed({ itemId: item.Id });
   }, [item]);
 
-  const handlePlay = useCallback(async (target: BaseItemDto) => {
-    // Check for multiple media sources
-    const pbRes = await window.api.media.getPlaybackInfo(target.Id);
-    if (!pbRes.success || !pbRes.data) return;
+  const handlePlay = useCallback(async (target: BaseItemDto, serverId?: string) => {
+    // Check for multiple media sources. serverId routes the lookup to the
+    // server that owns the item — dedup versions can live on a non-active
+    // server, where the active client would 404.
+    const pbRes = await window.api.media.getPlaybackInfo(target.Id, serverId);
+    if (!pbRes.success || !pbRes.data) {
+      addToast(`Couldn't start playback: ${pbRes.error ?? 'unknown error'}`, 'error');
+      return;
+    }
     const sources = pbRes.data.MediaSources;
     if (sources.length > 1) {
       setPickerSources(sources);
       setPickerItem(target);
+      setPickerServerId(serverId);
     } else {
-      play(target, sources[0]);
+      play(target, sources[0], serverId);
     }
-  }, [play]);
+  }, [play, addToast]);
 
   /** Play the preferred quality version of the current item */
   const handlePlayPreferred = useCallback(async () => {
     if (!item) return;
     if (versions.length > 1) {
       const preferred = pickPreferredVersion(versions, preferredQuality);
-      const targetId = preferred.emby_id;
-      const pbRes = await window.api.media.getPlaybackInfo(targetId);
-      if (!pbRes.success || !pbRes.data) return;
-      const sources = pbRes.data.MediaSources;
-      const target: BaseItemDto = { ...item, Id: targetId };
-      if (sources.length > 1) {
-        setPickerSources(sources);
-        setPickerItem(target);
-      } else {
-        play(target, sources[0]);
-      }
+      const target: BaseItemDto = { ...item, Id: preferred.emby_id };
+      await handlePlay(target, preferred.server_id);
     } else {
-      handlePlay(item);
+      handlePlay(item, versions[0]?.server_id);
     }
-  }, [item, versions, preferredQuality, play, handlePlay]);
+  }, [item, versions, preferredQuality, handlePlay]);
 
   /** Play a specific version by its emby_id */
   const handlePlayVersion = useCallback(async (embyId: string) => {
-    const pbRes = await window.api.media.getPlaybackInfo(embyId);
-    if (!pbRes.success || !pbRes.data) return;
-    const sources = pbRes.data.MediaSources;
+    const version = versions.find((v) => v.emby_id === embyId);
     const target: BaseItemDto = { ...(item || {} as BaseItemDto), Id: embyId };
-    if (sources.length > 1) {
-      setPickerSources(sources);
-      setPickerItem(target);
-    } else {
-      play(target, sources[0]);
-    }
-  }, [item, play]);
+    await handlePlay(target, version?.server_id);
+  }, [item, versions, handlePlay]);
 
   const handleSourcePick = useCallback((source: MediaSourceType) => {
-    if (pickerItem) play(pickerItem, source);
+    if (pickerItem) play(pickerItem, source, pickerServerId);
     setPickerSources(null);
     setPickerItem(null);
-  }, [pickerItem, play]);
+    setPickerServerId(undefined);
+  }, [pickerItem, pickerServerId, play]);
 
   const handleEpisodePlay = useCallback((ep: BaseItemDto) => {
     const siblings = epVersionsByNumber.get(ep.IndexNumber ?? -1) ?? [];
@@ -512,7 +490,7 @@ export default function DetailPage() {
 
   const handleEpisodeVersionPick = useCallback((sibling: CachedItem) => {
     setEpPickerSiblings(null);
-    handlePlay(cachedToBaseItem(sibling));
+    handlePlay(cachedToBaseItem(sibling), sibling.server_id);
   }, [handlePlay]);
 
   if (loading) return <LoadingSpinner size={48} />;

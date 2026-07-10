@@ -40,8 +40,8 @@ const api = {
     getAllServersResume: () => ipcRenderer.invoke('libraries:get-all-servers-resume'),
   },
   media: {
-    getPlaybackInfo: (itemId: string) =>
-      ipcRenderer.invoke('emby:media:playback-info', { itemId }),
+    getPlaybackInfo: (itemId: string, serverId?: string) =>
+      ipcRenderer.invoke('emby:media:playback-info', { itemId, serverId }),
     getStreamUrl: (itemId: string, mediaSourceId: string) =>
       ipcRenderer.invoke('emby:media:stream-url', { itemId, mediaSourceId }),
     reportStart: (data: Record<string, unknown>) =>
@@ -79,7 +79,7 @@ const api = {
       ipcRenderer.invoke('emby:image:get-url', { itemId, imageType, params }),
   },
   player: {
-    play: (args: { itemId: string; mediaSourceId: string; startPositionTicks?: number; itemName?: string }) =>
+    play: (args: { itemId: string; mediaSourceId: string; startPositionTicks?: number; itemName?: string; serverId?: string }) =>
       ipcRenderer.invoke('player:play', args),
     stop: () => ipcRenderer.invoke('player:stop'),
     onExited: (cb: () => void) => {
