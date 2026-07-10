@@ -129,6 +129,11 @@ class WatchPartySessionManager extends EventEmitter {
   // scrobble:pause/start on rapid play/pause toggles. Matches the solo
   // path's edge-detect inside PlaybackSession.start.
   private lastScrobbleAction: 'start' | 'pause' | null = null;
+  // True once startHistoryReporting has fired (i.e. the show actually
+  // started). Ending a session from the WAITING room must NOT send a
+  // playback-stopped report or a Trakt scrobble:stop — a Resume offset
+  // >= 80% would otherwise credit the whole watch without a second played.
+  private historyStarted = false;
 
   /** Public state snapshot for the renderer / IPC. */
   getPublicState(): PublicSessionState {
@@ -179,6 +184,7 @@ class WatchPartySessionManager extends EventEmitter {
     this.trackHistory = opts.trackHistory;
     this.historyTarget = null;
     this.lastScrobbleAction = null;
+    this.historyStarted = false;
     if (this.progressTimer) {
       clearInterval(this.progressTimer);
       this.progressTimer = null;
@@ -477,9 +483,10 @@ class WatchPartySessionManager extends EventEmitter {
       /* ignore */
     }
     // Flush a final Emby progress + Trakt scrobble:stop before teardown.
-    // History reporting only runs if the host opted in AND we actually
-    // reached LIVE — startShow is the only path that arms the timer.
-    if (this.trackHistory && this.historyTarget) {
+    // History reporting only runs if the host opted in AND the show actually
+    // started — historyStarted is set by startHistoryReporting (LIVE); a
+    // session ended from the WAITING room must not report a stop.
+    if (this.trackHistory && this.historyTarget && this.historyStarted) {
       await this.stopHistoryReporting();
     }
     this.setState('ENDED');
@@ -538,6 +545,7 @@ class WatchPartySessionManager extends EventEmitter {
   private startHistoryReporting(): void {
     const target = this.historyTarget;
     if (!target) return;
+    this.historyStarted = true;
     const positionSec = this.movieTimeSec();
     const positionTicks = Math.floor(positionSec * 10_000_000);
     const durationSec = this.durationSec ?? 0;
@@ -582,9 +590,12 @@ class WatchPartySessionManager extends EventEmitter {
         CanSeek: true,
         PlayMethod: 'Transcode',
       });
-      // Mirror the solo path — keep the local cache's last_played_date
-      // current so resume queries pick this up.
-      updateItemUserData(target.itemId, { last_played_date: new Date().toISOString() });
+      // Mirror the solo path — keep the local cache's position current so
+      // Continue Watching reflects the party without waiting for a sync.
+      updateItemUserData(target.itemId, {
+        playback_position_ticks: positionTicks,
+        last_played_date: new Date().toISOString(),
+      });
     } catch (err) {
       watchPartyLogger.warn('history', `reportProgress failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -630,13 +641,27 @@ class WatchPartySessionManager extends EventEmitter {
     // Trakt scrobble:stop — handles the >= 80% "watched" credit on Trakt's
     // side. Below 80% it's discarded silently.
     void traktScrobbler.scrobble('stop', target.itemId, positionSec, durationSec);
-    updateItemUserData(target.itemId, { last_played_date: new Date().toISOString() });
+    // Mirror the final position into the local cache, applying the same
+    // thresholds Emby uses server-side (>= 90% = played, position cleared).
+    // Guarded: on the app-quit teardown path the DB may already be closed —
+    // a throw here must not abort the process teardown that follows.
+    const watchedToEnd = durationSec > 0 && positionSec / durationSec >= 0.9;
+    try {
+      if (watchedToEnd) {
+        updateItemUserData(target.itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0, last_played_date: new Date().toISOString() });
+      } else {
+        updateItemUserData(target.itemId, { playback_position_ticks: positionTicks, last_played_date: new Date().toISOString() });
+      }
+    } catch (err) {
+      watchPartyLogger.warn('history', `cache stop-update failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     // Cross-server cascade in combined mode — same shape as the solo
     // end-file handler. Marks the dedup-sibling versions played on their
     // own servers so the UserData reflects "I watched this" across the
-    // fleet.
-    if (serverManager.isCombinedMode()) {
+    // fleet. Only when the party actually finished the item — cascading on
+    // every End click marked siblings watched after a two-minute session.
+    if (watchedToEnd && serverManager.isCombinedMode()) {
       try {
         const cached = dbGetItem(target.itemId);
         if (cached?.dedup_group_id) {
@@ -655,6 +680,10 @@ class WatchPartySessionManager extends EventEmitter {
                   .catch((err) =>
                     watchPartyLogger.warn('history', `cross-server markPlayed failed for ${version.server_id}: ${err instanceof Error ? err.message : String(err)}`),
                   );
+                updateItemUserData(version.emby_id, {
+                  played: 1, playback_position_ticks: 0, played_percentage: 0,
+                  last_played_date: new Date().toISOString(),
+                });
               }
             }
           }
@@ -666,6 +695,7 @@ class WatchPartySessionManager extends EventEmitter {
 
     this.historyTarget = null;
     this.lastScrobbleAction = null;
+    this.historyStarted = false;
   }
 
   // ── Internals ─────────────────────────────────────────────

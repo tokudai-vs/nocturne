@@ -382,9 +382,16 @@ export function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle('emby:library:get-item', async (_, { itemId }: { itemId: string }) => {
+  // The get-item / get-seasons / get-episodes / get-similar handlers accept
+  // an optional serverId: in combined mode the requested id can live on a
+  // non-active server (dedup primaries are picked by metadata quality, not
+  // server), where the active client 404s and the page silently degrades.
+  ipcMain.handle('emby:library:get-item', async (_, { itemId, serverId }: { itemId: string; serverId?: string }) => {
     try {
-      const item = await embyClient.getItem(itemId);
+      const foreign = foreignServerFor(serverId);
+      const item = foreign
+        ? await embyClient.getItemForServer(foreign.url, foreign.accessToken, foreign.userId, itemId)
+        : await embyClient.getItem(itemId);
       return ok(item);
     } catch (e) {
       return fail(e);
@@ -421,18 +428,24 @@ export function registerIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle('emby:library:get-similar', async (_, { itemId }: { itemId: string }) => {
+  ipcMain.handle('emby:library:get-similar', async (_, { itemId, serverId }: { itemId: string; serverId?: string }) => {
     try {
-      const items = await embyClient.getSimilar(itemId);
+      const foreign = foreignServerFor(serverId);
+      const items = foreign
+        ? await embyClient.getSimilarForServer(foreign.url, foreign.accessToken, foreign.userId, itemId)
+        : await embyClient.getSimilar(itemId);
       return ok(items);
     } catch (e) {
       return fail(e);
     }
   });
 
-  ipcMain.handle('emby:library:get-seasons', async (_, { seriesId }: { seriesId: string }) => {
+  ipcMain.handle('emby:library:get-seasons', async (_, { seriesId, serverId }: { seriesId: string; serverId?: string }) => {
     try {
-      const seasons = await embyClient.getSeasons(seriesId);
+      const foreign = foreignServerFor(serverId);
+      const seasons = foreign
+        ? await embyClient.getSeasonsForServer(foreign.url, foreign.accessToken, foreign.userId, seriesId)
+        : await embyClient.getSeasons(seriesId);
       return ok(seasons);
     } catch (e) {
       return fail(e);
@@ -441,9 +454,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'emby:library:get-episodes',
-    async (_, { seriesId, seasonId }: { seriesId: string; seasonId: string }) => {
+    async (_, { seriesId, seasonId, serverId }: { seriesId: string; seasonId: string; serverId?: string }) => {
       try {
-        const episodes = await embyClient.getEpisodes(seriesId, seasonId);
+        const foreign = foreignServerFor(serverId);
+        const episodes = foreign
+          ? await embyClient.getEpisodesForServer(foreign.url, foreign.accessToken, foreign.userId, seriesId, seasonId)
+          : await embyClient.getEpisodes(seriesId, seasonId);
         return ok(episodes);
       } catch (e) {
         return fail(e);
@@ -719,6 +735,69 @@ export function registerIpcHandlers(): void {
     const active = serverManager.getActiveServer();
     if (!active || serverId === active.id) return null;
     return serverManager.getServer(serverId) ?? null;
+  }
+
+  // Emby resume thresholds (server defaults): below MIN_RESUME_PCT the server
+  // discards the position; at/above MAX_RESUME_PCT it marks the item played
+  // and clears the position. Mirror the same decision into the local cache on
+  // every stop so Continue Watching reflects reality immediately instead of
+  // waiting for the next sync (the cache previously only got last_played_date,
+  // never the position — in-progress items were invisible and finished items
+  // lingered until a sync happened to refresh the row).
+  const MIN_RESUME_PCT = 0.05;
+  const MAX_RESUME_PCT = 0.9;
+
+  function recordPlaybackStopInCache(itemId: string, finalPositionSec: number, durationSec: number): void {
+    const now = new Date().toISOString();
+    const pct = durationSec > 0 ? finalPositionSec / durationSec : null;
+    try {
+      if (pct !== null && pct >= MAX_RESUME_PCT) {
+        updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0, last_played_date: now });
+      } else if (pct !== null && pct < MIN_RESUME_PCT) {
+        updateItemUserData(itemId, { playback_position_ticks: 0, last_played_date: now });
+      } else if (pct !== null) {
+        updateItemUserData(itemId, {
+          playback_position_ticks: Math.floor(finalPositionSec * 10_000_000),
+          played_percentage: Math.round(pct * 1000) / 10,
+          last_played_date: now,
+        });
+      } else {
+        // Unknown duration — store the raw position; the next sync reconciles.
+        updateItemUserData(itemId, {
+          playback_position_ticks: Math.floor(finalPositionSec * 10_000_000),
+          last_played_date: now,
+        });
+      }
+    } catch (err) {
+      console.warn(`[playback] cache stop-update failed for ${itemId}:`, err);
+    }
+  }
+
+  // Combined mode: mark dedup-sibling copies on OTHER servers played — but
+  // only when this stop actually finished the item (>= MAX_RESUME_PCT). The
+  // previous unconditional cascade marked siblings watched even when the
+  // user bailed minutes in. Sibling cache rows are updated too, so lists
+  // reflect the state before the next sync.
+  function cascadeMarkPlayedIfWatched(itemId: string, finalPositionSec: number, durationSec: number): void {
+    if (!serverManager.isCombinedMode()) return;
+    if (!(durationSec > 0) || finalPositionSec / durationSec < MAX_RESUME_PCT) return;
+    try {
+      const item = dbGetItem(itemId);
+      if (!item?.dedup_group_id) return;
+      const versions = dbGetGroupVersions(item.dedup_group_id, item);
+      for (const version of versions) {
+        if (version.server_id === item.server_id) continue;
+        const otherServer = serverManager.getServer(version.server_id);
+        if (!otherServer) continue;
+        embyClient
+          .markPlayedOnServer(otherServer.url, otherServer.accessToken, otherServer.userId, version.emby_id)
+          .catch(() => { /* best effort */ });
+        updateItemUserData(version.emby_id, {
+          played: 1, playback_position_ticks: 0, played_percentage: 0,
+          last_played_date: new Date().toISOString(),
+        });
+      }
+    } catch { /* best effort */ }
   }
 
   class PlaybackSession {
@@ -1079,17 +1158,28 @@ export function registerIpcHandlers(): void {
     });
 
     try {
-      // 1. Tell Emby + Trakt the current episode stopped (best-effort, non-blocking).
+      // 1. Tell Emby + Trakt the current episode stopped (best-effort,
+      //    non-blocking). The stop goes to the server that owns the OLD
+      //    episode — in combined mode that may not be the active server, and
+      //    reporting it there 404'd silently, so binge progress never landed.
       if (oldSession) {
-        embyClient
-          .reportPlaybackStopped({
-            ItemId: oldSession.itemId,
-            MediaSourceId: oldSession.mediaSourceId,
-            PlaySessionId: oldSession.playSessionId,
-            PositionTicks: finalPositionTicks,
-          })
-          .catch(() => { /* ignore */ });
+        const stopPayload = {
+          ItemId: oldSession.itemId,
+          MediaSourceId: oldSession.mediaSourceId,
+          PlaySessionId: oldSession.playSessionId,
+          PositionTicks: finalPositionTicks,
+        };
+        const oldStopServer = foreignServerFor(oldSession.serverId);
+        (oldStopServer
+          ? embyClient.reportPlaybackStoppedToServer(oldStopServer.url, oldStopServer.accessToken, stopPayload)
+          : embyClient.reportPlaybackStopped(stopPayload)
+        ).catch(() => { /* ignore */ });
         void traktScrobbler.scrobble('stop', oldSession.itemId, finalPositionSec, finalDurationSec);
+        // Mirror into the local cache + combined-mode cascade — the
+        // auto-advance path used to skip both, so binged episodes kept
+        // stale resume state until the next sync.
+        recordPlaybackStopInCache(oldSession.itemId, finalPositionSec, finalDurationSec);
+        cascadeMarkPlayedIfWatched(oldSession.itemId, finalPositionSec, finalDurationSec);
       }
 
       // 2. Build target stream URL for the (possibly different) server.
@@ -1109,17 +1199,24 @@ export function registerIpcHandlers(): void {
       //    for the old file during this — suppressed by the guard.
       await mpvManager.loadFile(url, { startPositionTicks: 0, title: itemName });
 
-      // 4. Tell Emby + Trakt the new episode is starting.
-      embyClient
-        .reportPlaybackStart({
+      // 4. Tell Emby + Trakt the new episode is starting — reported to the
+      //    server that owns the target episode (the stream already resolves
+      //    against targetServer; the start report must match).
+      {
+        const startPayload = {
           ItemId: target.emby_id,
           MediaSourceId: mediaSourceId,
           PlaySessionId: playSessionId,
           PositionTicks: 0,
           CanSeek: true,
           PlayMethod: 'DirectPlay',
-        })
-        .catch(() => { /* ignore */ });
+        };
+        const activeServer = serverManager.getActiveServer();
+        (targetServer.id !== activeServer?.id
+          ? embyClient.reportPlaybackStartToServer(targetServer.url, targetServer.accessToken, startPayload)
+          : embyClient.reportPlaybackStart(startPayload)
+        ).catch(() => { /* ignore */ });
+      }
 
       const durationSec =
         target.runtime_ticks && target.runtime_ticks > 0 ? target.runtime_ticks / 10_000_000 : 0;
@@ -1239,7 +1336,7 @@ export function registerIpcHandlers(): void {
     const session = playback.take();
     playback.stopReporting();
     if (session) {
-      updateItemUserData(session.itemId, { last_played_date: new Date().toISOString() });
+      recordPlaybackStopInCache(session.itemId, finalPositionSec, finalDurationSec);
       {
         const stopPayload = {
           ItemId: session.itemId,
@@ -1260,32 +1357,9 @@ export function registerIpcHandlers(): void {
       // Trakt auto-marks watched at >= 80% on stop; below that it's discarded.
       void traktScrobbler.scrobble('stop', session.itemId, finalPositionSec, finalDurationSec);
 
-      // Cross-server: mark played on other servers that have this item
-      if (serverManager.isCombinedMode()) {
-        try {
-          const item = dbGetItem(session.itemId);
-          if (item?.dedup_group_id) {
-            const versions = dbGetGroupVersions(item.dedup_group_id, item);
-            for (const version of versions) {
-              if (version.server_id !== item.server_id) {
-                const otherServer = serverManager.getServer(version.server_id);
-                if (otherServer) {
-                  embyClient
-                    .markPlayedOnServer(
-                      otherServer.url,
-                      otherServer.accessToken,
-                      otherServer.userId,
-                      version.emby_id,
-                    )
-                    .catch(() => { /* best effort */ });
-                }
-              }
-            }
-          }
-        } catch {
-          /* best effort */
-        }
-      }
+      // Cross-server: mark played on other servers that have this item —
+      // only when this playback actually finished it.
+      cascadeMarkPlayedIfWatched(session.itemId, finalPositionSec, finalDurationSec);
     }
   });
 
@@ -1348,7 +1422,7 @@ export function registerIpcHandlers(): void {
     const session = playback.take();
     playback.stopReporting();
     if (session) {
-      updateItemUserData(session.itemId, { last_played_date: new Date().toISOString() });
+      recordPlaybackStopInCache(session.itemId, finalPositionSec, finalDurationSec);
       {
         const stopPayload = {
           ItemId: session.itemId,
@@ -1364,31 +1438,7 @@ export function registerIpcHandlers(): void {
       }
       void traktScrobbler.scrobble('stop', session.itemId, finalPositionSec, finalDurationSec);
 
-      if (serverManager.isCombinedMode()) {
-        try {
-          const item = dbGetItem(session.itemId);
-          if (item?.dedup_group_id) {
-            const versions = dbGetGroupVersions(item.dedup_group_id, item);
-            for (const version of versions) {
-              if (version.server_id !== item.server_id) {
-                const otherServer = serverManager.getServer(version.server_id);
-                if (otherServer) {
-                  embyClient
-                    .markPlayedOnServer(
-                      otherServer.url,
-                      otherServer.accessToken,
-                      otherServer.userId,
-                      version.emby_id,
-                    )
-                    .catch(() => { /* best effort */ });
-                }
-              }
-            }
-          }
-        } catch {
-          /* best effort */
-        }
-      }
+      cascadeMarkPlayedIfWatched(session.itemId, finalPositionSec, finalDurationSec);
     }
   });
 
@@ -2535,7 +2585,17 @@ export function registerIpcHandlers(): void {
           return fail('Invalid source payload');
         }
         const durationSec = typeof payload.durationSec === 'number' && payload.durationSec > 0 ? payload.durationSec : 0;
-        const maxGuests = payload.maxGuests ?? 4;
+        // Danger Zone re-enforcement: the 10-guest cap is main-process
+        // policy — a renderer payload can't lift it unless the unlock is on.
+        const requestedMaxGuests = payload.maxGuests ?? 4;
+        const maxGuests = getSettingValue('watchPartyMaxGuestsUnlocked')
+          ? requestedMaxGuests
+          : typeof requestedMaxGuests === 'number'
+            ? Math.min(requestedMaxGuests, 10)
+            : 10;
+        if (maxGuests !== requestedMaxGuests) {
+          watchPartyLogger.warn('ipc', `maxGuests ${String(requestedMaxGuests)} clamped to ${String(maxGuests)} — guest-limit unlock is off`);
+        }
         // 2160 is only honoured while the 4K-output Danger Zone toggle is
         // on — a stale or hand-crafted payload degrades to 1080.
         const qualityHeight =

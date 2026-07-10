@@ -31,35 +31,38 @@ interface Props {
 }
 
 function resolveImageSrc(item: BaseItemDto, isLandscape: boolean): string {
+  // Route image URLs to the server that owns the item — in combined mode
+  // this may not be the active server, whose URL would 404 for this id.
+  const sid = item.serverId;
   if (isLandscape) {
     if (item.Type === 'Episode') {
       if (item.ImageTags?.['Thumb']) {
-        return buildImageUrl(item.Id, 'Thumb', { maxWidth: 500, tag: item.ImageTags['Thumb'] });
+        return buildImageUrl(item.Id, 'Thumb', { maxWidth: 500, tag: item.ImageTags['Thumb'] }, sid);
       }
       if (item.ImageTags?.['Primary']) {
-        return buildImageUrl(item.Id, 'Primary', { maxWidth: 500, tag: item.ImageTags['Primary'] });
+        return buildImageUrl(item.Id, 'Primary', { maxWidth: 500, tag: item.ImageTags['Primary'] }, sid);
       }
       if (item.BackdropImageTags?.[0]) {
-        return buildImageUrl(item.Id, 'Backdrop', { maxWidth: 500, tag: item.BackdropImageTags[0] });
+        return buildImageUrl(item.Id, 'Backdrop', { maxWidth: 500, tag: item.BackdropImageTags[0] }, sid);
       }
       if (item.ParentThumbItemId && item.ParentThumbImageTag) {
-        return buildImageUrl(item.ParentThumbItemId, 'Thumb', { maxWidth: 500, tag: item.ParentThumbImageTag });
+        return buildImageUrl(item.ParentThumbItemId, 'Thumb', { maxWidth: 500, tag: item.ParentThumbImageTag }, sid);
       }
       if (item.SeriesId) {
-        return buildImageUrl(item.SeriesId, 'Primary', { maxWidth: 500 });
+        return buildImageUrl(item.SeriesId, 'Primary', { maxWidth: 500 }, sid);
       }
       return '';
     }
     if (item.BackdropImageTags?.[0]) {
-      return buildImageUrl(item.Id, 'Backdrop', { maxWidth: 500, tag: item.BackdropImageTags[0] });
+      return buildImageUrl(item.Id, 'Backdrop', { maxWidth: 500, tag: item.BackdropImageTags[0] }, sid);
     }
     if (item.ImageTags?.['Thumb']) {
-      return buildImageUrl(item.Id, 'Thumb', { maxWidth: 500, tag: item.ImageTags['Thumb'] });
+      return buildImageUrl(item.Id, 'Thumb', { maxWidth: 500, tag: item.ImageTags['Thumb'] }, sid);
     }
-    return buildImageUrl(item.Id, 'Primary', { maxWidth: 500, tag: item.ImageTags?.['Primary'] });
+    return buildImageUrl(item.Id, 'Primary', { maxWidth: 500, tag: item.ImageTags?.['Primary'] }, sid);
   }
 
-  return buildImageUrl(item.Id, 'Primary', { maxWidth: 300, tag: item.ImageTags?.['Primary'] });
+  return buildImageUrl(item.Id, 'Primary', { maxWidth: 300, tag: item.ImageTags?.['Primary'] }, sid);
 }
 
 export default function MediaCard({ item, orientation = 'portrait', onClick, onExternalClick }: Props) {

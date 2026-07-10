@@ -243,7 +243,7 @@ export default function LibraryPage() {
               <div className={styles.listThumb}>
                 {item.ImageTags?.['Primary'] ? (
                   <img
-                    src={buildImageUrl(item.Id, 'Primary', { maxWidth: 120, tag: item.ImageTags['Primary'] })}
+                    src={buildImageUrl(item.Id, 'Primary', { maxWidth: 120, tag: item.ImageTags['Primary'] }, item.serverId)}
                     alt=""
                     className={styles.listThumbImg}
                     loading="lazy"

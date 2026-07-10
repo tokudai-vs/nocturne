@@ -115,6 +115,10 @@ export default function DetailPage() {
   const navigate = useNavigate();
   const { play } = usePlay();
   const [item, setItem] = useState<BaseItemDto | null>(null);
+  // Owning server of the viewed item (from the cache row). In combined mode
+  // this can differ from the active server — every Emby call for this id
+  // must route there or it 404s silently.
+  const [itemServerId, setItemServerId] = useState<string | undefined>(undefined);
   const [similar, setSimilar] = useState<BaseItemDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [enriched, setEnriched] = useState(false);
@@ -212,11 +216,16 @@ export default function DetailPage() {
   const isEpisode = item?.Type === 'Episode';
   const isSeries = item?.Type === 'Series';
   const activeSeriesId: string | null = selectedVersionId ?? id ?? null;
+  // Server that owns the currently-active series version (version pill can
+  // switch to a copy on another server).
+  const activeSeriesServerId: string | undefined =
+    versions.find((v) => v.emby_id === activeSeriesId)?.server_id ?? itemServerId;
 
   useEffect(() => {
     if (!id) return;
     setLoading(true);
     setItem(null);
+    setItemServerId(undefined);
     setEnriched(false);
     setVersions([]);
     setSelectedVersionId(null);
@@ -235,8 +244,12 @@ export default function DetailPage() {
 
       // 1. Try SQLite cache for instant render of basic info
       const cacheRes = await window.api.cache.getItem(id);
+      let sid: string | undefined;
       if (cacheRes.success && cacheRes.data) {
-        const cached = cachedToBaseItem(cacheRes.data as CachedItem);
+        const cachedRow = cacheRes.data as CachedItem;
+        sid = cachedRow.server_id || undefined;
+        setItemServerId(sid);
+        const cached = cachedToBaseItem(cachedRow);
         setItem(cached);
         setIsFavorite(cached.UserData?.IsFavorite ?? false);
         setIsPlayed(cached.UserData?.Played ?? false);
@@ -257,10 +270,12 @@ export default function DetailPage() {
         }
       });
 
-      // 3. Fetch full item from Emby API for rich data (cast, media sources, etc.)
-      const res = await window.api.library.getItem(id);
+      // 3. Fetch full item from Emby API for rich data (cast, media sources,
+      //    etc.) — routed to the owning server; keep serverId on the merged
+      //    item since the Emby payload doesn't carry Nocturne's server id.
+      const res = await window.api.library.getItem(id, sid);
       if (res.success) {
-        const data = res.data as BaseItemDto;
+        const data = { ...(res.data as BaseItemDto), serverId: sid };
         setItem(data);
         setIsFavorite(data.UserData?.IsFavorite ?? false);
         setIsPlayed(data.UserData?.Played ?? false);
@@ -270,7 +285,7 @@ export default function DetailPage() {
       setLoading(false);
 
       // 4. Similar items in background
-      window.api.library.getSimilar(id).then((r) => {
+      window.api.library.getSimilar(id, sid).then((r) => {
         if (r.success) setSimilar((r.data as ItemsResult).Items);
       });
 
@@ -338,23 +353,25 @@ export default function DetailPage() {
     })();
   }, [item]);
 
-  // Seasons fetch — re-runs when active series changes (version pill click)
+  // Seasons fetch — re-runs when active series changes (version pill click).
+  // Routed to the server owning that series version; the active client 404s
+  // on foreign ids and this section silently rendered empty.
   useEffect(() => {
     if (!isSeries || !activeSeriesId) return;
-    window.api.library.getSeasons(activeSeriesId).then((sRes) => {
+    window.api.library.getSeasons(activeSeriesId, activeSeriesServerId).then((sRes) => {
       if (!sRes.success) return;
       const sList = (sRes.data as ItemsResult).Items;
       setSeasons(sList);
       const unwatched = sList.find((s) => !s.UserData?.Played);
       setSelectedSeasonId(unwatched?.Id ?? sList[0]?.Id ?? null);
     });
-  }, [activeSeriesId, isSeries]);
+  }, [activeSeriesId, activeSeriesServerId, isSeries]);
 
   // Episodes + per-episode dedup versions
   useEffect(() => {
     if (!selectedSeasonId || !isSeries || !activeSeriesId) return;
     setEpisodesLoading(true);
-    window.api.library.getEpisodes(activeSeriesId, selectedSeasonId).then((r) => {
+    window.api.library.getEpisodes(activeSeriesId, selectedSeasonId, activeSeriesServerId).then((r) => {
       if (r.success) setEpisodes((r.data as ItemsResult).Items);
       setEpisodesLoading(false);
     });
@@ -391,8 +408,10 @@ export default function DetailPage() {
     setIsFavorite(next);
     setFavBounce(true);
     setTimeout(() => setFavBounce(false), 250);
-    await window.api.user.updateFavorite(item.Id, next);
-  }, [item, isFavorite]);
+    // Cross-server-aware handler: routes to the owning server and keeps the
+    // local cache in sync (the legacy user.updateFavorite did neither).
+    await window.api.item.toggleFavorite({ itemId: item.Id, serverId: itemServerId, isFavorite: next });
+  }, [item, isFavorite, itemServerId]);
 
   const togglePlayed = useCallback(async () => {
     if (!item) return;
@@ -405,10 +424,10 @@ export default function DetailPage() {
     console.log(
       `[detail-page] Mark ${next ? 'Played' : 'Unplayed'} clicked, calling window.api.item.${next ? 'markPlayed' : 'markUnplayed'} for itemId=${item.Id}`,
     );
-    if (next) await window.api.item.markPlayed({ itemId: item.Id });
-    else await window.api.item.markUnplayed({ itemId: item.Id });
+    if (next) await window.api.item.markPlayed({ itemId: item.Id, serverId: itemServerId });
+    else await window.api.item.markUnplayed({ itemId: item.Id, serverId: itemServerId });
     if (next) setTraktDrift(false);
-  }, [item, isPlayed]);
+  }, [item, isPlayed, itemServerId]);
 
   const toggleWatchlist = useCallback(async () => {
     if (!item || watchlistBusy) return;
@@ -431,8 +450,8 @@ export default function DetailPage() {
     if (!item) return;
     setIsPlayed(true);
     setTraktDrift(false);
-    await window.api.item.markPlayed({ itemId: item.Id });
-  }, [item]);
+    await window.api.item.markPlayed({ itemId: item.Id, serverId: itemServerId });
+  }, [item, itemServerId]);
 
   const handlePlay = useCallback(async (target: BaseItemDto, serverId?: string) => {
     // Check for multiple media sources. serverId routes the lookup to the
@@ -484,9 +503,10 @@ export default function DetailPage() {
     if (siblings.length > 1) {
       setEpPickerSiblings(siblings);
     } else {
-      handlePlay(ep);
+      // Episodes were fetched from the active series version's server.
+      handlePlay(ep, activeSeriesServerId);
     }
-  }, [epVersionsByNumber, handlePlay]);
+  }, [epVersionsByNumber, handlePlay, activeSeriesServerId]);
 
   const handleEpisodeVersionPick = useCallback((sibling: CachedItem) => {
     setEpPickerSiblings(null);
@@ -512,19 +532,19 @@ export default function DetailPage() {
         <ArrowLeft size={20} />
       </button>
 
-      <HeroBackdrop itemId={backdropId} tag={backdropTag} backdropFallbacks={item.BackdropFallbacks} height="55vh">
+      <HeroBackdrop itemId={backdropId} tag={backdropTag} serverId={itemServerId} backdropFallbacks={item.BackdropFallbacks} height="55vh">
         <div className={styles.heroInner}>
           <div className={styles.poster}>
             {isEpisode ? (
               <img
-                src={buildImageUrl(item.Id, item.ImageTags?.['Primary'] ? 'Primary' : 'Thumb', { maxWidth: 400, tag: item.ImageTags?.['Primary'] ?? item.ImageTags?.['Thumb'] })}
+                src={buildImageUrl(item.Id, item.ImageTags?.['Primary'] ? 'Primary' : 'Thumb', { maxWidth: 400, tag: item.ImageTags?.['Primary'] ?? item.ImageTags?.['Thumb'] }, itemServerId)}
                 alt={item.Name}
                 className={styles.posterImg}
                 style={{ aspectRatio: '16/9', borderRadius: 8 }}
               />
             ) : (
               <img
-                src={buildImageUrl(item.Id, 'Primary', { maxWidth: 400, tag: item.ImageTags?.['Primary'] })}
+                src={buildImageUrl(item.Id, 'Primary', { maxWidth: 400, tag: item.ImageTags?.['Primary'] }, itemServerId)}
                 alt={item.Name}
                 className={styles.posterImg}
               />
@@ -732,6 +752,7 @@ export default function DetailPage() {
                   <EpisodeRow
                     key={ep.Id}
                     episode={ep}
+                    serverId={activeSeriesServerId}
                     versions={epVersionsByNumber.get(ep.IndexNumber ?? -1) ?? []}
                     navigate={navigate}
                     onPlay={() => handleEpisodePlay(ep)}
@@ -785,8 +806,9 @@ export default function DetailPage() {
 
 // ── Sub-components ──────────────────────────────────────
 
-function EpisodeRow({ episode, versions, navigate, onPlay }: {
+function EpisodeRow({ episode, serverId, versions, navigate, onPlay }: {
   episode: BaseItemDto;
+  serverId?: string;
   versions: CachedItem[];
   navigate: (path: string) => void;
   onPlay: () => void;
@@ -796,9 +818,9 @@ function EpisodeRow({ episode, versions, navigate, onPlay }: {
   const played = episode.UserData?.Played ?? false;
 
   const thumbSrc = episode.ImageTags?.['Primary']
-    ? buildImageUrl(episode.Id, 'Primary', { maxWidth: 400, tag: episode.ImageTags['Primary'] })
+    ? buildImageUrl(episode.Id, 'Primary', { maxWidth: 400, tag: episode.ImageTags['Primary'] }, serverId)
     : episode.ImageTags?.['Thumb']
-      ? buildImageUrl(episode.Id, 'Thumb', { maxWidth: 400, tag: episode.ImageTags['Thumb'] })
+      ? buildImageUrl(episode.Id, 'Thumb', { maxWidth: 400, tag: episode.ImageTags['Thumb'] }, serverId)
       : '';
 
   return (

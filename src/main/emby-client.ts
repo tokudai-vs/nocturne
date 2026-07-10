@@ -363,6 +363,42 @@ class EmbyClient {
     return data;
   }
 
+  async getItemForServer(serverUrl: string, token: string, userId: string, itemId: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/${userId}/Items/${itemId}`;
+    const { data } = await this.standalone.get(url, {
+      headers: this.standaloneHeaders(token),
+      params: { Fields: ITEM_FIELDS },
+    });
+    return data;
+  }
+
+  async getSimilarForServer(serverUrl: string, token: string, userId: string, itemId: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Items/${itemId}/Similar`;
+    const { data } = await this.standalone.get(url, {
+      headers: this.standaloneHeaders(token),
+      params: { UserId: userId, Limit: 12 },
+    });
+    return data;
+  }
+
+  async getSeasonsForServer(serverUrl: string, token: string, userId: string, seriesId: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Shows/${seriesId}/Seasons`;
+    const { data } = await this.standalone.get(url, {
+      headers: this.standaloneHeaders(token),
+      params: { UserId: userId, Fields: ITEM_FIELDS_LIGHT },
+    });
+    return data;
+  }
+
+  async getEpisodesForServer(serverUrl: string, token: string, userId: string, seriesId: string, seasonId: string) {
+    const url = `${serverUrl.replace(/\/+$/, '')}/emby/Shows/${seriesId}/Episodes`;
+    const { data } = await this.standalone.get(url, {
+      headers: this.standaloneHeaders(token),
+      params: { UserId: userId, SeasonId: seasonId, Fields: ITEM_FIELDS },
+    });
+    return data;
+  }
+
   async getLatestItemsForServer(serverUrl: string, token: string, userId: string, parentId: string, limit = 20) {
     const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/${userId}/Items/Latest`;
     const { data } = await this.standalone.get(url, {

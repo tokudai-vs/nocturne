@@ -86,7 +86,6 @@ app.on('before-quit', (e) => {
   if (updateCheckInterval) clearInterval(updateCheckInterval);
   syncEngine.cancel();
   traktSync.stopTimers();
-  closeDatabase();
   // Tear down any in-flight Watch Party so ffmpeg + cloudflared don't
   // outlive the app (including the "host closed the window during the
   // 10s end-grace countdown" path — main still has LIVE state then).
@@ -94,10 +93,20 @@ app.on('before-quit', (e) => {
   // teardown is already mid-flight (host clicked End and quit immediately),
   // returns that same promise so we wait for the children to die instead
   // of app.exit() orphaning them.
+  // The DB closes AFTER the teardown settles — the Watch Party stop path
+  // writes final playback state to the cache, and closing first made that
+  // write throw mid-teardown.
   const wpTeardown = watchPartySessionManager
     .endSession('error', 'App quitting')
     .catch((err) => {
       console.warn('[main] watchparty teardown on quit failed:', err);
     });
-  Promise.allSettled([mpvManager.quit(), wpTeardown]).finally(() => app.exit());
+  Promise.allSettled([mpvManager.quit(), wpTeardown]).finally(() => {
+    try {
+      closeDatabase();
+    } catch (err) {
+      console.warn('[main] closeDatabase on quit failed:', err);
+    }
+    app.exit();
+  });
 });

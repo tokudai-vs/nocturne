@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { embyClient } from './emby-client';
 import {
   upsertItems,
+  upsertItemsPreservingLibrary,
   getSyncState,
   setSyncState,
   deleteSyncState,
@@ -446,7 +447,7 @@ class SyncEngine extends EventEmitter {
           () => embyClient.getResumeItems(), 3, `getResumeItems[${serverName}]`
         ) as { Items: Record<string, unknown>[] };
         if (resumeResult.Items.length > 0) {
-          upsertItems(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
+          upsertItemsPreservingLibrary(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
           log(`fullSyncSingleServer[${serverName}]: refreshed ${resumeResult.Items.length} resume items`);
         }
       } catch (err) {
@@ -554,7 +555,7 @@ class SyncEngine extends EventEmitter {
         () => embyClient.getResumeItems(), 3, 'getResumeItems'
       ) as { Items: Record<string, unknown>[] };
       if (resumeResult.Items.length > 0) {
-        upsertItems(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
+        upsertItemsPreservingLibrary(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
         log(`fullSyncCurrentServer: refreshed ${resumeResult.Items.length} resume items`);
       }
     } catch (err) {
@@ -795,6 +796,7 @@ class SyncEngine extends EventEmitter {
 
   private async incrementalSyncAllServers(lastSync: string): Promise<void> {
     const servers = serverManager.getServers();
+    const failedServers: string[] = [];
 
     for (const server of servers) {
       if (this.cancelled) return;
@@ -817,12 +819,13 @@ class SyncEngine extends EventEmitter {
         try {
           const resumeResult = await this.fetchWithRetry(() => embyClient.getResumeItems(), 3, `getResumeItems[${server.name}]`) as { Items: Record<string, unknown>[] };
           if (resumeResult.Items.length > 0) {
-            upsertItems(resumeResult.Items, server.id, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
+            upsertItemsPreservingLibrary(resumeResult.Items, server.id, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
           }
         } catch {
           // Non-critical — continue with other servers
         }
       } catch {
+        failedServers.push(server.name);
         this.emit('server-error', { serverId: server.id, serverName: server.name, message: `Couldn't reach ${server.name}` });
       } finally {
         embyClient.popContext();
@@ -831,7 +834,15 @@ class SyncEngine extends EventEmitter {
 
     if (this.cancelled) return;
 
-    setSyncState('lastFullSync', new Date().toISOString());
+    // Only advance the incremental watermark when every server was reachable.
+    // Advancing it past a failed server would permanently skip everything
+    // that changed on that server during the outage (MinDateLastSaved filters
+    // against this timestamp) until the user runs a manual full sync.
+    if (failedServers.length > 0) {
+      log(`incrementalSyncAllServers: ${failedServers.join(', ')} failed — keeping lastFullSync=${lastSync} so the next run re-covers the gap`);
+    } else {
+      setSyncState('lastFullSync', new Date().toISOString());
+    }
     this.emit('complete');
 
     // Skip dedup on incremental sync — duplicates are rare at this scale. User
@@ -858,7 +869,7 @@ class SyncEngine extends EventEmitter {
     try {
       const resumeResult = await this.fetchWithRetry(() => embyClient.getResumeItems(), 3, 'getResumeItems') as { Items: Record<string, unknown>[] };
       if (resumeResult.Items.length > 0) {
-        upsertItems(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
+        upsertItemsPreservingLibrary(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
       }
     } catch {
       // Non-critical

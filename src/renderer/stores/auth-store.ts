@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { EmbyServerInfo, EmbyUser, AuthResult, ServerConfig } from '../api/types';
+import { refreshImageServerMap } from '../utils/image-url';
 
 interface AuthState {
   serverUrl: string | null;
@@ -65,6 +66,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isAuthenticated: true,
         isConnecting: false,
       });
+      void refreshImageServerMap();
       return true;
     }
     set({ isConnecting: false, error: res.error ?? 'Login failed' });
@@ -103,6 +105,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           activeServerId: server.id,
           isAuthenticated: true,
         });
+        void refreshImageServerMap();
         return true;
       }
     } catch {
@@ -130,6 +133,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           isAuthenticated: true,
           isConnecting: false,
         });
+        void refreshImageServerMap();
         return true;
       }
     }

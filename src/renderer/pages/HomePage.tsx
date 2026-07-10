@@ -250,12 +250,15 @@ export default function HomePage() {
     ? virtualLibraries.map((v) => ({ id: v.id, name: v.name }))
     : views.map((v) => ({ id: v.Id, name: v.Name }));
 
+  // Pass the item's owning serverId so playback-info + stream resolution
+  // route to the right server — cache rows and all-servers resume rows can
+  // belong to a non-active server in combined mode.
   const handlePlayHero = () => {
-    if (hero) play(hero);
+    if (hero) play(hero, undefined, hero.serverId);
   };
 
   const handleContinueWatchingClick = (item: BaseItemDto) => {
-    play(item);
+    play(item, undefined, item.serverId);
   };
 
   return (
@@ -273,7 +276,7 @@ export default function HomePage() {
         <div className={styles.hero}>
           <div className={styles.heroBackdrop}>
             <img
-              src={buildImageUrl(hero.Id, 'Backdrop', { maxWidth: 1920, tag: hero.BackdropImageTags?.[0] })}
+              src={buildImageUrl(hero.Id, 'Backdrop', { maxWidth: 1920, tag: hero.BackdropImageTags?.[0] }, hero.serverId)}
               alt=""
               className={`${styles.heroImg} ${heroImgLoaded ? styles.heroImgLoaded : ''}`}
               key={hero.Id}

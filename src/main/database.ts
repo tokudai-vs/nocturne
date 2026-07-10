@@ -390,6 +390,39 @@ export function getItem(embyId: string): ItemRow | undefined {
   return getDb().prepare('SELECT * FROM items WHERE emby_id = ?').get(embyId) as ItemRow | undefined;
 }
 
+/**
+ * Upsert items whose true library is unknown to the caller (the sync engine's
+ * /Items/Resume refresh has no library context). For rows already cached, the
+ * existing library_id/library_name is preserved — blindly upserting under a
+ * fallback library reassigned every resumable item to the server's first
+ * library, corrupting library views and dedup's per-library duplicate scan.
+ */
+export function upsertItemsPreservingLibrary(
+  items: Record<string, unknown>[],
+  serverId: string,
+  fallbackLibraryId: string,
+  fallbackLibraryName?: string,
+): void {
+  const d = getDb();
+  const lookup = d.prepare('SELECT library_id, library_name FROM items WHERE emby_id = ?');
+  const stmt = d.prepare(UPSERT_SQL);
+  const tx = d.transaction((batch: Record<string, unknown>[]) => {
+    for (const item of batch) {
+      const existing = lookup.get((item as { Id?: string }).Id) as
+        | { library_id: string; library_name: string | null }
+        | undefined;
+      const row = mapEmbyItem(
+        item,
+        serverId,
+        existing?.library_id ?? fallbackLibraryId,
+        existing?.library_name ?? fallbackLibraryName ?? undefined,
+      );
+      stmt.run(row);
+    }
+  });
+  tx(items);
+}
+
 export function getItems(filters: ItemFilters = {}): { items: ItemRow[]; total: number } {
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -438,11 +471,16 @@ export function getResumeItemsDeduped(limit = 12): ItemRow[] {
   // highest playback_position_ticks (the version the user is actually resuming) —
   // NOT the dedup group's "primary" (which may be an untouched 4K copy).
   // Items without a dedup group are returned directly if they have playback progress.
+  // played = 0 everywhere: a played row with stale ticks is a finished item, not
+  // a resumable one, and must neither appear nor win the group MAX.
+  // Ordered by when the user last played — cached_at is sync recency, which
+  // reshuffled the row after every sync.
   return getDb()
     .prepare(`
       SELECT i.*
       FROM items i
       WHERE i.playback_position_ticks > 0
+        AND i.played = 0
         AND (
           i.dedup_group_id IS NULL
           OR i.dedup_group_id = ''
@@ -450,10 +488,11 @@ export function getResumeItemsDeduped(limit = 12): ItemRow[] {
             SELECT MAX(i2.playback_position_ticks)
             FROM items i2
             WHERE i2.dedup_group_id = i.dedup_group_id
+              AND i2.played = 0
           )
         )
       GROUP BY COALESCE(NULLIF(i.dedup_group_id, ''), i.emby_id)
-      ORDER BY i.cached_at DESC
+      ORDER BY COALESCE(i.last_played_date, i.cached_at) DESC
       LIMIT ?
     `)
     .all(limit) as ItemRow[];

@@ -488,13 +488,13 @@ declare global {
       library: {
         getViews: () => Promise<IpcResponse<ItemsResult>>;
         getItems: (parentId: string, params?: Record<string, unknown>) => Promise<IpcResponse<ItemsResult>>;
-        getItem: (itemId: string) => Promise<IpcResponse<BaseItemDto>>;
+        getItem: (itemId: string, serverId?: string) => Promise<IpcResponse<BaseItemDto>>;
         getLatest: (parentId: string, limit?: number) => Promise<IpcResponse<BaseItemDto[]>>;
         getResume: () => Promise<IpcResponse<ItemsResult>>;
         getNextUp: () => Promise<IpcResponse<ItemsResult>>;
-        getSimilar: (itemId: string) => Promise<IpcResponse<ItemsResult>>;
-        getSeasons: (seriesId: string) => Promise<IpcResponse<ItemsResult>>;
-        getEpisodes: (seriesId: string, seasonId: string) => Promise<IpcResponse<ItemsResult>>;
+        getSimilar: (itemId: string, serverId?: string) => Promise<IpcResponse<ItemsResult>>;
+        getSeasons: (seriesId: string, serverId?: string) => Promise<IpcResponse<ItemsResult>>;
+        getEpisodes: (seriesId: string, seasonId: string, serverId?: string) => Promise<IpcResponse<ItemsResult>>;
         getAllServersViews: () => Promise<IpcResponse<{
           views: Array<{ Id: string; Name: string; Type: string; serverId: string; serverName: string }>;
           errors: Array<{ serverId: string; serverName: string; reason: 'offline' | 'auth-expired' }>;

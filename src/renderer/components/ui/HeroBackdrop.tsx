@@ -10,19 +10,21 @@ const KNOWN_BAD_BACKDROP_URLS = new Set<string>();
 interface Props {
   itemId: string;
   tag?: string;
+  /** Owning server of the item — combined mode items can live off-active. */
+  serverId?: string;
   /** Dedup-sibling backdrop URLs cycled when the primary fails. */
   backdropFallbacks?: string[];
   height?: string;
   children?: React.ReactNode;
 }
 
-export default function HeroBackdrop({ itemId, tag, backdropFallbacks, height = '55vh', children }: Props) {
+export default function HeroBackdrop({ itemId, tag, serverId, backdropFallbacks, height = '55vh', children }: Props) {
   const chain = useMemo(() => {
-    const primary = buildImageUrl(itemId, 'Backdrop', { maxWidth: 1920, tag });
+    const primary = buildImageUrl(itemId, 'Backdrop', { maxWidth: 1920, tag }, serverId);
     const all = (primary ? [primary, ...(backdropFallbacks ?? [])] : (backdropFallbacks ?? []))
       .filter((u) => u && !KNOWN_BAD_BACKDROP_URLS.has(u));
     return all;
-  }, [itemId, tag, backdropFallbacks]);
+  }, [itemId, tag, serverId, backdropFallbacks]);
 
   const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState(false);

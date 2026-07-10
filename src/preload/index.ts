@@ -23,17 +23,18 @@ const api = {
     getViews: () => ipcRenderer.invoke('emby:library:get-views'),
     getItems: (parentId: string, params?: Record<string, unknown>) =>
       ipcRenderer.invoke('emby:library:get-items', { parentId, params }),
-    getItem: (itemId: string) => ipcRenderer.invoke('emby:library:get-item', { itemId }),
+    getItem: (itemId: string, serverId?: string) =>
+      ipcRenderer.invoke('emby:library:get-item', { itemId, serverId }),
     getLatest: (parentId: string, limit?: number) =>
       ipcRenderer.invoke('emby:library:get-latest', { parentId, limit }),
     getResume: () => ipcRenderer.invoke('emby:library:get-resume'),
     getNextUp: () => ipcRenderer.invoke('emby:library:get-nextup'),
-    getSimilar: (itemId: string) =>
-      ipcRenderer.invoke('emby:library:get-similar', { itemId }),
-    getSeasons: (seriesId: string) =>
-      ipcRenderer.invoke('emby:library:get-seasons', { seriesId }),
-    getEpisodes: (seriesId: string, seasonId: string) =>
-      ipcRenderer.invoke('emby:library:get-episodes', { seriesId, seasonId }),
+    getSimilar: (itemId: string, serverId?: string) =>
+      ipcRenderer.invoke('emby:library:get-similar', { itemId, serverId }),
+    getSeasons: (seriesId: string, serverId?: string) =>
+      ipcRenderer.invoke('emby:library:get-seasons', { seriesId, serverId }),
+    getEpisodes: (seriesId: string, seasonId: string, serverId?: string) =>
+      ipcRenderer.invoke('emby:library:get-episodes', { seriesId, seasonId, serverId }),
     getAllServersViews: () => ipcRenderer.invoke('libraries:get-all-servers-views'),
     getAllServersLatest: (limit?: number) =>
       ipcRenderer.invoke('libraries:get-all-servers-latest', { limit }),
