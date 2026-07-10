@@ -591,22 +591,72 @@ export function registerIpcHandlers(): void {
   );
 
   // ── Item actions (cross-server aware) ─────────────────
+  // The user sees ONE deduped item, so an explicit mark cascades through the
+  // whole dedup group (every copy on every server) and pushes to Trakt exactly
+  // once for the clicked item. The clicked item is strict: its server call must
+  // succeed or the whole handler fails with no cache writes; siblings are
+  // best-effort. Each target routes by its OWN cached server_id — the cache is
+  // authoritative for ownership, so never route a sibling by the requested
+  // item's server or the active server.
   ipcMain.handle('item:mark-played', async (_, { itemId, serverId }: { itemId: string; serverId?: string }) => {
     console.log(`[item:mark-played] handler entry, itemId=${itemId}, serverId=${serverId ?? '-'}`);
     try {
-      const activeServer = serverManager.getActiveServer();
-      if (!serverId || serverId === activeServer?.id) {
-        await embyClient.markPlayed(itemId);
-      } else {
-        const server = serverManager.getServer(serverId);
-        if (server) {
-          await embyClient.markPlayedOnServer(server.url, server.accessToken, server.userId, itemId);
+      const targets = dbGetResumeClearTargets(itemId);
+
+      // Not in cache at all — fall back to today's single-item behavior,
+      // routing by the renderer-provided serverId.
+      if (targets.length === 0) {
+        const activeServer = serverManager.getActiveServer();
+        if (!serverId || serverId === activeServer?.id) {
+          await embyClient.markPlayed(itemId);
+        } else {
+          const server = serverManager.getServer(serverId);
+          if (server) {
+            await embyClient.markPlayedOnServer(server.url, server.accessToken, server.userId, itemId);
+          }
         }
+        updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0, last_played_date: new Date().toISOString() });
+        console.log(`[trakt-history-push] handler dispatching pushHistoryAdd for ${itemId}`);
+        void traktSync.pushHistoryAdd(itemId);
+        return ok(undefined);
       }
-      updateItemUserData(itemId, { played: 1, playback_position_ticks: 0, played_percentage: 0, last_played_date: new Date().toISOString() });
-      // Push to Trakt (silent no-op if not connected / sync disabled).
-      // Cross-server cascade is naturally deduped on Trakt's side via tmdb id.
-      // Fire-and-forget so the IPC response isn't gated on Trakt's RTT.
+
+      // Requested item first so its strict server call runs before any cache write.
+      const ordered = [...targets.filter((t) => t.emby_id === itemId), ...targets.filter((t) => t.emby_id !== itemId)];
+      if (targets.length > 1) {
+        console.log(`[item:mark-played] cascading to ${targets.length} group member(s)`);
+      }
+      const activeServer = serverManager.getActiveServer();
+
+      const markPlayedOnTarget = async (t: { emby_id: string; server_id: string }) => {
+        if (t.server_id === activeServer?.id) {
+          await embyClient.markPlayed(t.emby_id);
+        } else {
+          const server = serverManager.getServer(t.server_id);
+          if (server) {
+            await embyClient.markPlayedOnServer(server.url, server.accessToken, server.userId, t.emby_id);
+          }
+        }
+      };
+
+      for (const t of ordered) {
+        if (t.emby_id === itemId) {
+          // Strict: preserve today's error contract for the clicked item —
+          // any throw aborts before this or any sibling touches the cache.
+          await markPlayedOnTarget(t);
+        } else {
+          try {
+            await markPlayedOnTarget(t);
+          } catch (err) {
+            console.warn(`[item:mark-played] cascade ${t.server_id}/${t.emby_id} failed:`, err);
+          }
+        }
+        updateItemUserData(t.emby_id, { played: 1, playback_position_ticks: 0, played_percentage: 0, last_played_date: new Date().toISOString() });
+      }
+
+      // Exactly one Trakt push for the originally requested item (Trakt dedupes
+      // cross-server copies by tmdb). Fire-and-forget so the IPC response isn't
+      // gated on Trakt's RTT.
       console.log(`[trakt-history-push] handler dispatching pushHistoryAdd for ${itemId}`);
       void traktSync.pushHistoryAdd(itemId);
       return ok(undefined);
@@ -617,16 +667,59 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('item:mark-unplayed', async (_, { itemId, serverId }: { itemId: string; serverId?: string }) => {
     try {
-      const activeServer = serverManager.getActiveServer();
-      if (!serverId || serverId === activeServer?.id) {
-        await embyClient.markUnplayed(itemId);
-      } else {
-        const server = serverManager.getServer(serverId);
-        if (server) {
-          await embyClient.markUnplayedOnServer(server.url, server.accessToken, server.userId, itemId);
+      const targets = dbGetResumeClearTargets(itemId);
+
+      // Not in cache at all — fall back to today's single-item behavior,
+      // routing by the renderer-provided serverId.
+      if (targets.length === 0) {
+        const activeServer = serverManager.getActiveServer();
+        if (!serverId || serverId === activeServer?.id) {
+          await embyClient.markUnplayed(itemId);
+        } else {
+          const server = serverManager.getServer(serverId);
+          if (server) {
+            await embyClient.markUnplayedOnServer(server.url, server.accessToken, server.userId, itemId);
+          }
         }
+        updateItemUserData(itemId, { played: 0, play_count: 0 });
+        void traktSync.pushHistoryRemove(itemId);
+        return ok(undefined);
       }
-      updateItemUserData(itemId, { played: 0, play_count: 0 });
+
+      // Requested item first so its strict server call runs before any cache write.
+      const ordered = [...targets.filter((t) => t.emby_id === itemId), ...targets.filter((t) => t.emby_id !== itemId)];
+      if (targets.length > 1) {
+        console.log(`[item:mark-unplayed] cascading to ${targets.length} group member(s)`);
+      }
+      const activeServer = serverManager.getActiveServer();
+
+      const markUnplayedOnTarget = async (t: { emby_id: string; server_id: string }) => {
+        if (t.server_id === activeServer?.id) {
+          await embyClient.markUnplayed(t.emby_id);
+        } else {
+          const server = serverManager.getServer(t.server_id);
+          if (server) {
+            await embyClient.markUnplayedOnServer(server.url, server.accessToken, server.userId, t.emby_id);
+          }
+        }
+      };
+
+      for (const t of ordered) {
+        if (t.emby_id === itemId) {
+          // Strict: preserve today's error contract for the clicked item —
+          // any throw aborts before this or any sibling touches the cache.
+          await markUnplayedOnTarget(t);
+        } else {
+          try {
+            await markUnplayedOnTarget(t);
+          } catch (err) {
+            console.warn(`[item:mark-unplayed] cascade ${t.server_id}/${t.emby_id} failed:`, err);
+          }
+        }
+        updateItemUserData(t.emby_id, { played: 0, play_count: 0 });
+      }
+
+      // Exactly one Trakt push for the originally requested item.
       void traktSync.pushHistoryRemove(itemId);
       return ok(undefined);
     } catch (e) {
