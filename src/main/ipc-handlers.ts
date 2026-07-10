@@ -1796,6 +1796,17 @@ export function registerIpcHandlers(): void {
     const w = getMainWindow();
     if (w && !w.isDestroyed()) w.webContents.send('sync:error', { message: err.message });
   });
+  syncEngine.on('server-error', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('sync:server-error', data);
+  });
+  // 'partial' is a full sync that finished its pass with >=1 failed server —
+  // it does NOT emit 'complete'. Without this forward the renderer's running
+  // flag never clears: the ring sticks and the failure chip can't render.
+  syncEngine.on('partial', (data) => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.webContents.send('sync:partial', data);
+  });
   syncEngine.on('dedup-complete', (result: { groupsCreated: number; itemsMerged: number }) => {
     invalidateTraktWatchlistCache();
     const w = getMainWindow();

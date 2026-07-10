@@ -167,6 +167,7 @@ export interface SyncStatus {
   dedupStatus: 'never' | 'in-progress' | 'complete' | 'failed';
   lastDedupBuild: string | null;
   dedupRunning: boolean;
+  serverHealth: Record<string, { serverName: string; status: 'ok' | 'failed'; at: string; message?: string }>;
 }
 
 // Cache types
@@ -556,6 +557,8 @@ declare global {
         onProgress: (cb: (data: SyncProgress) => void) => () => void;
         onComplete: (cb: () => void) => () => void;
         onError: (cb: (err: { message: string }) => void) => () => void;
+        onServerError: (cb: (data: { serverId: string; serverName: string; message: string }) => void) => () => void;
+        onPartial: (cb: () => void) => () => void;
       };
       cache: {
         getItem: (itemId: string) => Promise<IpcResponse<CachedItem>>;

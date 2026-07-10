@@ -125,6 +125,16 @@ const api = {
       ipcRenderer.on('sync:error', handler);
       return () => ipcRenderer.removeListener('sync:error', handler);
     },
+    onServerError: (cb: (data: { serverId: string; serverName: string; message: string }) => void) => {
+      const handler = (_: unknown, data: { serverId: string; serverName: string; message: string }) => cb(data);
+      ipcRenderer.on('sync:server-error', handler);
+      return () => ipcRenderer.removeListener('sync:server-error', handler);
+    },
+    onPartial: (cb: () => void) => {
+      const handler = () => cb();
+      ipcRenderer.on('sync:partial', handler);
+      return () => ipcRenderer.removeListener('sync:partial', handler);
+    },
   },
   cache: {
     getItem: (itemId: string) => ipcRenderer.invoke('cache:get-item', { itemId }),

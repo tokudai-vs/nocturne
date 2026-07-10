@@ -25,6 +25,17 @@
   display: block;
 }
 
+.warnChip {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent, #e8a851);
+}
+
 .trackCircle {
   fill: rgba(0, 0, 0, 0.6);
 }

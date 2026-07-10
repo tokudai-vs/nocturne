@@ -24,6 +24,13 @@ export interface SyncProgress {
   percent: number;
 }
 
+export interface ServerSyncHealthEntry {
+  serverName: string;
+  status: 'ok' | 'failed';
+  at: string;
+  message?: string;
+}
+
 export interface SyncStatus {
   running: boolean;
   phase: string | null;
@@ -34,6 +41,7 @@ export interface SyncStatus {
   dedupStatus: 'never' | 'in-progress' | 'complete' | 'failed';
   lastDedupBuild: string | null;
   dedupRunning: boolean;
+  serverHealth: Record<string, ServerSyncHealthEntry>;
 }
 
 export interface DedupRunOutcome {
@@ -101,7 +109,62 @@ class SyncEngine extends EventEmitter {
       dedupStatus,
       lastDedupBuild: getSyncState('lastDedupBuild'),
       dedupRunning: this.dedupRunning,
+      serverHealth: this.readServerHealth(),
     };
+  }
+
+  // Per-server sync health, keyed by serverId. Read tolerates a missing or
+  // corrupt value (→ {}) so a bad row never blocks getStatus. Entries for
+  // servers that have since been removed from the app are dropped — without
+  // this, a stale 'failed' row would show a permanent, unresolvable warning
+  // chip (and the next recordServerHealth write purges them from disk too,
+  // since it merges into this filtered view).
+  private readServerHealth(): Record<string, ServerSyncHealthEntry> {
+    const raw = getSyncState('serverSyncHealth');
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+      const knownIds = new Set(serverManager.getServers().map((s) => s.id));
+      const filtered: Record<string, ServerSyncHealthEntry> = {};
+      for (const [serverId, entry] of Object.entries(parsed as Record<string, ServerSyncHealthEntry>)) {
+        // Shape guard alongside the known-server filter: a corrupt entry
+        // must not reach the renderer as `undefined` chip text.
+        if (
+          knownIds.has(serverId) &&
+          entry && typeof entry.serverName === 'string' &&
+          (entry.status === 'ok' || entry.status === 'failed')
+        ) {
+          filtered[serverId] = entry;
+        }
+      }
+      return filtered;
+    } catch {
+      return {};
+    }
+  }
+
+  // Merge one server's outcome into the persisted health map. Wrapped so health
+  // bookkeeping can never throw out of a sync. An 'ok' entry carries no message,
+  // which is how a later success clears a prior failure in the renderer.
+  private recordServerHealth(
+    serverId: string,
+    serverName: string,
+    status: 'ok' | 'failed',
+    message?: string,
+  ): void {
+    try {
+      const health = this.readServerHealth();
+      health[serverId] = {
+        serverName,
+        status,
+        at: new Date().toISOString(),
+        ...(message ? { message } : {}),
+      };
+      setSyncState('serverSyncHealth', JSON.stringify(health));
+    } catch (err) {
+      log('recordServerHealth: failed to persist', err);
+    }
   }
 
   /**
@@ -271,6 +334,13 @@ class SyncEngine extends EventEmitter {
       }
     } catch (err) {
       log('startFullSync: unhandled error', err);
+      // Attribute to the active server only in single-server mode — in
+      // combined mode the per-server loop records its own outcomes, and a
+      // loop-level crash here can't be pinned on any one server.
+      const active = serverManager.getActiveServer();
+      if (active && !serverManager.isCombinedMode()) {
+        this.recordServerHealth(active.id, active.name, 'failed', err instanceof Error ? err.message : String(err));
+      }
       this.emit('error', err instanceof Error ? err : new Error(String(err)));
     } finally {
       this.running = false;
@@ -317,10 +387,14 @@ class SyncEngine extends EventEmitter {
       } catch (err) {
         const e = err as { message?: string };
         const isValidation = e?.message?.includes('reach');
+        const message = `Couldn't sync ${server.name}`;
         log(`fullSyncAllServers: server ${server.name} FAILED — ${e?.message ?? 'unknown'}`);
         this.emitProgress('servers', sIdx + 1, servers.length,
           `Skipped ${server.name} (${isValidation ? 'unreachable' : 'sync failed'})`);
-        this.emit('server-error', { serverId: server.id, serverName: server.name, message: `Couldn't sync ${server.name}` });
+        // Persist health before emitting so any listener that reacts to the
+        // event by pulling getStatus reads the post-failure map.
+        this.recordServerHealth(server.id, server.name, 'failed', message);
+        this.emit('server-error', { serverId: server.id, serverName: server.name, message });
         failedServers.push({ serverId: server.id, serverName: server.name });
       } finally {
         // Always restore original server context
@@ -330,6 +404,7 @@ class SyncEngine extends EventEmitter {
       // Advance server checkpoint only on genuine success (or deliberate user cancel).
       // Never advance past a failed server — next run should retry it.
       if (serverSucceeded) {
+        this.recordServerHealth(server.id, server.name, 'ok');
         this.saveCheckpoint({ phase: 10, libraryIndex: 0, startIndex: 0, seriesIndex: sIdx + 1 }, 'syncCheckpoint_servers');
         log(`fullSyncAllServers: advanced server checkpoint past ${server.name}`);
       }
@@ -598,6 +673,8 @@ class SyncEngine extends EventEmitter {
     setSyncState('lastFullSync', new Date().toISOString());
     setSyncState('lastItemCount', String(totalItemsFetched));
     setSyncState('syncStatus', 'complete');
+    const activeServer = serverManager.getActiveServer();
+    if (activeServer) this.recordServerHealth(activeServer.id, activeServer.name, 'ok');
     this.clearCheckpoint();
     this.emit('complete');
 
@@ -810,6 +887,11 @@ class SyncEngine extends EventEmitter {
         await this.incrementalSyncCurrentServer(lastSync);
       }
     } catch (err) {
+      // Single-server attribution only — see startFullSync's catch.
+      const active = serverManager.getActiveServer();
+      if (active && !serverManager.isCombinedMode()) {
+        this.recordServerHealth(active.id, active.name, 'failed', err instanceof Error ? err.message : String(err));
+      }
       this.emit('error', err instanceof Error ? err : new Error(String(err)));
     } finally {
       this.running = false;
@@ -857,9 +939,13 @@ class SyncEngine extends EventEmitter {
         } catch {
           // Non-critical — continue with other servers
         }
+        this.recordServerHealth(server.id, server.name, 'ok');
       } catch {
+        const message = `Couldn't reach ${server.name}`;
         failedServers.push(server.name);
-        this.emit('server-error', { serverId: server.id, serverName: server.name, message: `Couldn't reach ${server.name}` });
+        // Persist health before emitting (see fullSyncAllServers).
+        this.recordServerHealth(server.id, server.name, 'failed', message);
+        this.emit('server-error', { serverId: server.id, serverName: server.name, message });
       } finally {
         embyClient.popContext();
       }
@@ -918,6 +1004,8 @@ class SyncEngine extends EventEmitter {
     }
 
     setSyncState('lastFullSync', new Date().toISOString());
+    const activeServer = serverManager.getActiveServer();
+    if (activeServer) this.recordServerHealth(activeServer.id, activeServer.name, 'ok');
     this.emit('complete');
 
     // Skip dedup on incremental sync — duplicates are rare at this scale. User

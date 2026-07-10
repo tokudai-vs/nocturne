@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { useSyncStore } from '../../stores/sync-store';
+import { useToastStore } from '../../stores/toast-store';
 import type { SyncProgress as SyncProgressData, SyncStatus } from '../../api/types';
 import styles from './SyncProgress.module.css';
 
@@ -7,9 +9,16 @@ const SIZE = 40;
 const RADIUS = 17;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
+// Which servers have already toasted this app session. Module-level so the
+// "Couldn't sync X" toast fires at most once per server per launch, no matter
+// how many times the component remounts.
+const toastedServers = new Set<string>();
+
 export default function SyncProgress() {
-  const { running, progress, completed, setProgress, setComplete, setError } = useSyncStore();
+  const { running, progress, completed, serverErrors, setProgress, setComplete, setPartial, setError, setServerError } =
+    useSyncStore();
   const setStatus = useSyncStore((s) => s.setStatus);
+  const addToast = useToastStore((s) => s.addToast);
   const [visible, setVisible] = useState(false);
   const [fadeOut, setFadeOut] = useState(false);
   const fadeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -30,17 +39,40 @@ export default function SyncProgress() {
     });
     const unsubComplete = window.api.sync.onComplete(() => {
       setComplete();
+      // Re-pull status so serverHealth-derived serverErrors update after every
+      // sync (a now-healthy server drops out; a still-failed one persists).
+      void window.api.sync.getStatus().then((res) => {
+        if (res.success && res.data) setStatus(res.data as SyncStatus);
+      });
     });
     const unsubError = window.api.sync.onError((err) => {
       setError(err.message);
+    });
+    // Partial = full sync finished with >=1 failed server. It never emits
+    // 'complete', so without this the ring would stick at its last percent
+    // and the failure chip below could never render.
+    const unsubPartial = window.api.sync.onPartial(() => {
+      setPartial();
+      void window.api.sync.getStatus().then((res) => {
+        if (res.success && res.data) setStatus(res.data as SyncStatus);
+      });
+    });
+    const unsubServerError = window.api.sync.onServerError((data) => {
+      setServerError(data);
+      if (!toastedServers.has(data.serverId)) {
+        toastedServers.add(data.serverId);
+        addToast(`Couldn't sync ${data.serverName} — showing cached data`, 'error');
+      }
     });
 
     return () => {
       unsubProgress();
       unsubComplete();
       unsubError();
+      unsubPartial();
+      unsubServerError();
     };
-  }, [setProgress, setComplete, setError, setStatus]);
+  }, [setProgress, setComplete, setPartial, setError, setServerError, setStatus, addToast]);
 
   // Show/hide logic
   useEffect(() => {
@@ -68,7 +100,26 @@ export default function SyncProgress() {
     };
   }, [running, completed]);
 
-  if (!visible) return null;
+  // When the progress ring is hidden, fall back to a persistent amber warning
+  // chip while any server is in a failed state. The ring always wins while
+  // visible (running / just-completed); the chip has no fade — it stays until
+  // serverErrors clears (i.e. the next successful sync of that server).
+  if (!visible) {
+    const failedNames = Object.values(serverErrors).map((e) => e.serverName);
+    if (failedNames.length > 0 && !running) {
+      return (
+        <div className={`${styles.container} ${styles.visible}`}>
+          <div className={styles.tooltip}>
+            Couldn't sync: {failedNames.join(', ')} — data may be stale
+          </div>
+          <div className={styles.warnChip}>
+            <AlertTriangle size={20} />
+          </div>
+        </div>
+      );
+    }
+    return null;
+  }
 
   const percent = progress?.percent ?? 0;
   const offset = CIRCUMFERENCE * (1 - percent / 100);
