@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased
+
+Cross-server correctness release. Full root-cause analysis in
+`docs/AUDIT-2026-07-cross-server-correctness.md`. **After installing, run one
+manual full sync** — it repairs `library_id` values corrupted by the old
+resume-refresh and rebuilds dedup on clean data.
+
+### Added
+
+- **Per-server sync-failure indicator** — a failed or unreachable server is no
+  longer silent: an amber warning chip (with the failing server names) persists
+  in the corner until that server's next successful sync, plus a one-time toast
+  per session. Per-server health is persisted and survives restarts.
+- **Guest-cap enforcement, for real** — the Watch Party sync server now refuses
+  over-cap WebSocket connections at handshake time with an explicit
+  "This watch party is full" state on the guest page (no reconnect loop). The
+  10-guest ceiling is enforced in the main process regardless of what the
+  renderer sends, unless the Danger Zone unlock is on.
+- **Mark played/unplayed cascades across the dedup group** — the user sees one
+  deduped item, so an explicit mark now applies to every copy on every server
+  (clicked copy strict, siblings best-effort, one Trakt push).
+
+### Fixed
+
+- **Continue Watching tells the truth.** Playback stops (ESC, natural EOF,
+  episode auto-advance, Watch Party) now write the final position into the
+  local cache with Emby's resume thresholds; the row is ordered by when you
+  actually played, not when the cache last synced; finished-elsewhere ghosts
+  are reconciled away against the server's resume list each sync (with a 24h
+  guard protecting fresh local-only progress); and clicking a second-server
+  item actually plays it.
+- **Cross-server resolution across the app.** Images, detail-page enrichment,
+  season/episode lists, similar items, favorites, and mark-played all resolve
+  against the server that owns the item instead of the active one — foreign
+  posters no longer 404 into fallbacks, and foreign series pages get their
+  episode lists back.
+- **Episode navigation reports to the right server.** Cross-server binge
+  progress (auto-advance and manual prev/next) lands on the owning server and
+  mirrors into the local cache; the mark-played cascade now fires only when an
+  item was actually finished (≥90%), instead of on every stop.
+- **Sync integrity in combined mode.** The resume-refresh no longer reassigns
+  items to the wrong library; an incremental sync no longer advances its
+  watermark past a failed server (which permanently skipped that server's
+  changes); ending a Watch Party from the waiting room no longer reports a
+  phantom playback stop to Emby/Trakt; and quitting mid-party can no longer
+  orphan ffmpeg/cloudflared.
+
 ## v3.5.0 — 2026-06-10
 
 ### Added
