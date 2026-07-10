@@ -27,7 +27,11 @@ export type ServerToClientMessage =
   | { type: 'pause'; position: number; serverTime: number }
   | { type: 'seek'; position: number; serverTime: number }
   | { type: 'heartbeat'; position: number; serverTime: number }
-  | { type: 'session_end' };
+  | { type: 'session_end' }
+  // Sent to a guest whose handshake we complete only to refuse: the host's
+  // guest cap is already met. The guest renders an explicit "party is full"
+  // state and stops reconnecting (see handleUpgrade).
+  | { type: 'session_full' };
 
 export type ClientToServerMessage =
   | { type: 'join'; clientId?: string }
@@ -60,6 +64,9 @@ export class WatchPartySyncServer {
   private disconnectionCbs: DisconnectionListener[] = [];
   private countCbs: CountListener[] = [];
   private messageCbs: MessageListener[] = [];
+  // Guest cap. null = unlimited. Enforced in handleUpgrade against the count
+  // of already-admitted clients.
+  private maxClients: number | null = null;
 
   constructor() {
     // noServer: true — we attach to the HTTP server's upgrade event below,
@@ -71,6 +78,32 @@ export class WatchPartySyncServer {
   /** Route an 'upgrade' event from a shared http.Server. */
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     this.wss.handleUpgrade(req, socket, head, (ws) => {
+      // Guest cap enforcement. We complete the WS handshake (rather than
+      // destroying the socket pre-upgrade) so the guest page can receive an
+      // explicit session_full frame and render a "party is full" state
+      // instead of reconnect-looping against a refused connection. The
+      // socket is never added to this.clients and no listeners/count fire.
+      if (this.maxClients !== null && this.clients.size >= this.maxClients) {
+        watchPartyLogger.warn(
+          'sync',
+          `Refusing guest — cap ${this.maxClients} reached (admitted=${this.clients.size})`,
+        );
+        // A refused socket never gets the admitted path's 'error' listener,
+        // and ws emits 'error' asynchronously (abrupt TCP reset, send() on a
+        // closing socket). An unlistened 'error' event would crash the main
+        // process — swallow it explicitly.
+        ws.on('error', (err) => {
+          watchPartyLogger.warn('sync', `refused socket error: ${err.message}`);
+        });
+        try {
+          ws.send(JSON.stringify({ type: 'session_full' }));
+        } catch {
+          /* ignore — socket may already be closing */
+        }
+        ws.close(1008, 'session_full');
+        return;
+      }
+
       const client: Client = { id: randomUUID(), ws };
       this.clients.set(ws, client);
 
@@ -134,6 +167,11 @@ export class WatchPartySyncServer {
 
   getClientCount(): number {
     return this.clients.size;
+  }
+
+  /** Set the guest cap. null = unlimited. Applied to future upgrades. */
+  setMaxClients(n: number | null): void {
+    this.maxClients = n;
   }
 
   onConnection(cb: ConnectionListener): void {

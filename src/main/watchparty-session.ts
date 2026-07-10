@@ -265,6 +265,9 @@ class WatchPartySessionManager extends EventEmitter {
       // Sync server first — the HTTP server needs it during upgrade routing.
       const syncServer = new WatchPartySyncServer();
       this.syncServer = syncServer;
+      // Hand the cap to the sync server so it can refuse overflow guests at
+      // handshake time. 'unlimited' → null (no cap).
+      syncServer.setMaxClients(opts.maxGuests === 'unlimited' ? null : opts.maxGuests);
       syncServer.onConnection(({ client, req }) => {
         watchPartyLogger.info(
           'sync',
@@ -300,16 +303,10 @@ class WatchPartySessionManager extends EventEmitter {
       });
       syncServer.onCountChanged((n) => {
         watchPartyLogger.info('sync', `Guest count=${n}`);
-        // Server-side cap enforcement. If the host set "5 guests" we close
-        // the 6th's socket cleanly. The spec defers reconnection/backoff —
-        // overflow guests just see "Session ended."
-        if (this.maxGuests !== 'unlimited' && typeof this.maxGuests === 'number' && n > this.maxGuests) {
-          // The most recent connection is the one to drop; the sync server
-          // doesn't expose individual sockets, so broadcast nothing here
-          // and rely on the next connect path to refuse. For batch 2 the
-          // overflow is rare; piece-N polish builds an explicit refusal.
-          watchPartyLogger.warn('sync', `Guest count ${n} exceeds cap ${this.maxGuests}`);
-        }
+        // The cap is enforced (and refusals logged) in the sync server's
+        // handleUpgrade — overflow sockets get a session_full frame and are
+        // closed before they're ever counted. So n here only reflects
+        // admitted guests; just mirror it into public state.
         this.guestCount = n;
         this.emitStateChange();
       });

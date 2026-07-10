@@ -511,6 +511,16 @@ export const GUEST_PAGE_HTML = `<!doctype html>
           if (ws) try { ws.close(1000); } catch (e) {}
           if (hls) try { hls.destroy(); } catch (e) {}
           break;
+        case 'session_full':
+          // The host's guest cap is already met. Same terminal path as
+          // session_end: the 'ended' flag makes the ws close handler skip
+          // its reconnect timer, so we don't loop against a full party.
+          ended = true;
+          showCenter('This watch party is full', "The host's guest limit has been reached.", false);
+          if (hlsRetryTimer) clearTimeout(hlsRetryTimer);
+          if (ws) try { ws.close(1000); } catch (e) {}
+          if (hls) try { hls.destroy(); } catch (e) {}
+          break;
       }
     }
 
@@ -540,8 +550,16 @@ export const GUEST_PAGE_HTML = `<!doctype html>
           handleMessage(msg);
         } catch (e) { /* ignore */ }
       });
-      ws.addEventListener('close', function () {
+      ws.addEventListener('close', function (ev) {
         setConn(false);
+        // 1008 = refused (session_full). Normally the session_full message
+        // arrives first and sets the ended flag, but if the close beats the
+        // message (lossy path through the tunnel) the code alone is
+        // terminal — without this we'd re-dial a full party every 2s.
+        if (ev && ev.code === 1008 && !ended) {
+          ended = true;
+          showCenter('This watch party is full', "The host's guest limit has been reached.", false);
+        }
         if (ended) return;
         if (reconnectTimer) clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(connect, 2000);
