@@ -423,6 +423,58 @@ export function upsertItemsPreservingLibrary(
   tx(items);
 }
 
+// Recency guard for clearStaleResumeState — see its JSDoc.
+const RESUME_CLEAR_RECENCY_GUARD_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Zero out stale resume state for items that are no longer resumable on a server.
+ *
+ * The resume-refresh phase of sync can only add or update items that are currently
+ * in the server's /Items/Resume list; it could never CLEAR one that left the list.
+ * So when an item is finished on another client (phone/TV) — dropping off the
+ * server's resume list without any library change sync would notice — its stale
+ * `playback_position_ticks` lingered in the local cache, keeping a ghost row in
+ * Continue Watching until a full sync happened to re-fetch it.
+ *
+ * `activeResumeIds` is the set of emby ids the server just reported as resumable.
+ * Any cached row for this server with `ticks > 0` that is NOT in that set is stale
+ * and gets its position/percentage zeroed. When `activeResumeIds` is empty, nothing
+ * on the server is resumable, so every `ticks > 0` row for that server is cleared.
+ *
+ * Only the resume fields are touched — not `played` or `last_played_date`. We only
+ * know the item left the resume list, not why; the sync remains the authority for
+ * played state. Returns the number of rows changed.
+ *
+ * Recency guard: rows played within RESUME_CLEAR_RECENCY_GUARD_MS are never
+ * cleared. Legitimate local-only progress — a stop report that failed
+ * (network blip) or raced a running sync — is in the cache but not on the
+ * server; absence from /Items/Resume must not wipe it while the user still
+ * expects to resume. True ghosts (finished on another client) clear on the
+ * first sync after the window lapses.
+ */
+export function clearStaleResumeState(serverId: string, activeResumeIds: string[]): number {
+  const d = getDb();
+  // datetime() normalizes both our toISOString() writes and Emby's
+  // 7-digit-fraction LastPlayedDate format before comparing.
+  const recencyCutoff = new Date(Date.now() - RESUME_CLEAR_RECENCY_GUARD_MS).toISOString();
+  const recencyClause = '(last_played_date IS NULL OR datetime(last_played_date) < datetime(?))';
+  if (activeResumeIds.length === 0) {
+    const info = d
+      .prepare(
+        `UPDATE items SET playback_position_ticks = 0, played_percentage = 0 WHERE server_id = ? AND playback_position_ticks > 0 AND ${recencyClause}`,
+      )
+      .run(serverId, recencyCutoff);
+    return info.changes;
+  }
+  const placeholders = activeResumeIds.map(() => '?').join(', ');
+  const info = d
+    .prepare(
+      `UPDATE items SET playback_position_ticks = 0, played_percentage = 0 WHERE server_id = ? AND playback_position_ticks > 0 AND ${recencyClause} AND emby_id NOT IN (${placeholders})`,
+    )
+    .run(serverId, recencyCutoff, ...activeResumeIds);
+  return info.changes;
+}
+
 export function getItems(filters: ItemFilters = {}): { items: ItemRow[]; total: number } {
   const conditions: string[] = [];
   const params: unknown[] = [];

@@ -3,6 +3,7 @@ import { embyClient } from './emby-client';
 import {
   upsertItems,
   upsertItemsPreservingLibrary,
+  clearStaleResumeState,
   getSyncState,
   setSyncState,
   deleteSyncState,
@@ -56,6 +57,11 @@ interface Checkpoint {
 }
 
 const BATCH_SIZE = 50;
+// How many resume items to fetch when reconciling ghost resume state. A larger
+// page makes "absent from the list" a reliable signal that an item is no longer
+// resumable; if the server returns a full page we can't prove absence and skip
+// reconciliation (see clearStaleResumeState call sites).
+const RESUME_RECONCILE_LIMIT = 100;
 const EPISODE_PAGE_SIZE = 1000;
 const FULL_SYNC_DELAY = 500;
 const INCREMENTAL_DELAY = 200;
@@ -444,11 +450,20 @@ class SyncEngine extends EventEmitter {
     if (!this.cancelled) {
       try {
         const resumeResult = await this.fetchWithRetry(
-          () => embyClient.getResumeItems(), 3, `getResumeItems[${serverName}]`
+          () => embyClient.getResumeItems(RESUME_RECONCILE_LIMIT), 3, `getResumeItems[${serverName}]`
         ) as { Items: Record<string, unknown>[] };
         if (resumeResult.Items.length > 0) {
           upsertItemsPreservingLibrary(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
           log(`fullSyncSingleServer[${serverName}]: refreshed ${resumeResult.Items.length} resume items`);
+        }
+        // Reconcile ghost resume state: clear ticks for rows that left the server's
+        // resume list. A full page can't prove absence, so skip that case.
+        if (resumeResult.Items.length >= RESUME_RECONCILE_LIMIT) {
+          log(`fullSyncSingleServer[${serverName}]: resume list at limit (${RESUME_RECONCILE_LIMIT}), skipping reconciliation`);
+        } else {
+          const activeIds = resumeResult.Items.map((i) => (i as { Id: string }).Id);
+          const cleared = clearStaleResumeState(serverId, activeIds);
+          if (cleared > 0) log(`fullSyncSingleServer[${serverName}]: cleared ${cleared} stale resume rows`);
         }
       } catch (err) {
         log(`fullSyncSingleServer[${serverName}]: resume fetch failed`, err);
@@ -552,11 +567,20 @@ class SyncEngine extends EventEmitter {
     // large libraries; /Items/Resume is authoritative for watch positions).
     try {
       const resumeResult = await this.fetchWithRetry(
-        () => embyClient.getResumeItems(), 3, 'getResumeItems'
+        () => embyClient.getResumeItems(RESUME_RECONCILE_LIMIT), 3, 'getResumeItems'
       ) as { Items: Record<string, unknown>[] };
       if (resumeResult.Items.length > 0) {
         upsertItemsPreservingLibrary(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
         log(`fullSyncCurrentServer: refreshed ${resumeResult.Items.length} resume items`);
+      }
+      // Reconcile ghost resume state: clear ticks for rows that left the server's
+      // resume list. A full page can't prove absence, so skip that case.
+      if (resumeResult.Items.length >= RESUME_RECONCILE_LIMIT) {
+        log(`fullSyncCurrentServer: resume list at limit (${RESUME_RECONCILE_LIMIT}), skipping reconciliation`);
+      } else {
+        const activeIds = resumeResult.Items.map((i) => (i as { Id: string }).Id);
+        const cleared = clearStaleResumeState(serverId, activeIds);
+        if (cleared > 0) log(`fullSyncCurrentServer: cleared ${cleared} stale resume rows`);
       }
     } catch (err) {
       log('fullSyncCurrentServer: resume fetch failed', err);
@@ -817,9 +841,18 @@ class SyncEngine extends EventEmitter {
         // Refresh watch status for this server (resume/continue-watching items)
         if (this.cancelled) continue;
         try {
-          const resumeResult = await this.fetchWithRetry(() => embyClient.getResumeItems(), 3, `getResumeItems[${server.name}]`) as { Items: Record<string, unknown>[] };
+          const resumeResult = await this.fetchWithRetry(() => embyClient.getResumeItems(RESUME_RECONCILE_LIMIT), 3, `getResumeItems[${server.name}]`) as { Items: Record<string, unknown>[] };
           if (resumeResult.Items.length > 0) {
             upsertItemsPreservingLibrary(resumeResult.Items, server.id, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
+          }
+          // Reconcile ghost resume state for this server (server.id, NOT the active
+          // server). A full page can't prove absence, so skip that case.
+          if (resumeResult.Items.length >= RESUME_RECONCILE_LIMIT) {
+            log(`incrementalSyncAllServers[${server.name}]: resume list at limit (${RESUME_RECONCILE_LIMIT}), skipping reconciliation`);
+          } else {
+            const activeIds = resumeResult.Items.map((i) => (i as { Id: string }).Id);
+            const cleared = clearStaleResumeState(server.id, activeIds);
+            if (cleared > 0) log(`incrementalSyncAllServers[${server.name}]: cleared ${cleared} stale resume rows`);
           }
         } catch {
           // Non-critical — continue with other servers
@@ -867,9 +900,18 @@ class SyncEngine extends EventEmitter {
     // Refresh user data for recently watched items
     this.emitProgress('incremental', libraries.length, libraries.length, 'Refreshing watch status...');
     try {
-      const resumeResult = await this.fetchWithRetry(() => embyClient.getResumeItems(), 3, 'getResumeItems') as { Items: Record<string, unknown>[] };
+      const resumeResult = await this.fetchWithRetry(() => embyClient.getResumeItems(RESUME_RECONCILE_LIMIT), 3, 'getResumeItems') as { Items: Record<string, unknown>[] };
       if (resumeResult.Items.length > 0) {
         upsertItemsPreservingLibrary(resumeResult.Items, serverId, libraries[0]?.Id || 'unknown', libraries[0]?.Name);
+      }
+      // Reconcile ghost resume state: clear ticks for rows that left the server's
+      // resume list. A full page can't prove absence, so skip that case.
+      if (resumeResult.Items.length >= RESUME_RECONCILE_LIMIT) {
+        log(`incrementalSyncCurrentServer: resume list at limit (${RESUME_RECONCILE_LIMIT}), skipping reconciliation`);
+      } else {
+        const activeIds = resumeResult.Items.map((i) => (i as { Id: string }).Id);
+        const cleared = clearStaleResumeState(serverId, activeIds);
+        if (cleared > 0) log(`incrementalSyncCurrentServer: cleared ${cleared} stale resume rows`);
       }
     } catch {
       // Non-critical

@@ -184,12 +184,12 @@ class EmbyClient {
     return data;
   }
 
-  async getResumeItems() {
+  async getResumeItems(limit = 12) {
     const fields = ITEM_FIELDS;
     const { data } = await this.client.get(
       this.url(`/emby/Users/${this.userId}/Items/Resume`),
       {
-        params: { Limit: 12, Recursive: true, Fields: fields, MediaTypes: 'Video' },
+        params: { Limit: limit, Recursive: true, Fields: fields, MediaTypes: 'Video' },
       },
     );
     return data;
@@ -408,11 +408,11 @@ class EmbyClient {
     return data;
   }
 
-  async getResumeItemsForServer(serverUrl: string, token: string, userId: string) {
+  async getResumeItemsForServer(serverUrl: string, token: string, userId: string, limit = 12) {
     const url = `${serverUrl.replace(/\/+$/, '')}/emby/Users/${userId}/Items/Resume`;
     const { data } = await this.standalone.get(url, {
       headers: this.standaloneHeaders(token),
-      params: { Limit: 12, Fields: ITEM_FIELDS_LIGHT, MediaTypes: 'Video' },
+      params: { Limit: limit, Fields: ITEM_FIELDS_LIGHT, MediaTypes: 'Video' },
     });
     return data;
   }
