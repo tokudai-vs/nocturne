@@ -1,0 +1,97 @@
+<UserControl x:Class="Nocturne.App.Views.HomePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:controls="clr-namespace:Nocturne.App.Controls">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="0,0,0,40">
+
+            <!-- Hero Section -->
+            <Grid Height="480" Visibility="{Binding HeroItem, Converter={StaticResource NullToVisibility}}">
+                <!-- Backdrop Image -->
+                <Image Source="{Binding HeroBackdropUrl}" Stretch="UniformToFill" />
+
+                <!-- Gradient Masking for Mica Blend -->
+                <Grid>
+                    <Grid.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#00000000" Offset="0.0" />
+                            <GradientStop Color="#80000000" Offset="0.4" />
+                            <GradientStop Color="#E60F0F0F" Offset="1.0" />
+                        </LinearGradientBrush>
+                    </Grid.Background>
+                </Grid>
+
+                <Grid>
+                    <Grid.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#00000000" Offset="0.5" />
+                            <GradientStop Color="#F00F0F0F" Offset="1.0" />
+                        </LinearGradientBrush>
+                    </Grid.Background>
+                </Grid>
+
+                <!-- Hero Info -->
+                <StackPanel VerticalAlignment="Bottom" Margin="40,0,40,40" MaxWidth="600" HorizontalAlignment="Left">
+                    <TextBlock Text="{Binding HeroItem.Name}" FontSize="36" FontWeight="Bold"
+                               Foreground="White" TextWrapping="Wrap" Margin="0,0,0,8" />
+
+                    <!-- Meta Badges -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <Border Background="#33FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,8,0">
+                            <TextBlock Text="{Binding HeroItem.ProductionYear}" FontSize="12" Foreground="White" />
+                        </Border>
+                        <Border Background="#33E5A00D" CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
+                                Visibility="{Binding HeroItem.CommunityRating, Converter={StaticResource NullToVisibility}}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Star16" FontSize="12" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,4,0" />
+                                <TextBlock Text="{Binding HeroItem.CommunityRating, Converter={StaticResource RatingFormatter}}"
+                                           FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource NocturneAmberBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="{Binding HeroItem.OfficialRating}" FontSize="12" Foreground="#B0B0B0" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <!-- Overview -->
+                    <TextBlock Text="{Binding HeroItem.Overview}" FontSize="13" Foreground="#D0D0D0"
+                               TextWrapping="Wrap" MaxHeight="60" TextTrimming="CharacterEllipsis" Margin="0,0,0,20" />
+
+                    <!-- Play Hero Button -->
+                    <Button Style="{StaticResource AmberPrimaryButton}" Click="OnPlayHeroClick" HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="Play24" FontSize="16" Margin="0,0,8,0" />
+                            <TextBlock Text="Watch Now" FontSize="14" FontWeight="SemiBold" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <!-- Continue Watching Row -->
+            <controls:MediaRow Title="Continue Watching"
+                               ItemsSource="{Binding ContinueWatching}"
+                               ItemClick="OnRowItemClick"
+                               Visibility="{Binding ContinueWatching, Converter={StaticResource NullToVisibility}}" />
+
+            <!-- Next Up Episodes Row -->
+            <controls:MediaRow Title="Next Up"
+                               ItemsSource="{Binding NextUp}"
+                               ItemClick="OnRowItemClick"
+                               Visibility="{Binding NextUp, Converter={StaticResource NullToVisibility}}" />
+
+            <!-- Latest Movies Row -->
+            <controls:MediaRow Title="Latest Movies"
+                               ItemsSource="{Binding LatestMovies}"
+                               ItemClick="OnRowItemClick"
+                               Visibility="{Binding LatestMovies, Converter={StaticResource NullToVisibility}}" />
+
+            <!-- Latest Episodes Row -->
+            <controls:MediaRow Title="Latest TV Episodes"
+                               ItemsSource="{Binding LatestEpisodes}"
+                               ItemClick="OnRowItemClick"
+                               Visibility="{Binding LatestEpisodes, Converter={StaticResource NullToVisibility}}" />
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
+

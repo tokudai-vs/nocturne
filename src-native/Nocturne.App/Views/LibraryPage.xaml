@@ -1,0 +1,58 @@
+<UserControl x:Class="Nocturne.App.Views.LibraryPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:controls="clr-namespace:Nocturne.App.Controls">
+
+    <Grid Margin="32,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Library Header & View Selector & Sort Controls -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,20">
+            <!-- Left: View / Shelf Selector -->
+            <ComboBox DockPanel.Dock="Left" MinWidth="200"
+                      ItemsSource="{Binding Views}"
+                      SelectedItem="{Binding SelectedView}"
+                      DisplayMemberPath="Name" />
+
+            <!-- Right: Sort controls & Loading indicator -->
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Sort by:" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <ComboBox SelectedValuePath="Tag" SelectedValue="{Binding SortBy, Mode=TwoWay}" MinWidth="130" Margin="0,0,8,0">
+                    <ComboBoxItem Content="Name" Tag="SortName" />
+                    <ComboBoxItem Content="Date Added" Tag="DateCreated" />
+                    <ComboBoxItem Content="Rating" Tag="CommunityRating" />
+                    <ComboBoxItem Content="Release Year" Tag="ProductionYear" />
+                    <ComboBoxItem Content="Runtime" Tag="Runtime" />
+                </ComboBox>
+
+                <ComboBox SelectedValuePath="Tag" SelectedValue="{Binding SortOrder, Mode=TwoWay}" MinWidth="110" Margin="0,0,16,0">
+                    <ComboBoxItem Content="Ascending" Tag="Ascending" />
+                    <ComboBoxItem Content="Descending" Tag="Descending" />
+                </ComboBox>
+
+                <ProgressBar IsIndeterminate="True" Width="80" Height="4"
+                             Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}" />
+            </StackPanel>
+        </DockPanel>
+
+        <!-- Grid of Media Cards -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Items}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <controls:MediaCard CardClick="OnCardClick" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

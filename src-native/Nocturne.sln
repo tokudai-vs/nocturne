@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nocturne.Core", "Nocturne.Core\Nocturne.Core.csproj", "{D9F3D0EA-A558-4A09-962B-E00D62DFAEE3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nocturne.App", "Nocturne.App\Nocturne.App.csproj", "{0EC17BAA-4EE5-40B1-835D-8516C79682B9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nocturne.Tests", "Nocturne.Tests\Nocturne.Tests.csproj", "{15A98843-E9BF-4357-A86E-8FC122DEBD8D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D9F3D0EA-A558-4A09-962B-E00D62DFAEE3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D9F3D0EA-A558-4A09-962B-E00D62DFAEE3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D9F3D0EA-A558-4A09-962B-E00D62DFAEE3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D9F3D0EA-A558-4A09-962B-E00D62DFAEE3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0EC17BAA-4EE5-40B1-835D-8516C79682B9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0EC17BAA-4EE5-40B1-835D-8516C79682B9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0EC17BAA-4EE5-40B1-835D-8516C79682B9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0EC17BAA-4EE5-40B1-835D-8516C79682B9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{15A98843-E9BF-4357-A86E-8FC122DEBD8D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{15A98843-E9BF-4357-A86E-8FC122DEBD8D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{15A98843-E9BF-4357-A86E-8FC122DEBD8D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{15A98843-E9BF-4357-A86E-8FC122DEBD8D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

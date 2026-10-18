@@ -1,0 +1,207 @@
+<UserControl x:Class="Nocturne.App.Views.OnboardingPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+
+    <Grid>
+        <!-- Ambient radial glow backdrop -->
+        <Border>
+            <Border.Background>
+                <RadialGradientBrush Center="0.5,0.3" RadiusX="0.8" RadiusY="0.6">
+                    <GradientStop Color="#1AE5A00D" Offset="0.0" />
+                    <GradientStop Color="#00000000" Offset="1.0" />
+                </RadialGradientBrush>
+            </Border.Background>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,60" MaxWidth="520">
+
+                <!-- Signature Nocturne Logo & Branding -->
+                <StackPanel HorizontalAlignment="Center" Margin="0,0,0,36">
+                    <TextBlock Text="NOCTURNE" FontSize="36" FontWeight="Light"
+                               Foreground="{StaticResource NocturneAmberBrush}"
+                               HorizontalAlignment="Center">
+                        <TextBlock.Effect>
+                            <DropShadowEffect Color="#E5A00D" BlurRadius="20" ShadowDepth="0" Opacity="0.4" />
+                        </TextBlock.Effect>
+                    </TextBlock>
+                    <TextBlock Text="The Ultimate Native Emby Client" FontSize="13"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               HorizontalAlignment="Center" Margin="0,6,0,0" />
+                </StackPanel>
+
+                <!-- STEP 1: Connect Server Form -->
+                <StackPanel Visibility="{Binding IsUserSelectionStep, Converter={StaticResource InvertBoolToVisibility}}">
+
+                    <!-- Saved Servers List -->
+                    <StackPanel Visibility="{Binding SavedServers, Converter={StaticResource NullToVisibility}}" Margin="0,0,0,24">
+                        <TextBlock Text="Your Servers" FontWeight="SemiBold" FontSize="14"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,10" />
+
+                        <ItemsControl ItemsSource="{Binding SavedServers}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,4" Padding="14,10" CornerRadius="8"
+                                            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Padding="8,4" Margin="6,0,0,0"
+                                                    Click="OnRemoveSavedServerClick" Tag="{Binding}">
+                                                <ui:SymbolIcon Symbol="Delete16" FontSize="14" Foreground="#FF6B6B" />
+                                            </Button>
+
+                                            <Button DockPanel.Dock="Right" Padding="12,6" Style="{StaticResource AmberPrimaryButton}"
+                                                    Click="OnConnectSavedServerClick" Tag="{Binding}">
+                                                <TextBlock Text="Connect" FontSize="12" />
+                                            </Button>
+
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" />
+                                                <TextBlock Text="{Binding Url}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <Separator Margin="0,20,0,16" />
+                    </StackPanel>
+
+                    <!-- Server Connection Box -->
+                    <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                            CornerRadius="10" Padding="24">
+                        <StackPanel>
+                            <TextBlock Text="Connect to Emby Server" FontSize="16" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,6" />
+                            <TextBlock Text="Enter the IP address or hostname of your Emby server"
+                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,16" />
+
+                            <ui:TextBox x:Name="ServerUrlInput"
+                                        Text="{Binding ServerUrl, UpdateSourceTrigger=PropertyChanged}"
+                                        PlaceholderText="http://192.168.1.100:8096"
+                                        Height="38" Margin="0,0,0,16" KeyDown="OnServerUrlKeyDown" />
+
+                            <!-- Error Message Banner -->
+                            <Border Background="#33FF4444" BorderBrush="#80FF4444" BorderThickness="1"
+                                    CornerRadius="6" Padding="12,8" Margin="0,0,0,16"
+                                    Visibility="{Binding ErrorMessage, Converter={StaticResource NullToVisibility}}">
+                                <TextBlock Text="{Binding ErrorMessage}" Foreground="#FF6B6B" FontSize="12" TextWrapping="Wrap" />
+                            </Border>
+
+                            <Button Style="{StaticResource AmberPrimaryButton}" Height="40"
+                                    HorizontalAlignment="Stretch" Click="OnConnectServerClick"
+                                    IsEnabled="{Binding IsConnecting, Converter={StaticResource InverseBool}}">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <ui:ProgressRing Width="16" Height="16" Margin="0,0,8,0"
+                                                     Visibility="{Binding IsConnecting, Converter={StaticResource BoolToVisibility}}" />
+                                    <TextBlock Text="Connect to Server" FontWeight="SemiBold" FontSize="14" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- STEP 2: User Selection & Sign In Form -->
+                <StackPanel Visibility="{Binding IsUserSelectionStep, Converter={StaticResource BoolToVisibility}}">
+
+                    <!-- Server Header Badge -->
+                    <Border Background="#20E5A00D" BorderBrush="#60E5A00D" BorderThickness="1"
+                            CornerRadius="20" Padding="16,6" HorizontalAlignment="Center" Margin="0,0,0,24">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="Server24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                            <TextBlock Text="{Binding ServerName}" FontWeight="SemiBold" Foreground="{StaticResource NocturneAmberBrush}" />
+                            <TextBlock Text=" • v" Foreground="{StaticResource NocturneAmberBrush}" />
+                            <TextBlock Text="{Binding ServerVersion}" Foreground="{StaticResource NocturneAmberBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Public Users Grid -->
+                    <StackPanel Visibility="{Binding IsManualMode, Converter={StaticResource InvertBoolToVisibility}}">
+                        <TextBlock Text="Select User" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,14" />
+
+                        <ItemsControl ItemsSource="{Binding PublicUsers}" Margin="0,0,0,20">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel HorizontalAlignment="Center" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="8" Width="100" Height="110" CornerRadius="8" Padding="8"
+                                            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                                            Cursor="Hand" MouseLeftButtonUp="OnPublicUserClick">
+                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                            <!-- User Circle Avatar -->
+                                            <Border Width="52" Height="52" CornerRadius="26" Background="#33E5A00D"
+                                                    BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="1"
+                                                    HorizontalAlignment="Center" Margin="0,0,0,8">
+                                                <TextBlock Text="{Binding Name[0]}" FontSize="22" FontWeight="Bold"
+                                                           Foreground="{StaticResource NocturneAmberBrush}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"
+                                                       TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <Button Content="Manual Sign In" HorizontalAlignment="Center" Margin="0,0,0,16"
+                                Click="OnSwitchToManualClick" />
+                    </StackPanel>
+
+                    <!-- Sign In Credentials Box (For Selected User or Manual) -->
+                    <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                            CornerRadius="10" Padding="24" Margin="0,0,0,16">
+                        <StackPanel>
+                            <!-- Selected User Prompt -->
+                            <StackPanel Visibility="{Binding SelectedUser, Converter={StaticResource NullToVisibility}}" Margin="0,0,0,12">
+                                <TextBlock Text="Enter Password for:" FontSize="13" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Text="{Binding SelectedUser.Name}" FontSize="18" FontWeight="Bold" Margin="0,2,0,0" />
+                            </StackPanel>
+
+                            <!-- Manual Username Input -->
+                            <StackPanel Visibility="{Binding IsManualMode, Converter={StaticResource BoolToVisibility}}" Margin="0,0,0,12">
+                                <TextBlock Text="Username" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4" />
+                                <ui:TextBox Text="{Binding ManualUsername, UpdateSourceTrigger=PropertyChanged}"
+                                            PlaceholderText="Username" Height="36" />
+                            </StackPanel>
+
+                            <!-- Password Input -->
+                            <TextBlock Text="Password" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4" />
+                            <ui:PasswordBox x:Name="PasswordBox" PlaceholderText="Password (leave blank if none)"
+                                            Height="36" Margin="0,0,0,16" KeyDown="OnPasswordKeyDown" />
+
+                            <!-- Error Message Banner -->
+                            <Border Background="#33FF4444" BorderBrush="#80FF4444" BorderThickness="1"
+                                    CornerRadius="6" Padding="12,8" Margin="0,0,0,16"
+                                    Visibility="{Binding ErrorMessage, Converter={StaticResource NullToVisibility}}">
+                                <TextBlock Text="{Binding ErrorMessage}" Foreground="#FF6B6B" FontSize="12" TextWrapping="Wrap" />
+                            </Border>
+
+                            <Button Style="{StaticResource AmberPrimaryButton}" Height="38"
+                                    HorizontalAlignment="Stretch" Click="OnSignInClick"
+                                    IsEnabled="{Binding IsConnecting, Converter={StaticResource InverseBool}}">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <ui:ProgressRing Width="16" Height="16" Margin="0,0,8,0"
+                                                     Visibility="{Binding IsConnecting, Converter={StaticResource BoolToVisibility}}" />
+                                    <TextBlock Text="Sign In" FontWeight="SemiBold" FontSize="14" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Change Server Button -->
+                    <Button Content="← Change Server" HorizontalAlignment="Center" Click="OnChangeServerClick" />
+                </StackPanel>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

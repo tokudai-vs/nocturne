@@ -1,312 +1,121 @@
 <div align="center">
 
-# :movie_camera: Nocturne
+# :movie_camera: Nocturne v4.0
 
-**A modern, cinematic desktop client for Emby — with multi-server support, instant browsing from a local cache, and library deduplication.**
+**A modern, cinematic native Windows desktop client for Emby — powered by .NET 8, WPF-UI, and mpv.**
 
-*A personal project born out of frustration — none of the existing Emby clients looked or felt good enough. Nocturne grew from a basic player into a full-featured Emby client backed by a local SQLite cache that makes browsing a million-item library feel instant, with multi-server support and cross-server deduplication on top.*
+*Zero Electron. Zero Chromium. Built from the ground up for Windows 11 with hardware-accelerated Mica, Acrylic, multi-server support, instant browsing from a local SQLite cache, and cross-server deduplication.*
 
-*This is not a production application. It's a personal tool that I'm sharing in case others find it useful or want to build on it. Expect rough edges.*
-
-[Download](#installation) · [Features](#features) · [Screenshots](#screenshots) · [Building](#building-from-source) · [Contributing](#contributing)
+[Features](#features) · [Screenshots](#screenshots) · [Building from Source](#building-from-source) · [Testing](#testing) · [License](#license)
 
 ---
 
 </div>
+
+## What's New in v4.0 (Pure Native Windows)
+
+Nocturne v4.0 is a complete rewrite from Electron to **pure native Windows (.NET 8 + WPF-UI + libmpv)**:
+- **Instantaneous performance**: ~60MB memory footprint (down from 450MB+ in Electron), zero Chromium overhead.
+- **Windows 11 Native Shell**: Native DWM Mica, Acrylic, and Tabbed backdrops with automatic OS light/dark mode tracking.
+- **Personalized Theme Accents**: Choose from Signature Amber, Electric Blue, Ultraviolet, Emerald Green, Crimson Rose, Sunset Orange, or Cyber Cyan.
+- **TheIntroDB Skip Prompts**: Real-time intro, recap, and credit segment skipping with amber OSC prompts and auto-advance.
+- **Deep Trakt.tv & Analytics**: Full scrobbler with 80%+ watched thresholds, bidirectional sync, GitHub-style activity heatmap, and frequency bar charts.
+
+---
 
 ## Features
 
 ### :zap: Cache & Performance
-- **SQLite-backed local cache** (better-sqlite3, WAL mode) — tested with libraries of 1.5M+ items
-- **Instant browse from cache** — every page loads from disk, then enriches in the background
-- **Background sync engine** with full and incremental modes, checkpointed for interrupted resume
-- **Disk-backed image cache** with LRU eviction and configurable size limit
-- **Power modes** — `performance`, `balanced`, and `efficiency` profiles tune sync concurrency and image prefetch
+- **SQLite-backed local cache** (`Microsoft.Data.Sqlite`, WAL mode) — tested with libraries of 1.5M+ items.
+- **Instant browse from cache** — every page loads from local disk in sub-milliseconds, then revalidates in the background.
+- **Background sync engine** with batched fetching and checkpointed state to resume gracefully across app restarts.
+- **Disk-backed image cache** with LRU eviction and configurable size limits.
 
-### :satellite: Multi-Server
-- Add multiple Emby servers and switch between them from the user menu
-- **Separate** or **combined library mode** — view each server independently or merge libraries across servers into one shelf
-- **Cross-server deduplication** — same movie on two servers shows up once, with a version picker
-- Online/offline status indicator per server, saved server cards on the login page for quick reconnect
+### :satellite: Multi-Server Architecture
+- Add multiple Emby servers and switch seamlessly between them from the user menu.
+- **Separate or combined library mode** — view each server independently or merge libraries across servers into a unified shelf.
+- **6-pass deduplication pipeline** — matches duplicate titles by TMDB ID → IMDB ID → Name+Year across servers and folders.
+- **Version picker on detail pages** — shows quality, resolution (4K UHD / 1080p), codec (HEVC / H.264 / AV1), bitrate, and server source per copy.
 
-### :file_folder: Smart Library Organization
-- **Virtual libraries** — group `Movies`, `Movies 4K`, and `Movies Anime` into a single "Movies" shelf
-- **Auto-grouping wizard** on first launch suggests virtual library mappings
-- **Drag-and-drop library mapping** in Settings, with configurable icons per virtual library
-- Per-server mappings persist across syncs
+### :art: Windows 11 Design & Personalization
+- **Windows 11 DWM Composition**: Native Mica, Acrylic, and Tabbed backdrops.
+- **Live Theme Accent Color Selection**: Customize buttons, highlights, glowing rings, and progress indicators:
+  - Signature Amber (`#E5A00D`)
+  - Electric Blue (`#0078D4`)
+  - Ultraviolet (`#8A2BE2`)
+  - Emerald Green (`#107C41`)
+  - Crimson Rose (`#E81123`)
+  - Sunset Orange (`#FF8C00`)
+  - Cyber Cyan (`#00B7C3`)
+- **Cinematic Shell**: Obsidian dark theme with glowing splash screen, hero rotating backdrops, and hover animations.
+- **Right-Click Context Menus**: Play, mark as watched/unwatched, and toggle favorites directly from cards.
+
+### :tv: Video Playback Engine (mpv)
+- **Bundled mpv daemon** running in idle mode with sub-second launch times via Windows Named Pipe IPC (`\\.\pipe\nocturne-mpv-{pid}`).
+- **Direct play**: No server transcoding needed; native support for 4K UHD, HDR10, Dolby Vision, HEVC, AV1, DTS-HD, and TrueHD Atmos.
+- **In-player navigation**:
+  - `>`: Jump to next episode without closing player.
+  - `<`: Jump to previous episode.
+  - `EOF`: Automatically advance to next episode when playback finishes.
+- **TheIntroDB skip segments**: Amber OSC prompt and `Enter` key shortcut to skip intros, recaps, and credits. Re-arms on backward seek.
 
 ### :clapper: Trakt.tv Integration
-- **Auto-scrobble** watched movies and episodes (start / pause / stop) — Trakt marks watched at 80%+
-- **Bidirectional watched-state sync** — initial connect shows a preview with per-item checkboxes; ongoing 6-hour background pulls keep the two in sync
-- **Trakt watchlist as a virtual library** in the sidebar; unmatched titles appear greyed out with a "Find on TMDB / IMDB / Remove" info modal
-- **Trakt ratings** displayed on detail pages alongside IMDB and Rotten Tomatoes
-- **Add / remove from watchlist** directly on detail pages with a Bookmark toggle
-- **Drift indicator** ("T✓") when a title was watched on Trakt but not on the current server — one-click sync
-- **Encrypted credential storage** via Electron `safeStorage` (DPAPI on Windows) — tokens never sit in plaintext
-- **Failure queue** with exponential backoff — scrobbles and history pushes survive offline periods
-- **Bundled `client_id`** with optional override under Settings → Trakt → Advanced
+- **OAuth Device Flow**: 1-click activation via `trakt.tv/activate`.
+- **Real-time scrobbler**: Automatically scrobbles `start`, `pause`, and `stop`. Progress >= 80% automatically marks title as watched.
+- **Bidirectional watch state sync**: Keeps local Emby watch status in sync with Trakt.
+- **Trakt Watchlist virtual library**: Appears as a dedicated shelf in the library view with 1-click bookmarking on detail pages.
 
-### :bar_chart: Watch History Analytics
-- **`/analytics` page** accessible from the user menu — visualizes your watch history
-- **Three data sources**: Local (Emby cache only), Trakt (mirrored history), Combined (union with Trakt timestamps preferred)
-- **Time range selector**: Last 30 / 90 days, Last year, All time
-- **Stat cards** — total watched, total watch time, currently-watching series count, average per week
-- **Lifetime stats** (Trakt mode) — lifetime movies / episodes / hours / distinct shows from `/users/me/stats`, cached 1h
-- **Activity heatmap** — GitHub-style grid with range-adaptive cell sizing, month + day-of-week labels, 5 quantile-based intensity buckets
-- **Watch frequency bar chart** — daily bars for short ranges, weekly aggregation for long ranges, Y-axis in hours with gridlines
-- **Top series / top movies / genre breakdown** — all range-filtered
-- **On-demand Trakt history backfill** with configurable cap (Last 2 years / Full)
+### :bar_chart: Watch History Analytics (`/analytics`)
+- **Three data sources**: Local (Emby SQLite cache), Trakt (mirrored history), Combined (union).
+- **Time range selector**: Last 30 Days, Last 90 Days, Last Year, All Time.
+- **Stat cards**: Total watch time, weekly average hours, movies watched, episodes watched, and currently-watching series.
+- **Trakt Lifetime block**: Lifetime movies, episodes, hours, and distinct shows from Trakt `/users/me/stats`.
+- **GitHub-style activity heatmap**: Range-adaptive grid with 5 amber quantile intensity levels.
+- **Watch frequency bar chart**: Visualizes daily and weekly viewing hours.
+- **Top series, top movies & genre shares**: Detailed breakdowns of viewing habits.
 
-### :forward: Skip Intro / Credits / Recap
-- **TheIntroDB-backed** segment detection — no upload needed; everything happens client-side
-- **Clickable amber skip button** (mouse or Enter key) — matches the ModernZ OSC theme
-- **Per-segment re-arm on backward seek** — seek back before the segment, the prompt fires again
-- **"Next Episode" mode** for credits — credits prompt advances to the next episode instead of skipping forward in the current one
-- Configurable per segment type (Settings → Playback)
-
-### :card_index_dividers: Library Deduplication
-- Matches duplicates by **TMDB ID → IMDB ID → Name+Year** fallback chain
-- **Version picker** on detail pages showing quality, codec, and file size per copy
-- **Episode-level dedup** across multiple series versions (e.g., 1080p + 4K remux of the same show)
-- Deduped Continue Watching, search results (with version count badges), and home rows
-- Preferred-quality setting (highest / lowest) for automatic version selection
-
-### :tv: Playback
-- **Bundled mpv** — no separate install required
-- Full codec support: HEVC/H.265, H.264, DTS, TrueHD, Atmos, AAC, **HDR10**, **Dolby Vision**
-- **Direct play** — no server-side transcoding
-- **Instant playback** — mpv runs in idle mode, `loadfile` is sub-second
-- **ModernZ OSC theme** with amber accent — interactive seek bar, draggable controls
-- **Anchored audio / subtitle / playlist menus** — pinned panels, not transient popups
-- Resume from exact position, smooth fade-to-black transitions between browser and player
-
-### :speech_balloon: Subtitles
-- Configurable appearance: font, size, color, border, background, position
-- **OpenSubtitles integration** — press `b` during playback to search and download
-- 50+ language code mappings for clean track labels
-
-### :art: UI
-- Plex-like dark theme with amber accents
-- **Hero banner** with rotating backdrop on the home screen
-- **Continue Watching** and **Next Up** rows, deduplicated across versions
-- **Right-click context menus** on every card (mark played, favorite, go to series, etc.)
-- Real-time search with version count badges and instant dropdown preview
-- Smooth fade-to-black transitions for playback start/end
-
-### :gear: Other
-- **Auto-update** via electron-updater + GitHub Releases (download progress + restart prompt)
-- **Toast notification** system for user feedback
-- **Error boundary** to keep the renderer alive after unexpected crashes
-- **Session expiry handling** — 401 detection redirects to login automatically
-- **Reset App** option in Settings → Danger Zone (clears cache, settings, and servers)
-
-### :keyboard: Keyboard Shortcuts
-
-**Browsing:**
-| Key | Action |
-|-----|--------|
-| `Ctrl+K` | Focus search |
-| `Ctrl+B` | Toggle sidebar |
-| `Escape` | Close sidebar / menus |
-
-**Playback (mpv):**
-| Key | Action |
-|-----|--------|
-| `Space` | Play / Pause |
-| `←` / `→` | Seek -10s / +10s |
-| `Shift+←` / `Shift+→` | Seek -30s / +30s |
-| `↑` / `↓` | Volume up / down |
-| `S` | Cycle subtitles |
-| `A` | Cycle audio tracks |
-| `B` | Search OpenSubtitles for current file |
-| `M` | Toggle mute |
-| `F` | Toggle fullscreen |
-| `ESC` / `Q` | Stop playback |
-
-## Screenshots
-
-> *Screenshots from v1 are outdated and have been removed pending v2 captures — see the [releases page](../../releases) for the latest build.*
-
-<!--
-Add v2 screenshots here:
-### Home Screen (hero banner + Continue Watching)
-![Home](docs/screenshots/home.png)
-
-### Detail Page (version picker)
-![Detail](docs/screenshots/detail.png)
-
-### Combined Library Browse
-![Library](docs/screenshots/library.png)
-
-### Settings (subtitle config + power modes)
-![Settings](docs/screenshots/settings.png)
-
-### Player (ModernZ + anchored menus)
-![Player](docs/screenshots/player.png)
--->
-
-## Installation
-
-### Windows (Recommended)
-
-1. Download the latest `Nocturne-Setup-3.5.0.exe` from the [Releases page](../../releases)
-2. Run the installer
-3. Launch Nocturne from the Start Menu or Desktop shortcut
-4. Enter your Emby server address and sign in
-5. (Optional) Add additional servers from the user menu, or enable combined mode in Settings
-
-> **Note:** mpv is bundled with the installer — no separate installation needed.
+---
 
 ## Building from Source
 
 ### Prerequisites
-- Node.js 20+
-- npm
-- Windows 10/11 (for building the Windows target)
-- mpv installed (`winget install shinchiro.mpv`) — needed for development
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- Node.js (v18+) for packaging automation
 
-### Setup
-
+### Build Commands
 ```bash
-# Clone the repo
-git clone https://github.com/YOUR_USERNAME/nocturne.git
-cd nocturne
+# Clone the repository
+git clone https://github.com/tokudai-vs/Nocturne.git
+cd Nocturne
 
-# One-command setup (installs deps, downloads mpv + ModernZ,
-# mirrors our custom mpv portable_config to resources/, generates icons)
-npm run setup
+# Build the native solution
+dotnet build src-native/Nocturne.sln
 
-# Or do it manually:
-npm install
-npm run download-mpv
-npm run download-modernz
-npm run mirror-mpv-config
-npm run generate-icons
+# Run all unit tests
+dotnet test src-native/Nocturne.Tests/Nocturne.Tests.csproj
 
-# Start in development mode
-npm start
+# Compile the standalone setup installer
+node scripts/build-installer.js
 ```
 
-### Building the Installer
-
-```powershell
-# From Windows PowerShell:
-npm run generate-icons
-npm run package:win
-```
-
-The installer will be at `dist/Nocturne Setup 3.5.0.exe`.
-
-### Notes for Development
-
-- **First sync time scales with library size** — a 1M-item library takes roughly 4–5 hours for the initial full sync. Incremental syncs after that are minutes.
-- **Combined mode requires 2+ servers** to be configured before it can be enabled in Settings.
-- **Manual rebuild dedup** may be needed after major library reorganizations on the server (renaming libraries, large bulk imports). It's available in Settings → Cache.
-- **Pre-release smoke test** — before shipping any change that touches the main process or IPC, walk the checklist in `AGENTS.md` ("Pre-release smoke test"). It exists because two ship-stoppers in v3 cleared every static check and only failed at runtime. `prebuild` and `postbuild` now run guards (`scripts/check-relative-requires.js`, `scripts/check-bundling.js`) but the smoke test catches the rest.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│             Electron Main Process               │
-│  ┌──────────────┐  ┌────────────┐  ┌─────────┐ │
-│  │ EmbyClient   │  │ MpvManager │  │ Updater │ │
-│  │ (REST/IPC)   │  │ (JSON IPC) │  │         │ │
-│  └──────┬───────┘  └─────┬──────┘  └────┬────┘ │
-│         │                │              │       │
-│  ┌──────┴───────┐  ┌─────┴──────┐  ┌────┴────┐ │
-│  │ ServerMgr    │  │ SyncEngine │  │ Settings│ │
-│  │ Multi-server │  │ Checkpoint │  │ Store   │ │
-│  └──────┬───────┘  └─────┬──────┘  └─────────┘ │
-│         │                │                      │
-│  ┌──────┴────────────────┴──────────────────┐  │
-│  │ SQLite (better-sqlite3, WAL)             │  │
-│  │ items · dedup_groups · sync_state · imgs │  │
-│  └──────────────────────────────────────────┘  │
-│         │                                       │
-│    IPC Bridge (contextBridge → window.api)      │
-├─────────┴───────────────────────────────────────┤
-│             Renderer Process                    │
-│  React 19 + TypeScript + Zustand + CSS Modules  │
-└─────────────────────────────────────────────────┘
-         ↕ JSON IPC (named pipe)
-┌─────────────────────────────────────────────────┐
-│  mpv (bundled, idle mode)                       │
-│  + ModernZ OSC                                  │
-│  + open-subtitles.lua + nocturne_select.lua     │
-│  + portable_config                              │
-└─────────────────────────────────────────────────┘
-```
-
-### Key Design Decisions
-
-- **Cache-first** — every page reads from SQLite first, then enriches from the API in the background. Browsing stays instant even on cold starts.
-- **mpv as external process** — Electron's Chromium compositor cannot embed mpv video. mpv runs as a separate fullscreen window with the main window hidden during playback. Smooth fade transitions mask the window swap.
-- **Idle mode** — mpv starts once on app launch and stays running. Playback is triggered via `loadfile` IPC command — instant, no process startup delay.
-- **Dedup pipeline** — TMDB → IMDB → Name+Year. Runs after each sync, persisted to SQLite, and respected by every list query (Continue Watching, search, library, home rows).
-- **Multi-server combined mode** — virtual libraries can span servers. Cross-server dedup makes the same movie on two servers appear once with a version picker that lets you pick which server to play from.
-- **All HTTP through main process** — The renderer never makes direct HTTP requests. All Emby API calls go through IPC to the main process, avoiding CORS and keeping tokens secure.
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| Shell | Electron 33 |
-| UI | React 19 + TypeScript |
-| Build | electron-vite + Vite 7 |
-| State | Zustand |
-| Styling | CSS Modules |
-| Icons | Lucide React |
-| Database | better-sqlite3 (WAL mode) |
-| Settings | electron-store |
-| Auto-update | electron-updater |
-| Video | mpv (bundled) |
-| Player UI | ModernZ OSC |
-| Subtitle search | OpenSubtitles (via `open-subtitles.lua`) |
-| Installer | electron-builder (NSIS) |
-
-## Roadmap
-
-### v3 (shipped)
-- [x] Trakt.tv integration — scrobbling, bidirectional watched-state sync, watchlist, ratings, drift indicator
-- [x] Skip intro / credits / recap (TheIntroDB) — clickable amber skip button, per-segment re-arm on backward seek
-- [x] Next / Previous episode navigation — `>` / `<` keybinds in mpv, EOF auto-advance
-- [x] Trailer playback in detail pages
-- [x] Subtitle auto-download — preferred-language setting + automatic OpenSubtitles lookup
-- [x] Watch History analytics — `/analytics` page with Local / Trakt / Combined sources
-
-### v3.x (planned)
-- [ ] Smart collections (rules-based grouping)
-- [ ] "Continue listening" for music libraries
-- [ ] Watch history Trakt enrichments — rating distribution chart, friends/followers stats
-- [ ] Watch party — Cloudflare Tunnel + HLS for low-friction co-viewing
-
-### v4 (planned)
-- [ ] Native shell rewrite — .NET + WebView2 + libmpv (drop Electron + mpv subprocess)
-- [ ] Mica + acrylic effects on Windows 11
-- [ ] In-process video composition (no more window-swap hack)
-
-## Contributing
-
-Contributions are welcome! Please open an issue first to discuss what you'd like to change.
-
-## License
-
-[MIT](LICENSE)
-
-## Acknowledgments
-
-- [mpv](https://mpv.io) — the best video player engine
-- [ModernZ](https://github.com/Samillion/ModernZ) — beautiful mpv OSC
-- [OpenSubtitles](https://www.opensubtitles.com) — subtitle database powering in-player search
-- [Emby](https://emby.media) — media server
-- [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) — synchronous SQLite that makes the cache layer possible
-- [electron-updater](https://www.electron.build/auto-update) — auto-update plumbing
-- [Electron](https://www.electronjs.org) — desktop app framework
-- [Plex](https://plex.tv) — UI inspiration
+The generated installer will be output directly to `dist/Nocturne-v4.0.0-Setup.exe`.
 
 ---
 
-<div align="center">
-<sub>Co-authored with <a href="https://claude.ai">Claude</a> (Anthropic)</sub>
-</div>
+## Testing
+
+Nocturne includes unit tests for core modules:
+```bash
+dotnet test src-native/Nocturne.Tests/Nocturne.Tests.csproj
+```
+Tests cover:
+- URL normalization & Emby ServiceStack PascalCase serialization.
+- 6-pass deduplication matching pipeline & primary item resolution scoring.
+- TheIntroDB skip segment detection, re-arm logic, and action labels.
+- Theme accent color palette validation.
+
+---
+
+## License
+
+MIT © Vishal ([@tokudai-vs](https://github.com/tokudai-vs))

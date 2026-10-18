@@ -1,0 +1,306 @@
+using System.Diagnostics;
+using System.IO.Pipes;
+using System.Text;
+using System.Text.Json;
+using Nocturne.Core.Utils;
+
+namespace Nocturne.Core.Services;
+
+public class MpvController : IDisposable
+{
+    private Process? _mpvProcess;
+    private NamedPipeClientStream? _pipeClient;
+    private StreamWriter? _writer;
+    private StreamReader? _reader;
+    private readonly string _pipeName;
+    private bool _isReady;
+    private int _reqId;
+    private CancellationTokenSource? _readCts;
+
+    public event Action? PlaybackStarted;
+    public event Action? PlaybackEnded;
+    public event Action<double>? PositionChanged;
+    public event Action<string>? ErrorOccurred;
+    public event Action? NextEpisodeRequested;
+    public event Action? PreviousEpisodeRequested;
+
+    public MpvController()
+    {
+        _pipeName = $"nocturne-mpv-{Environment.ProcessId}";
+    }
+
+    public bool IsPlaying { get; private set; }
+    public double CurrentPositionSeconds { get; private set; }
+    public double DurationSeconds { get; private set; }
+
+    public async Task StartIdleAsync()
+    {
+        if (_mpvProcess != null && !_mpvProcess.HasExited) return;
+
+        var mpvExe = FindMpvExecutable();
+        if (string.IsNullOrEmpty(mpvExe) || !File.Exists(mpvExe))
+        {
+            NocturneLogger.Error("MpvController", $"mpv.exe not found at '{mpvExe}'");
+            ErrorOccurred?.Invoke($"mpv.exe not found at '{mpvExe}'");
+            return;
+        }
+
+        var mpvDir = Path.GetDirectoryName(mpvExe)!;
+        var configDir = Path.Combine(mpvDir, "portable_config");
+
+        var args = new List<string>
+        {
+            "--idle=yes",
+            $"--input-ipc-server=\\\\.\\pipe\\{_pipeName}",
+            "--force-window=no",
+            "--osc=yes",
+            "--really-quiet"
+        };
+
+        if (Directory.Exists(configDir))
+        {
+            args.Add($"--config-dir=\"{configDir}\"");
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = mpvExe,
+            Arguments = string.Join(" ", args),
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+
+        try
+        {
+            _mpvProcess = Process.Start(psi);
+            if (_mpvProcess == null)
+            {
+                ErrorOccurred?.Invoke("Failed to spawn mpv process.");
+                return;
+            }
+
+            _mpvProcess.EnableRaisingEvents = true;
+            _mpvProcess.Exited += (s, e) =>
+            {
+                IsPlaying = false;
+                PlaybackEnded?.Invoke();
+            };
+
+            await ConnectPipeAsync();
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Error("MpvController", "Failed to start mpv", ex);
+            ErrorOccurred?.Invoke($"Failed to start mpv: {ex.Message}");
+        }
+    }
+
+    private async Task ConnectPipeAsync()
+    {
+        _pipeClient = new NamedPipeClientStream(".", _pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+
+        var attempts = 0;
+        while (attempts < 25)
+        {
+            try
+            {
+                await _pipeClient.ConnectAsync(400);
+                if (_pipeClient.IsConnected) break;
+            }
+            catch
+            {
+                await Task.Delay(100);
+            }
+            attempts++;
+        }
+
+        if (!_pipeClient.IsConnected)
+        {
+            ErrorOccurred?.Invoke("Failed to connect to mpv named pipe.");
+            return;
+        }
+
+        _writer = new StreamWriter(_pipeClient, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
+        _reader = new StreamReader(_pipeClient, Encoding.UTF8, false, 1024, leaveOpen: true);
+        _isReady = true;
+
+        _readCts = new CancellationTokenSource();
+        _ = Task.Run(() => ReadLoopAsync(_readCts.Token));
+
+        // Observe key properties
+        await SendCommandAsync(new object[] { "observe_property", 1, "time-pos" });
+        await SendCommandAsync(new object[] { "observe_property", 2, "duration" });
+        await SendCommandAsync(new object[] { "observe_property", 3, "eof-reached" });
+        await SendCommandAsync(new object[] { "observe_property", 4, "pause" });
+    }
+
+    public async Task PlayAsync(string url, string title, long startPositionTicks = 0)
+    {
+        if (!_isReady || _writer == null)
+        {
+            await StartIdleAsync();
+        }
+
+        if (startPositionTicks > 0)
+        {
+            var startSeconds = (double)startPositionTicks / 10_000_000.0;
+            await SendCommandAsync(new object[] { "set_property", "start", startSeconds });
+        }
+        else
+        {
+            await SendCommandAsync(new object[] { "set_property", "start", 0 });
+        }
+
+        await SendCommandAsync(new object[] { "set_property", "force-media-title", title });
+        await SendCommandAsync(new object[] { "set_property", "fullscreen", "yes" });
+        await SendCommandAsync(new object[] { "loadfile", url, "replace" });
+
+        IsPlaying = true;
+        PlaybackStarted?.Invoke();
+        NocturneLogger.Info("MpvController", $"Playback started: {title}");
+    }
+
+    public async Task PauseAsync()
+    {
+        await SendCommandAsync(new object[] { "cycle", "pause" });
+    }
+
+    public async Task StopAsync()
+    {
+        await SendCommandAsync(new object[] { "stop" });
+        await SendCommandAsync(new object[] { "set_property", "fullscreen", "no" });
+        IsPlaying = false;
+        PlaybackEnded?.Invoke();
+    }
+
+    public async Task SeekTo(double absoluteSeconds)
+    {
+        await SendCommandAsync(new object[] { "seek", absoluteSeconds, "absolute" });
+    }
+
+    public async Task SeekRelative(double seconds)
+    {
+        await SendCommandAsync(new object[] { "seek", seconds, "relative" });
+    }
+
+    public async Task CycleSubtitles()
+    {
+        await SendCommandAsync(new object[] { "cycle", "sub" });
+    }
+
+    public async Task CycleAudio()
+    {
+        await SendCommandAsync(new object[] { "cycle", "audio" });
+    }
+
+    public async Task ShowOsdText(string text, int durationMs = 2000)
+    {
+        await SendCommandAsync(new object[] { "show-text", text, durationMs });
+    }
+
+    public void TriggerNextEpisode() => NextEpisodeRequested?.Invoke();
+    public void TriggerPreviousEpisode() => PreviousEpisodeRequested?.Invoke();
+
+    private async Task SendCommandAsync(object[] command)
+    {
+        if (_writer == null || !_isReady) return;
+        var req = new
+        {
+            command = command,
+            request_id = Interlocked.Increment(ref _reqId)
+        };
+        var json = JsonSerializer.Serialize(req);
+        try
+        {
+            await _writer.WriteLineAsync(json);
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("MpvController", $"Send error: {ex.Message}");
+        }
+    }
+
+    private async Task ReadLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && _reader != null)
+        {
+            try
+            {
+                var line = await _reader.ReadLineAsync(ct);
+                if (string.IsNullOrEmpty(line)) continue;
+
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("event", out var evProp))
+                {
+                    var ev = evProp.GetString();
+                    if (ev == "property-change" && root.TryGetProperty("name", out var nameProp))
+                    {
+                        var name = nameProp.GetString();
+                        if (name == "time-pos" && root.TryGetProperty("data", out var dataProp))
+                        {
+                            if (dataProp.ValueKind == JsonValueKind.Number)
+                            {
+                                CurrentPositionSeconds = dataProp.GetDouble();
+                                PositionChanged?.Invoke(CurrentPositionSeconds);
+                            }
+                        }
+                        else if (name == "duration" && root.TryGetProperty("data", out var durProp))
+                        {
+                            if (durProp.ValueKind == JsonValueKind.Number)
+                            {
+                                DurationSeconds = durProp.GetDouble();
+                            }
+                        }
+                        else if (name == "eof-reached" && root.TryGetProperty("data", out var eofProp))
+                        {
+                            if (eofProp.ValueKind == JsonValueKind.True)
+                            {
+                                NocturneLogger.Info("MpvController", "EOF reached. Invoking next episode / completion.");
+                                NextEpisodeRequested?.Invoke();
+                            }
+                        }
+                    }
+                    else if (ev == "end-file")
+                    {
+                        IsPlaying = false;
+                        PlaybackEnded?.Invoke();
+                    }
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("MpvController", $"Read error: {ex.Message}");
+                break;
+            }
+        }
+    }
+
+    private static string FindMpvExecutable()
+    {
+        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        var localMpv = Path.Combine(baseDir, "resources", "mpv", "mpv.exe");
+        if (File.Exists(localMpv)) return localMpv;
+
+        var siblingMpv = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "resources", "mpv", "mpv.exe"));
+        if (File.Exists(siblingMpv)) return siblingMpv;
+
+        return "mpv.exe";
+    }
+
+    public void Dispose()
+    {
+        _readCts?.Cancel();
+        _writer?.Dispose();
+        _reader?.Dispose();
+        _pipeClient?.Dispose();
+        if (_mpvProcess != null && !_mpvProcess.HasExited)
+        {
+            try { _mpvProcess.Kill(); } catch { }
+            _mpvProcess.Dispose();
+        }
+    }
+}

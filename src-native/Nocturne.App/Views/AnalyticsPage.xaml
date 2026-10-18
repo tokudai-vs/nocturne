@@ -1,0 +1,297 @@
+<UserControl x:Class="Nocturne.App.Views.AnalyticsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="36,28,36,48" MaxWidth="1100" HorizontalAlignment="Left">
+
+            <!-- Title & Filter Controls Bar -->
+            <DockPanel Margin="0,0,0,28">
+                <!-- Source & Range Filters -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- Source Selector -->
+                    <TextBlock Text="Source:" FontSize="13" Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox SelectedValuePath="Tag" SelectedValue="{Binding SelectedSource, Mode=TwoWay}" MinWidth="120" Margin="0,0,16,0">
+                        <ComboBoxItem Content="Combined" Tag="combined" />
+                        <ComboBoxItem Content="Local (Emby)" Tag="local" />
+                        <ComboBoxItem Content="Trakt.tv" Tag="trakt" />
+                    </ComboBox>
+
+                    <!-- Range Selector -->
+                    <TextBlock Text="Range:" FontSize="13" Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox SelectedValuePath="Tag" SelectedValue="{Binding SelectedDays, Mode=TwoWay}" MinWidth="130">
+                        <ComboBoxItem Content="Last 30 Days" Tag="30" />
+                        <ComboBoxItem Content="Last 90 Days" Tag="90" />
+                        <ComboBoxItem Content="Last Year" Tag="365" />
+                        <ComboBoxItem Content="All Time" Tag="0" />
+                    </ComboBox>
+                </StackPanel>
+
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="Watch History Analytics" FontSize="26" FontWeight="Bold"
+                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                    <TextBlock Text="Personal viewing statistics, habits, and activity trends"
+                               FontSize="13" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0" />
+                </StackPanel>
+            </DockPanel>
+
+            <!-- ── STAT CARDS ROW ── -->
+            <Grid Margin="0,0,0,24">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Total Watch Time Card -->
+                <Border Grid.Column="0" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="18">
+                    <StackPanel>
+                        <ui:SymbolIcon Symbol="Clock24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
+                        <TextBlock Text="Total Watch Time" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="{Binding FormattedWatchTime}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Weekly Average Card -->
+                <Border Grid.Column="2" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="18">
+                    <StackPanel>
+                        <ui:SymbolIcon Symbol="CalendarClock24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
+                        <TextBlock Text="Weekly Average" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="{Binding FormattedAverageWeekly}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Movies Watched Card -->
+                <Border Grid.Column="4" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="18">
+                    <StackPanel>
+                        <ui:SymbolIcon Symbol="Filmstrip24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
+                        <TextBlock Text="Movies Watched" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="{Binding Stats.MoviesWatched}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Episodes Watched Card -->
+                <Border Grid.Column="6" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="18">
+                    <StackPanel>
+                        <ui:SymbolIcon Symbol="Tv24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
+                        <TextBlock Text="Episodes Watched" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="{Binding Stats.EpisodesWatched}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- ── TRAKT LIFETIME STATS BLOCK (WHEN CONNECTED) ── -->
+            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="20" Margin="0,0,0,24"
+                    Visibility="{Binding HasLifetimeStats, Converter={StaticResource BoolToVisibility}}">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,14">
+                        <TextBlock Text="Trakt.tv Lifetime Statistics" FontSize="15" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                        <Border DockPanel.Dock="Right" Background="#30E5A00D" CornerRadius="4" Padding="8,2">
+                            <TextBlock Text="Synced from Trakt" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource NocturneAmberBrush}" />
+                        </Border>
+                    </DockPanel>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Lifetime Movies" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="{Binding LifetimeStats.MoviesWatched}" FontSize="18" FontWeight="SemiBold" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="Lifetime Episodes" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="{Binding LifetimeStats.EpisodesWatched}" FontSize="18" FontWeight="SemiBold" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Distinct Shows" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="{Binding LifetimeStats.DistinctShows}" FontSize="18" FontWeight="SemiBold" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="3">
+                            <TextBlock Text="Total Lifetime Hours" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="{Binding LifetimeStats.TotalHours, StringFormat='{}{0} hrs'}" FontSize="18" FontWeight="SemiBold" Margin="0,2,0,0" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- ── GITHUB-STYLE ACTIVITY HEATMAP ── -->
+            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="20" Margin="0,0,0,24">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,16">
+                        <TextBlock Text="Viewing Activity Heatmap" FontSize="15" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                        <!-- Legend -->
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Less" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,6,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="#18FFFFFF" Margin="2,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="#40E5A00D" Margin="2,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="#80E5A00D" Margin="2,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="#C0E5A00D" Margin="2,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="#FFE5A00D" Margin="2,0" />
+                            <TextBlock Text="More" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="6,0,0,0" />
+                        </StackPanel>
+                    </DockPanel>
+
+                    <!-- Heatmap Grid -->
+                    <ItemsControl ItemsSource="{Binding HeatmapCells}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel MaxWidth="1020" Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Width="13" Height="13" Margin="2" CornerRadius="3"
+                                        Background="{Binding Level, Converter={StaticResource HeatmapBrush}}"
+                                        ToolTip="{Binding Tooltip}" Cursor="Hand" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <!-- ── WATCH FREQUENCY BAR CHART ── -->
+            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="20" Margin="0,0,0,24">
+                <StackPanel>
+                    <TextBlock Text="Recent Daily Watch Frequency (Hours)" FontSize="15" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,20" />
+
+                    <!-- Bar Chart Container -->
+                    <ItemsControl ItemsSource="{Binding FrequencyBars}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <UniformGrid Rows="1" Height="130" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid VerticalAlignment="Bottom" Margin="4,0" ToolTip="{Binding Hours, StringFormat='{}{0:F1} hrs'}">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Bar Column -->
+                                    <Border Grid.Row="0" VerticalAlignment="Bottom" CornerRadius="4,4,0,0"
+                                            Background="{StaticResource NocturneAmberBrush}"
+                                            Height="{Binding HeightRatio, Converter={StaticResource BarHeightConverter}, ConverterParameter=90}" />
+
+                                    <!-- Date Label -->
+                                    <TextBlock Grid.Row="1" Text="{Binding Label}" FontSize="10"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               HorizontalAlignment="Center" Margin="0,6,0,0" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <!-- ── TOP MEDIA & GENRES GRID ── -->
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Top Series -->
+                <Border Grid.Column="0" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="18">
+                    <StackPanel>
+                        <TextBlock Text="Top Series" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,12" />
+                        <ItemsControl ItemsSource="{Binding TopSeries}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <DockPanel Margin="0,4">
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding FormattedInfo}" FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Title}" FontWeight="Medium" FontSize="13" TextTrimming="CharacterEllipsis" />
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!-- Top Movies -->
+                <Border Grid.Column="2" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="18">
+                    <StackPanel>
+                        <TextBlock Text="Top Movies" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,12" />
+                        <ItemsControl ItemsSource="{Binding TopMovies}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <DockPanel Margin="0,4">
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding FormattedInfo}" FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Title}" FontWeight="Medium" FontSize="13" TextTrimming="CharacterEllipsis" />
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!-- Top Genres Breakdown -->
+                <Border Grid.Column="4" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="18">
+                    <StackPanel>
+                        <TextBlock Text="Top Genres" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,12" />
+                        <ItemsControl ItemsSource="{Binding TopGenres}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,4">
+                                        <DockPanel>
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding Percentage, StringFormat='{}{0:F0}%'}" FontSize="11"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                            <TextBlock Text="{Binding Genre}" FontWeight="Medium" FontSize="12" TextTrimming="CharacterEllipsis" />
+                                        </DockPanel>
+                                        <ProgressBar Value="{Binding Percentage}" Maximum="100" Height="4" Margin="0,3,0,0"
+                                                     Foreground="{StaticResource NocturneAmberBrush}"
+                                                     Background="#20FFFFFF" BorderThickness="0" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

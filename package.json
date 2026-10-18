@@ -1,9 +1,13 @@
 {
   "name": "nocturne",
-  "version": "3.5.0",
-  "description": "Desktop Emby media client with multi-server support, SQLite cache, library deduplication, Trakt.tv integration, and a watch-history analytics page.",
+  "version": "4.0.0",
+  "description": "Pure Native Windows & Desktop Emby client with Mica, Acrylic, multi-server support, SQLite cache, library deduplication, and Trakt.tv integration.",
   "main": "./out/main/index.js",
   "scripts": {
+    "build:native": "dotnet build src-native/Nocturne.sln",
+    "test:native": "dotnet test src-native/Nocturne.Tests/Nocturne.Tests.csproj",
+    "package:native": "dotnet publish src-native/Nocturne.App/Nocturne.App.csproj -r win-x64 -c Release -o bin/native-win/ --self-contained false && node scripts/copy-native-resources.js",
+    "package:installer": "node scripts/build-installer.js",
     "start": "electron-vite dev",
     "prebuild": "npm run mirror-mpv-config && npm run check-relative-requires",
     "build": "electron-vite build",

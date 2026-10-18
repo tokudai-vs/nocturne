@@ -4,6 +4,9 @@ node_modules/
 # Build output
 out/
 dist/
+bin/
+src-native/**/bin/
+src-native/**/obj/
 
 # Bundled mpv (large binary, users download separately or we attach to release)
 resources/mpv/
