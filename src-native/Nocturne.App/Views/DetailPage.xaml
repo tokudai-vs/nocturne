@@ -4,92 +4,119 @@
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              xmlns:controls="clr-namespace:Nocturne.App.Controls">
 
-    <Grid>
+    <Grid Background="#0D0D0D">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid>
-                <!-- Backdrop Image with Gradient Vignette -->
-                <Grid Height="480" VerticalAlignment="Top">
+                <!-- Hero Backdrop Image with Deep Cinematic Vignette -->
+                <Grid Height="500" VerticalAlignment="Top">
                     <Image Source="{Binding BackdropUrl}" Stretch="UniformToFill" />
+                    <!-- Bottom fade to #0D0D0D -->
                     <Grid>
                         <Grid.Background>
                             <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                <GradientStop Color="#40000000" Offset="0.0" />
-                                <GradientStop Color="#A00C0C0C" Offset="0.6" />
-                                <GradientStop Color="#FF0C0C0C" Offset="1.0" />
+                                <GradientStop Color="#200D0D0D" Offset="0.0" />
+                                <GradientStop Color="#800D0D0D" Offset="0.4" />
+                                <GradientStop Color="#F00D0D0D" Offset="0.85" />
+                                <GradientStop Color="#FF0D0D0D" Offset="1.0" />
+                            </LinearGradientBrush>
+                        </Grid.Background>
+                    </Grid>
+                    <!-- Left vignette for readability -->
+                    <Grid>
+                        <Grid.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                <GradientStop Color="#D00D0D0D" Offset="0.0" />
+                                <GradientStop Color="#850D0D0D" Offset="0.4" />
+                                <GradientStop Color="#000D0D0D" Offset="0.85" />
                             </LinearGradientBrush>
                         </Grid.Background>
                     </Grid>
                 </Grid>
 
                 <!-- Main Content Container -->
-                <StackPanel Margin="36,24,36,48">
+                <StackPanel Margin="48,24,48,48">
                     <!-- Back Button -->
-                    <ui:Button Click="OnBackClick" Width="38" Height="38" Margin="0,0,0,16"
-                               HorizontalAlignment="Left" CornerRadius="19"
-                               Background="#80000000" Foreground="White" BorderThickness="0">
-                        <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="18" />
-                    </ui:Button>
+                    <Button Click="OnBackClick" Width="40" Height="40" Margin="0,0,0,20"
+                            HorizontalAlignment="Left" Cursor="Hand">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="b" CornerRadius="20" Background="#60000000" BorderBrush="#30FFFFFF" BorderThickness="1">
+                                    <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="b" Property="Background" Value="#90000000" />
+                                        <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
 
                     <!-- Hero Info Block -->
-                    <Grid Margin="0,20,0,32">
+                    <Grid Margin="0,10,0,36">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="240" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
 
                         <!-- Poster -->
-                        <Border Grid.Column="0" CornerRadius="10" ClipToBounds="True" Height="330"
-                                BorderBrush="{StaticResource GlassBorderDarkBrush}" BorderThickness="1">
+                        <Border Grid.Column="0" CornerRadius="12" ClipToBounds="True" Height="360"
+                                BorderBrush="#25FFFFFF" BorderThickness="1" Background="#181818">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="24" ShadowDepth="4" Direction="270" Color="#000000" Opacity="0.7" />
+                            </Border.Effect>
                             <Image Source="{Binding PosterUrl}" Stretch="UniformToFill" />
                         </Border>
 
                         <!-- Details Column -->
-                        <StackPanel Grid.Column="1" Margin="32,10,0,0">
-                            <TextBlock Text="{Binding Item.Name}" FontSize="34" FontWeight="Bold"
-                                       Foreground="White" TextWrapping="Wrap" Margin="0,0,0,8" />
+                        <StackPanel Grid.Column="1" Margin="36,6,0,0">
+                            <!-- Title -->
+                            <TextBlock Text="{Binding Item.Name}" FontSize="36" FontWeight="Bold"
+                                       Foreground="#FFFFFF" TextWrapping="Wrap" Margin="0,0,0,10" />
 
                             <!-- Meta Badges Row -->
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,18" VerticalAlignment="Center">
-                                <TextBlock Text="{Binding Item.ProductionYear}" FontSize="13" Foreground="#C0C0C0" Margin="0,0,12,0" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Item.ProductionYear}" FontSize="14" Foreground="#CCCCCC" Margin="0,0,14,0" VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Item.RunTimeTicks, Converter={StaticResource TicksToDuration}}"
-                                           FontSize="13" Foreground="#C0C0C0" Margin="0,0,12,0" VerticalAlignment="Center" />
+                                           FontSize="14" Foreground="#CCCCCC" Margin="0,0,14,0" VerticalAlignment="Center" />
 
                                 <!-- Resolution Badge (4K / 1080p) -->
-                                <Border Background="#25FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
+                                <Border Background="#25FFFFFF" CornerRadius="4" Padding="7,3" Margin="0,0,8,0"
                                         Visibility="{Binding Item.ResolutionBadge, Converter={StaticResource NullToVisibility}}">
-                                    <TextBlock Text="{Binding Item.ResolutionBadge}" FontSize="11" FontWeight="SemiBold" Foreground="White" />
+                                    <TextBlock Text="{Binding Item.ResolutionBadge}" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
                                 </Border>
 
                                 <!-- Codec Badge (HEVC / H264) -->
-                                <Border Background="#25FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,12,0"
+                                <Border Background="#25FFFFFF" CornerRadius="4" Padding="7,3" Margin="0,0,12,0"
                                         Visibility="{Binding Item.CodecBadge, Converter={StaticResource NullToVisibility}}">
-                                    <TextBlock Text="{Binding Item.CodecBadge}" FontSize="11" FontWeight="SemiBold" Foreground="White" />
+                                    <TextBlock Text="{Binding Item.CodecBadge}" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
                                 </Border>
 
                                 <!-- Community Rating Badge -->
-                                <Border Background="#33E5A00D" CornerRadius="4" Padding="8,2" Margin="0,0,8,0"
+                                <Border Background="#33E5A00D" CornerRadius="4" Padding="8,3" Margin="0,0,8,0"
                                         Visibility="{Binding Item.CommunityRating, Converter={StaticResource NullToVisibility}}">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="Star16" FontSize="12" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,4,0" />
+                                        <ui:SymbolIcon Symbol="Star16" FontSize="12" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,5,0" />
                                         <TextBlock Text="{Binding Item.CommunityRating, Converter={StaticResource RatingFormatter}}"
-                                                   FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource NocturneAmberBrush}" />
+                                                   FontSize="12" FontWeight="Bold" Foreground="{StaticResource NocturneAmberBrush}" />
                                     </StackPanel>
                                 </Border>
                             </StackPanel>
 
                             <!-- Version Picker (Multi-Server Dedup) -->
-                            <StackPanel Margin="0,0,0,18" Visibility="{Binding HasMultipleVersions, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel Margin="0,0,0,20" Visibility="{Binding HasMultipleVersions, Converter={StaticResource BoolToVisibility}}">
                                 <TextBlock Text="Available Versions" FontSize="12" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,6" />
-                                <ComboBox HorizontalAlignment="Left" MinWidth="260"
+                                           Foreground="#AAAAAA" Margin="0,0,0,6" />
+                                <ComboBox HorizontalAlignment="Left" MinWidth="280" Height="36"
                                           ItemsSource="{Binding GroupVersions}"
                                           SelectedItem="{Binding SelectedVersion, Mode=TwoWay}">
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate>
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="{Binding ResolutionBadge}" FontWeight="SemiBold" Margin="0,0,8,0" />
-                                                <TextBlock Text="{Binding CodecBadge}" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,8,0" />
-                                                <TextBlock Text="•" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,8,0" />
+                                                <TextBlock Text="{Binding CodecBadge}" Foreground="#AAAAAA" Margin="0,0,8,0" />
+                                                <TextBlock Text="•" Foreground="#777777" Margin="0,0,8,0" />
                                                 <TextBlock Text="{Binding ServerName}" Foreground="{StaticResource NocturneAmberBrush}" />
                                             </StackPanel>
                                         </DataTemplate>
@@ -100,60 +127,135 @@
                             <!-- Action Buttons Row -->
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
                                 <!-- Play Button -->
-                                <Button Style="{StaticResource AmberPrimaryButton}" Click="OnPlayClick" Margin="0,0,12,0">
+                                <Button Style="{StaticResource AmberPrimaryButton}" Click="OnPlayClick" Padding="20,10" Margin="0,0,12,0">
                                     <StackPanel Orientation="Horizontal">
-                                        <ui:SymbolIcon Symbol="Play24" FontSize="16" Margin="0,0,8,0" />
-                                        <TextBlock Text="Play" FontSize="14" FontWeight="SemiBold" />
+                                        <ui:SymbolIcon Symbol="Play24" FontSize="18" Margin="0,0,8,0" />
+                                        <TextBlock Text="Play" FontSize="15" FontWeight="Bold" />
                                     </StackPanel>
                                 </Button>
 
                                 <!-- Watch Trailer Button -->
-                                <Button Click="OnWatchTrailerClick" Margin="0,0,12,0" Padding="14,8"
+                                <Button Click="OnWatchTrailerClick" Margin="0,0,12,0" Padding="16,10"
+                                        Background="#20FFFFFF" Foreground="#FFFFFF" BorderBrush="#35FFFFFF" BorderThickness="1"
                                         Visibility="{Binding HasTrailer, Converter={StaticResource BoolToVisibility}}">
                                     <StackPanel Orientation="Horizontal">
-                                        <ui:SymbolIcon Symbol="Video24" FontSize="16" Margin="0,0,6,0" />
-                                        <TextBlock Text="Watch Trailer" />
+                                        <ui:SymbolIcon Symbol="Video24" FontSize="16" Margin="0,0,8,0" />
+                                        <TextBlock Text="Watch Trailer" FontWeight="SemiBold" />
                                     </StackPanel>
                                 </Button>
 
                                 <!-- Watched Toggle Button -->
-                                <Button Click="OnPlayedToggleClick" Margin="0,0,8,0" Padding="14,8">
+                                <Button Click="OnPlayedToggleClick" Margin="0,0,8,0" Padding="14,10"
+                                        Background="#1CFFFFFF" Foreground="#E0E0E0" BorderBrush="#30FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal">
                                         <ui:SymbolIcon Symbol="Checkmark24" FontSize="16" Margin="0,0,6,0" />
-                                        <TextBlock Text="Played" />
+                                        <TextBlock Text="Played" FontWeight="Medium" />
                                     </StackPanel>
                                 </Button>
 
                                 <!-- Favorite Toggle Button -->
-                                <Button Click="OnFavoriteToggleClick" Margin="0,0,8,0" Padding="14,8">
+                                <Button Click="OnFavoriteToggleClick" Margin="0,0,8,0" Padding="14,10"
+                                        Background="#1CFFFFFF" Foreground="#E0E0E0" BorderBrush="#30FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal">
                                         <ui:SymbolIcon Symbol="Heart24" FontSize="16" Margin="0,0,6,0" />
-                                        <TextBlock Text="Favorite" />
+                                        <TextBlock Text="Favorite" FontWeight="Medium" />
                                     </StackPanel>
                                 </Button>
 
                                 <!-- Trakt Watchlist Bookmark Toggle -->
-                                <Button Click="OnWatchlistToggleClick" Padding="14,8">
+                                <Button Click="OnWatchlistToggleClick" Padding="14,10"
+                                        Background="#1CFFFFFF" Foreground="#E0E0E0" BorderBrush="#30FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal">
                                         <ui:SymbolIcon Symbol="Bookmark24" FontSize="16" Margin="0,0,6,0" />
-                                        <TextBlock Text="Watchlist" />
+                                        <TextBlock Text="Watchlist" FontWeight="Medium" />
                                     </StackPanel>
                                 </Button>
                             </StackPanel>
 
-                            <!-- Overview Text -->
-                            <TextBlock Text="Overview" FontSize="16" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,6" />
-                            <TextBlock Text="{Binding Item.Overview}" FontSize="13"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap" LineHeight="20" />
+                            <!-- High-Contrast Overview Text Section (Clean #E2E2E2 text on dark card) -->
+                            <Border Background="#141414" BorderBrush="#242424" BorderThickness="1" CornerRadius="10" Padding="20,16" Margin="0,4,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Overview" FontSize="16" FontWeight="SemiBold"
+                                               Foreground="#FFFFFF" Margin="0,0,0,8" />
+                                    <TextBlock Text="{Binding Item.Overview}" FontSize="14"
+                                               Foreground="#E2E2E2"
+                                               TextWrapping="Wrap" LineHeight="22" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </Grid>
 
-                    <!-- Cast & Crew Row -->
-                    <StackPanel Visibility="{Binding People, Converter={StaticResource NullToVisibility}}" Margin="0,8,0,32">
-                        <TextBlock Text="Cast &amp; Crew" FontSize="18" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,14" />
+                    <!-- TV Series Episodes Section (Visible when IsSeries is true) -->
+                    <StackPanel Visibility="{Binding IsSeries, Converter={StaticResource BoolToVisibility}}" Margin="0,8,0,36">
+                        <DockPanel Margin="0,0,0,18">
+                            <TextBlock Text="Episodes" FontSize="22" FontWeight="Bold"
+                                       Foreground="#FFFFFF" VerticalAlignment="Center" />
+                            <ComboBox HorizontalAlignment="Right" MinWidth="200" Height="38"
+                                      ItemsSource="{Binding Seasons}"
+                                      SelectedItem="{Binding SelectedSeason, Mode=TwoWay}"
+                                      DisplayMemberPath="Name" />
+                        </DockPanel>
+
+                        <!-- Episodes List -->
+                        <ItemsControl ItemsSource="{Binding Episodes}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,0,12" Padding="14" CornerRadius="10"
+                                            Background="#151515" BorderBrush="#252525" BorderThickness="1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="200" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- Thumbnail 16:9 with Badges -->
+                                            <Border Grid.Column="0" CornerRadius="8" ClipToBounds="True" Height="112" Width="200"
+                                                    Background="#202020" BorderBrush="#30FFFFFF" BorderThickness="1">
+                                                <Grid>
+                                                    <Image Source="{Binding PrimaryImageUrl}" Stretch="UniformToFill" />
+                                                    <!-- Episode Number Badge -->
+                                                    <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8"
+                                                            Background="#B0000000" CornerRadius="4" Padding="6,2">
+                                                        <TextBlock Text="{Binding IndexNumber, StringFormat='{}E{0}'}"
+                                                                   FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
+                                                    </Border>
+                                                </Grid>
+                                            </Border>
+
+                                            <!-- Episode Info -->
+                                            <StackPanel Grid.Column="1" Margin="20,4,16,4" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding DisplayTitle}" FontSize="15" FontWeight="SemiBold"
+                                                           Foreground="#FFFFFF" Margin="0,0,0,4" />
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                                    <TextBlock Text="{Binding RunTimeTicks, Converter={StaticResource TicksToDuration}}"
+                                                               FontSize="12" Foreground="#888888" Margin="0,0,12,0" />
+                                                    <TextBlock Text="{Binding ProductionYear}" FontSize="12" Foreground="#888888" />
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Overview}" FontSize="13" Foreground="#BDBDBD"
+                                                           TextWrapping="Wrap" MaxHeight="40" TextTrimming="CharacterEllipsis" LineHeight="19" />
+                                            </StackPanel>
+
+                                            <!-- Play Button -->
+                                            <Button Grid.Column="2" VerticalAlignment="Center" Margin="8,0,4,0"
+                                                    Style="{StaticResource AmberPrimaryButton}" Padding="16,10"
+                                                    Click="OnPlayEpisodeClick">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <ui:SymbolIcon Symbol="Play24" FontSize="16" Margin="0,0,6,0" />
+                                                    <TextBlock Text="Play" FontSize="13" FontWeight="Bold" />
+                                                </StackPanel>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
+                    <!-- Cast & Crew Section (Visible when HasCast is true) -->
+                    <StackPanel Visibility="{Binding HasCast, Converter={StaticResource BoolToVisibility}}" Margin="0,8,0,36">
+                        <TextBlock Text="Cast &amp; Crew" FontSize="20" FontWeight="Bold"
+                                   Foreground="#FFFFFF" Margin="0,0,0,16" />
                         <ItemsControl ItemsSource="{Binding People}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -162,13 +264,17 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Margin="0,0,12,8" Padding="12,8" CornerRadius="8"
-                                            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                                        <StackPanel Width="120">
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis" />
+                                    <Border Margin="0,0,12,12" Width="140" Padding="10" CornerRadius="8"
+                                            Background="#151515" BorderBrush="#252525" BorderThickness="1">
+                                        <StackPanel HorizontalAlignment="Center">
+                                            <Border CornerRadius="8" ClipToBounds="True" Width="120" Height="140"
+                                                    Background="#222222" Margin="0,0,0,8">
+                                                <Image Source="{Binding ImageUrl}" Stretch="UniformToFill" />
+                                            </Border>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"
+                                                       Foreground="#FFFFFF" TextTrimming="CharacterEllipsis" TextAlignment="Center" />
                                             <TextBlock Text="{Binding Role}" FontSize="11" Margin="0,2,0,0"
-                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                                                       Foreground="#888888" TextTrimming="CharacterEllipsis" TextAlignment="Center" />
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>
@@ -176,62 +282,13 @@
                         </ItemsControl>
                     </StackPanel>
 
-                    <!-- TV Series Episodes Section -->
-                    <StackPanel Visibility="{Binding Seasons, Converter={StaticResource NullToVisibility}}" Margin="0,8,0,32">
-                        <DockPanel Margin="0,0,0,16">
-                            <TextBlock Text="Episodes" FontSize="20" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" />
-                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                      ItemsSource="{Binding Seasons}"
-                                      SelectedItem="{Binding SelectedSeason}"
-                                      DisplayMemberPath="Name" />
-                        </DockPanel>
-
-                        <!-- Episodes List -->
-                        <ItemsControl ItemsSource="{Binding Episodes}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Margin="0,4" Padding="16,12" CornerRadius="8"
-                                            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                                        <DockPanel>
-                                            <Button DockPanel.Dock="Right" Padding="12,6" Style="{StaticResource AmberPrimaryButton}"
-                                                    Click="OnPlayEpisodeClick" Margin="12,0,0,0">
-                                                <ui:SymbolIcon Symbol="Play16" FontSize="14" />
-                                            </Button>
-                                            <StackPanel VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding DisplayTitle}" FontWeight="SemiBold" FontSize="14"
-                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
-                                                <TextBlock Text="{Binding Overview}" FontSize="12" Margin="0,4,0,0"
-                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                                           MaxHeight="36" TextTrimming="CharacterEllipsis" TextWrapping="Wrap" />
-                                            </StackPanel>
-                                        </DockPanel>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                    <!-- More Like This Row (Visible when HasSimilar is true) -->
+                    <StackPanel Visibility="{Binding HasSimilar, Converter={StaticResource BoolToVisibility}}" Margin="0,8,0,32">
+                        <controls:MediaRow Title="More Like This" ItemsSource="{Binding SimilarItems}" ItemClick="OnSimilarItemClick" />
                     </StackPanel>
-
-                    <!-- Similar Items Row -->
-                    <controls:MediaRow Title="More Like This"
-                                       ItemsSource="{Binding SimilarItems}"
-                                       Visibility="{Binding SimilarItems, Converter={StaticResource NullToVisibility}}" />
 
                 </StackPanel>
             </Grid>
         </ScrollViewer>
-
-        <!-- Floating TheIntroDB Amber Skip Button Overlay -->
-        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,40,40"
-                Visibility="{Binding ActiveSkipPrompt, Converter={StaticResource NullToVisibility}}">
-            <Button Style="{StaticResource AmberPrimaryButton}" Padding="20,12"
-                    Click="OnExecuteSkipClick">
-                <StackPanel Orientation="Horizontal">
-                    <ui:SymbolIcon Symbol="FastForward24" FontSize="18" Margin="0,0,10,0" />
-                    <TextBlock Text="{Binding ActiveSkipPrompt.ActionLabel}" FontSize="15" FontWeight="Bold" />
-                </StackPanel>
-            </Button>
-        </Border>
     </Grid>
 </UserControl>

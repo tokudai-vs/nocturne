@@ -16,6 +16,7 @@ public class MpvController : IDisposable
     private bool _isReady;
     private int _reqId;
     private CancellationTokenSource? _readCts;
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     public event Action? PlaybackStarted;
     public event Action? PlaybackEnded;
@@ -135,6 +136,90 @@ public class MpvController : IDisposable
         await SendCommandAsync(new object[] { "observe_property", 4, "pause" });
     }
 
+    public async Task PlayEmbeddedAsync(IntPtr hwnd, string url, string title, long startPositionTicks = 0)
+    {
+        await StopAsync();
+
+        var mpvExe = FindMpvExecutable();
+        if (string.IsNullOrEmpty(mpvExe) || !File.Exists(mpvExe))
+        {
+            NocturneLogger.Error("MpvController", $"mpv.exe not found at '{mpvExe}'");
+            ErrorOccurred?.Invoke($"mpv.exe not found at '{mpvExe}'");
+            return;
+        }
+
+        var mpvDir = Path.GetDirectoryName(mpvExe)!;
+        var configDir = Path.Combine(mpvDir, "portable_config");
+
+        var args = new List<string>
+        {
+            $"--wid={(long)hwnd}",
+            $"--input-ipc-server=\\\\.\\pipe\\{_pipeName}",
+            "--osc=yes",
+            "--really-quiet",
+            "--keep-open=yes",
+            "--input-default-bindings=yes",
+            "--input-vo-keyboard=yes",
+            "--force-window=yes",
+            "--hwdec=auto"
+        };
+
+        if (Directory.Exists(configDir))
+        {
+            args.Add($"--config-dir=\"{configDir}\"");
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = mpvExe,
+            Arguments = string.Join(" ", args),
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+
+        try
+        {
+            _mpvProcess = Process.Start(psi);
+            if (_mpvProcess == null)
+            {
+                ErrorOccurred?.Invoke("Failed to spawn mpv process.");
+                return;
+            }
+
+            _mpvProcess.EnableRaisingEvents = true;
+            _mpvProcess.Exited += (s, e) =>
+            {
+                IsPlaying = false;
+                PlaybackEnded?.Invoke();
+            };
+
+            await ConnectPipeAsync();
+
+            if (startPositionTicks > 0)
+            {
+                var startSeconds = (double)startPositionTicks / 10_000_000.0;
+                await SendCommandAsync(new object[] { "set_property", "start", startSeconds });
+            }
+            else
+            {
+                await SendCommandAsync(new object[] { "set_property", "start", 0 });
+            }
+
+            await SendCommandAsync(new object[] { "set_property", "force-media-title", title });
+            await SendCommandAsync(new object[] { "loadfile", url, "replace" });
+
+            IsPlaying = true;
+            PlaybackStarted?.Invoke();
+            NocturneLogger.Info("MpvController", $"Embedded playback started: {title} ({url}) in HWND {hwnd}");
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Error("MpvController", "Failed to start embedded mpv", ex);
+            ErrorOccurred?.Invoke($"Failed to start embedded mpv: {ex.Message}");
+        }
+    }
+
     public async Task PlayAsync(string url, string title, long startPositionTicks = 0)
     {
         if (!_isReady || _writer == null)
@@ -170,10 +255,38 @@ public class MpvController : IDisposable
 
     public async Task StopAsync()
     {
-        await SendCommandAsync(new object[] { "stop" });
-        await SendCommandAsync(new object[] { "set_property", "fullscreen", "no" });
-        await SendCommandAsync(new object[] { "set_property", "force-window", "no" });
-        await SendCommandAsync(new object[] { "set_property", "ontop", "no" });
+        if (_writer != null && _isReady)
+        {
+            try
+            {
+                await SendCommandAsync(new object[] { "quit" });
+            }
+            catch { }
+        }
+
+        _readCts?.Cancel();
+        _writer?.Dispose();
+        _writer = null;
+        _reader?.Dispose();
+        _reader = null;
+        _pipeClient?.Dispose();
+        _pipeClient = null;
+        _isReady = false;
+
+        if (_mpvProcess != null && !_mpvProcess.HasExited)
+        {
+            try
+            {
+                if (!_mpvProcess.WaitForExit(350))
+                {
+                    _mpvProcess.Kill();
+                }
+            }
+            catch { }
+            _mpvProcess.Dispose();
+            _mpvProcess = null;
+        }
+
         IsPlaying = false;
         PlaybackEnded?.Invoke();
     }
@@ -215,6 +328,7 @@ public class MpvController : IDisposable
             request_id = Interlocked.Increment(ref _reqId)
         };
         var json = JsonSerializer.Serialize(req);
+        await _writeLock.WaitAsync();
         try
         {
             await _writer.WriteLineAsync(json);
@@ -222,6 +336,10 @@ public class MpvController : IDisposable
         catch (Exception ex)
         {
             NocturneLogger.Warn("MpvController", $"Send error: {ex.Message}");
+        }
+        finally
+        {
+            _writeLock.Release();
         }
     }
 

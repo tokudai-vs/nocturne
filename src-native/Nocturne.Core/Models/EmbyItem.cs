@@ -24,6 +24,7 @@ public class EmbyItem
     public string? SeasonId { get; set; }
     public string? SeasonName { get; set; }
     public string? OfficialRating { get; set; }
+    public DateTime? PremiereDate { get; set; }
 
     public Dictionary<string, string>? ProviderIds { get; set; }
     public Dictionary<string, string>? ImageTags { get; set; }
@@ -42,11 +43,15 @@ public class EmbyItem
 
     // Multi-server or local metadata
     [JsonIgnore]
+    public string? PrimaryImageUrl { get; set; }
+    [JsonIgnore]
     public string? ServerId { get; set; }
     [JsonIgnore]
     public string? ServerName { get; set; }
     [JsonIgnore]
     public string? DedupGroupId { get; set; }
+    [JsonIgnore]
+    public string? SeriesImdbId { get; set; }
     [JsonIgnore]
     public int VersionCount { get; set; } = 1;
 
@@ -126,6 +131,8 @@ public class BaseItemPerson
     public string? PrimaryImageTag { get; set; }
     [JsonConverter(typeof(FlexibleStringConverter))]
     public string? Id { get; set; }
+    [JsonIgnore]
+    public string? ImageUrl { get; set; }
 }
 
 public class MediaUrl

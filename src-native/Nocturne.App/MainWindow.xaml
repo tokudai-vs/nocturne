@@ -4,6 +4,7 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:vm="clr-namespace:Nocturne.App.ViewModels"
         xmlns:views="clr-namespace:Nocturne.App.Views"
+        xmlns:controls="clr-namespace:Nocturne.App.Controls"
         Title="Nocturne" Height="900" Width="1400"
         MinWidth="1024" MinHeight="600"
         WindowStartupLocation="CenterScreen"
@@ -95,6 +96,81 @@
 
             <!-- Main Content Area -->
             <ContentControl Grid.Column="1" Content="{Binding CurrentViewModel}" />
+        </Grid>
+
+        <!-- In-Window Video Player Overlay (Full Shell Overlay, ZIndex=600) -->
+        <Grid Grid.RowSpan="2" Panel.ZIndex="600" Background="#000000"
+              Visibility="{Binding IsPlayerActive, Converter={StaticResource BoolToVisibility}}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="52" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Player Top Bar (Header row strictly above HWND - avoids Win32 airspace clipping) -->
+            <Grid Grid.Row="0" Background="#141414">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Left: Exit Button + Prev/Next Episode + Title -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="16,0,0,0" VerticalAlignment="Center">
+                    <Button Style="{StaticResource AmberPrimaryButton}"
+                            Padding="12,6"
+                            Click="OnExitPlayerClick"
+                            Margin="0,0,14,0">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="16" Margin="0,0,6,0" />
+                            <TextBlock Text="Exit (Esc)" FontSize="13" FontWeight="SemiBold" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Previous Episode Button -->
+                    <Button Style="{StaticResource AmberPrimaryButton}"
+                            Padding="10,6"
+                            Margin="0,0,8,0"
+                            Visibility="{Binding CanGoPrevEpisode, Converter={StaticResource BoolToVisibility}}"
+                            Click="OnPrevEpisodeClick"
+                            ToolTip="Previous Episode (&lt;)">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="Previous24" FontSize="14" Margin="0,0,4,0" />
+                            <TextBlock Text="Prev" FontSize="12" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Next Episode Button -->
+                    <Button Style="{StaticResource AmberPrimaryButton}"
+                            Padding="10,6"
+                            Margin="0,0,16,0"
+                            Visibility="{Binding CanGoNextEpisode, Converter={StaticResource BoolToVisibility}}"
+                            Click="OnNextEpisodeClick"
+                            ToolTip="Next Episode (&gt;)">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Next" FontSize="12" Margin="0,0,4,0" />
+                            <ui:SymbolIcon Symbol="Next24" FontSize="14" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Title & Subtitle -->
+                    <TextBlock Text="{Binding PlayerTitle}" FontSize="15" FontWeight="SemiBold"
+                               Foreground="#FFFFFF" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="450" />
+                    <TextBlock Text="{Binding PlayerSubtitle}" FontSize="13" Foreground="#999999"
+                               Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="350" />
+                </StackPanel>
+
+                <!-- Right: TheIntroDB Amber Skip Button -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,16,0" VerticalAlignment="Center">
+                    <Button Style="{StaticResource AmberPrimaryButton}"
+                            Padding="16,8"
+                            Content="{Binding SkipPromptText}"
+                            Visibility="{Binding IsSkipPromptVisible, Converter={StaticResource BoolToVisibility}}"
+                            Click="OnSkipPromptClick" />
+                </StackPanel>
+            </Grid>
+
+            <!-- Pure Win32 HWND Host for MPV -->
+            <controls:MpvHwndHost x:Name="PlayerHwndHost" Grid.Row="1" Focusable="True" />
         </Grid>
 
         <!-- Full-Window Splash Screen Overlay -->

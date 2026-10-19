@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Windows;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
 using Nocturne.Core.Utils;
@@ -136,6 +137,11 @@ public class DetailViewModel : BaseViewModel
 
     public bool HasTrailer => Item?.RemoteTrailers != null && Item.RemoteTrailers.Count > 0;
     public bool HasMultipleVersions => GroupVersions.Count > 1;
+    public bool IsSeries => Item?.Type == "Series";
+    public bool HasSeasons => Seasons.Count > 0;
+    public bool HasEpisodes => Episodes.Count > 0;
+    public bool HasCast => People.Count > 0;
+    public bool HasSimilar => SimilarItems.Count > 0;
 
     public async Task LoadItemAsync(string itemId)
     {
@@ -156,41 +162,75 @@ public class DetailViewModel : BaseViewModel
             BackdropUrl = _embyClient.BuildImageUrl(item.Id, "Backdrop", 1920, backdropTag);
 
             // Cast & Crew
-            People.Clear();
-            if (item.People != null)
+            Application.Current.Dispatcher.Invoke(() =>
             {
-                foreach (var p in item.People.Take(12)) People.Add(p);
-            }
+                People.Clear();
+                if (item.People != null)
+                {
+                    foreach (var p in item.People.Take(18))
+                    {
+                        if (!string.IsNullOrEmpty(p.PrimaryImageTag))
+                        {
+                            p.ImageUrl = _embyClient.BuildImageUrl(p.Id ?? string.Empty, "Primary", 200, p.PrimaryImageTag);
+                        }
+                        People.Add(p);
+                    }
+                }
 
-            // Check deduplication versions
-            GroupVersions.Clear();
-            if (!string.IsNullOrEmpty(item.DedupGroupId))
-            {
-                var siblings = _db.GetGroupVersions(item.DedupGroupId);
-                foreach (var sib in siblings) GroupVersions.Add(sib);
-                _selectedVersion = GroupVersions.FirstOrDefault(v => v.Id == item.Id) ?? item;
-                OnPropertyChanged(nameof(SelectedVersion));
-            }
+                // Check deduplication versions
+                GroupVersions.Clear();
+                if (!string.IsNullOrEmpty(item.DedupGroupId))
+                {
+                    var siblings = _db.GetGroupVersions(item.DedupGroupId);
+                    foreach (var sib in siblings) GroupVersions.Add(sib);
+                    _selectedVersion = GroupVersions.FirstOrDefault(v => v.Id == item.Id) ?? item;
+                    OnPropertyChanged(nameof(SelectedVersion));
+                }
+            });
+
+            OnPropertyChanged(nameof(IsSeries));
             OnPropertyChanged(nameof(HasMultipleVersions));
             OnPropertyChanged(nameof(HasTrailer));
+            OnPropertyChanged(nameof(HasCast));
 
             // If it's a TV series, fetch seasons
-            Seasons.Clear();
-            Episodes.Clear();
             if (item.Type == "Series")
             {
                 var seasons = await _embyClient.GetSeasonsAsync(item.Id);
-                foreach (var s in seasons) Seasons.Add(s);
-                if (Seasons.Count > 0)
+                Application.Current.Dispatcher.Invoke(() =>
                 {
-                    SelectedSeason = Seasons[0];
-                }
+                    Seasons.Clear();
+                    foreach (var s in seasons) Seasons.Add(s);
+                    OnPropertyChanged(nameof(Seasons));
+                    OnPropertyChanged(nameof(HasSeasons));
+                    if (Seasons.Count > 0)
+                    {
+                        SelectedSeason = Seasons[0];
+                    }
+                });
+            }
+            else
+            {
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    Seasons.Clear();
+                    Episodes.Clear();
+                    OnPropertyChanged(nameof(Seasons));
+                    OnPropertyChanged(nameof(Episodes));
+                    OnPropertyChanged(nameof(HasSeasons));
+                    OnPropertyChanged(nameof(HasEpisodes));
+                });
             }
 
             // Fetch similar items
-            SimilarItems.Clear();
-            var similar = await _embyClient.GetSimilarAsync(item.Id, 10);
-            foreach (var sim in similar) SimilarItems.Add(sim);
+            var similar = await _embyClient.GetSimilarAsync(item.Id, 12);
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                SimilarItems.Clear();
+                foreach (var sim in similar) SimilarItems.Add(sim);
+                OnPropertyChanged(nameof(SimilarItems));
+                OnPropertyChanged(nameof(HasSimilar));
+            });
 
             // Check Trakt Watchlist status
             if (_trakt.IsConnected)
@@ -217,14 +257,27 @@ public class DetailViewModel : BaseViewModel
         try
         {
             var eps = await _embyClient.GetEpisodesAsync(seriesId, seasonId);
-            Episodes.Clear();
-            foreach (var ep in eps) Episodes.Add(ep);
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                Episodes.Clear();
+                foreach (var ep in eps)
+                {
+                    var tag = ep.ImageTags?.GetValueOrDefault("Primary");
+                    ep.PrimaryImageUrl = _embyClient.BuildImageUrl(ep.Id, "Primary", 400, tag);
+                    ep.SeriesImdbId = Item?.ImdbId;
+                    Episodes.Add(ep);
+                }
+                OnPropertyChanged(nameof(Episodes));
+                OnPropertyChanged(nameof(HasEpisodes));
+            });
         }
         catch (Exception ex)
         {
             NocturneLogger.Error("DetailViewModel", $"Episodes load failed for season {seasonId}", ex);
         }
     }
+
+    public event Action<EmbyItem, long>? PlayRequested;
 
     public async Task PlayAsync(EmbyItem? target = null)
     {
@@ -237,9 +290,16 @@ public class DetailViewModel : BaseViewModel
             playItem = Episodes.FirstOrDefault(e => !e.IsPlayed) ?? Episodes[0];
         }
 
+        var startTicks = playItem.UserData?.PlaybackPositionTicks ?? 0;
+
+        if (PlayRequested != null)
+        {
+            PlayRequested.Invoke(playItem, startTicks);
+            return;
+        }
+
         var mediaSourceId = playItem.MediaSources?.FirstOrDefault()?.Id ?? playItem.Id;
         var streamUrl = _embyClient.GetStreamUrl(playItem.Id, mediaSourceId);
-        var startTicks = playItem.UserData?.PlaybackPositionTicks ?? 0;
 
         // Pre-load skip segments if it's an episode and has IMDB ID
         if (playItem.Type == "Episode" && !string.IsNullOrEmpty(playItem.ImdbId))

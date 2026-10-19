@@ -130,4 +130,60 @@ public class EmbyClientTests
         Assert.Single(item.People);
         Assert.Equal("9999", item.People[0].Id);
     }
+
+    [Fact]
+    public void EmbyItem_DisplayTitle_FormatsEpisodeProperly()
+    {
+        var ep = new Nocturne.Core.Models.EmbyItem
+        {
+            Type = "Episode",
+            ParentIndexNumber = 1,
+            IndexNumber = 4,
+            Name = "Tonight's The Night"
+        };
+        Assert.Equal("S01E04 - Tonight's The Night", ep.DisplayTitle);
+
+        var movie = new Nocturne.Core.Models.EmbyItem
+        {
+            Type = "Movie",
+            Name = "Inception"
+        };
+        Assert.Equal("Inception", movie.DisplayTitle);
+    }
+
+    [Fact]
+    public void EmbyItem_ResolutionBadge_Detects4KAnd1080p()
+    {
+        var item4K = new Nocturne.Core.Models.EmbyItem
+        {
+            MediaSources = new List<Nocturne.Core.Models.MediaSourceInfo>
+            {
+                new()
+                {
+                    MediaStreams = new List<Nocturne.Core.Models.MediaStreamInfo>
+                    {
+                        new() { Type = "Video", Width = 3840, Height = 2160, Codec = "hevc" }
+                    }
+                }
+            }
+        };
+        Assert.Equal("4K UHD", item4K.ResolutionBadge);
+        Assert.Equal("HEVC", item4K.CodecBadge);
+
+        var item1080p = new Nocturne.Core.Models.EmbyItem
+        {
+            MediaSources = new List<Nocturne.Core.Models.MediaSourceInfo>
+            {
+                new()
+                {
+                    MediaStreams = new List<Nocturne.Core.Models.MediaStreamInfo>
+                    {
+                        new() { Type = "Video", Width = 1920, Height = 1080, Codec = "h264" }
+                    }
+                }
+            }
+        };
+        Assert.Equal("1080p", item1080p.ResolutionBadge);
+        Assert.Equal("H264", item1080p.CodecBadge);
+    }
 }

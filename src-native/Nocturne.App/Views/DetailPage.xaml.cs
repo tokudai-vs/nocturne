@@ -85,4 +85,16 @@ public partial class DetailPage : UserControl
             _ = vm.ExecuteSkipPromptAsync();
         }
     }
+
+    private void OnSimilarItemClick(object sender, RoutedEventArgs e)
+    {
+        var item = (e as Controls.ItemClickEventArgs)?.Item
+            ?? (e.OriginalSource as FrameworkElement)?.DataContext as EmbyItem
+            ?? (e.Source as FrameworkElement)?.DataContext as EmbyItem;
+
+        if (item != null && DataContext is DetailViewModel vm)
+        {
+            _ = vm.LoadItemAsync(item.Id);
+        }
+    }
 }

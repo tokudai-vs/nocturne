@@ -1,6 +1,8 @@
 using System.Windows;
+using System.Windows.Input;
 using Wpf.Ui.Controls;
 using Nocturne.App.ViewModels;
+using Nocturne.Core.Utils;
 
 namespace Nocturne.App;
 
@@ -15,6 +17,66 @@ public partial class MainWindow : FluentWindow
 
         InitializeComponent();
 
+        // Wire embedded player host requests
+        _viewModel.RequestEmbeddedPlayback += async (item, startTicks) =>
+        {
+            try
+            {
+                // Ensure HWND is created and measured
+                if (PlayerHwndHost.Hwnd == IntPtr.Zero)
+                {
+                    PlayerHwndHost.UpdateLayout();
+                    if (PlayerHwndHost.Hwnd == IntPtr.Zero)
+                    {
+                        await Task.Delay(60);
+                        PlayerHwndHost.UpdateLayout();
+                    }
+                }
+
+                if (PlayerHwndHost.Hwnd != IntPtr.Zero)
+                {
+                    await _viewModel.ExecuteEmbeddedPlaybackAsync(PlayerHwndHost.Hwnd, item, startTicks);
+                    PlayerHwndHost.Focus();
+                }
+                else
+                {
+                    NocturneLogger.Error("MainWindow", "PlayerHwndHost.Hwnd was not created!");
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("MainWindow", "Embedded playback launch failed", ex);
+            }
+        };
+
+        // Window keyboard shortcuts during player and browsing
+        KeyDown += (s, e) =>
+        {
+            if (_viewModel.IsPlayerActive)
+            {
+                if (e.Key == Key.Escape)
+                {
+                    _ = _viewModel.StopPlaybackAsync();
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.Enter && _viewModel.IsSkipPromptVisible)
+                {
+                    _viewModel.ExecuteSkipPrompt();
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.OemPeriod && (Keyboard.Modifiers & ModifierKeys.Shift) != 0) // '>'
+                {
+                    _ = _viewModel.PlayNextEpisodeAsync();
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.OemComma && (Keyboard.Modifiers & ModifierKeys.Shift) != 0) // '<'
+                {
+                    _ = _viewModel.PlayPrevEpisodeAsync();
+                    e.Handled = true;
+                }
+            }
+        };
+
         Loaded += async (s, e) =>
         {
             try
@@ -23,9 +85,29 @@ public partial class MainWindow : FluentWindow
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Main] Init error: {ex.Message}");
+                NocturneLogger.Error("MainWindow", "Init error", ex);
             }
         };
+    }
+
+    private void OnExitPlayerClick(object sender, RoutedEventArgs e)
+    {
+        _ = _viewModel.StopPlaybackAsync();
+    }
+
+    private void OnSkipPromptClick(object sender, RoutedEventArgs e)
+    {
+        _viewModel.ExecuteSkipPrompt();
+    }
+
+    private void OnNextEpisodeClick(object sender, RoutedEventArgs e)
+    {
+        _ = _viewModel.PlayNextEpisodeAsync();
+    }
+
+    private void OnPrevEpisodeClick(object sender, RoutedEventArgs e)
+    {
+        _ = _viewModel.PlayPrevEpisodeAsync();
     }
 
     private void OnNavItemClicked(object sender, RoutedEventArgs e)
@@ -46,7 +128,7 @@ public partial class MainWindow : FluentWindow
 
     private void NavigateToTag(string tag)
     {
-        Nocturne.Core.Utils.NocturneLogger.Info("MainWindow", $"Navigating to {tag}");
+        NocturneLogger.Info("MainWindow", $"Navigating to {tag}");
         switch (tag)
         {
             case "home":

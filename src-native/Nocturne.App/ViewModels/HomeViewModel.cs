@@ -143,6 +143,11 @@ public class HomeViewModel : BaseViewModel
                     var tag = hero.BackdropImageTags?.FirstOrDefault() ?? hero.ImageTags?.GetValueOrDefault("Primary");
                     HeroBackdropUrl = _embyClient.BuildImageUrl(hero.Id, "Backdrop", 1920, tag);
                 }
+
+                OnPropertyChanged(nameof(ContinueWatching));
+                OnPropertyChanged(nameof(NextUp));
+                OnPropertyChanged(nameof(LatestMovies));
+                OnPropertyChanged(nameof(LatestEpisodes));
             });
         }
         catch (Exception ex)
@@ -156,8 +161,16 @@ public class HomeViewModel : BaseViewModel
         }
     }
 
+    public event Action<EmbyItem>? PlayRequested;
+
     public async Task PlayItemAsync(EmbyItem item)
     {
+        if (PlayRequested != null)
+        {
+            PlayRequested.Invoke(item);
+            return;
+        }
+
         var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
         var streamUrl = _embyClient.GetStreamUrl(item.Id, mediaSourceId);
         var startTicks = item.UserData?.PlaybackPositionTicks ?? 0;

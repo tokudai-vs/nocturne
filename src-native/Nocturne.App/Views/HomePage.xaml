@@ -76,26 +76,22 @@
                 <!-- Continue Watching Row -->
                 <controls:MediaRow Title="Continue Watching"
                                    ItemsSource="{Binding ContinueWatching}"
-                                   ItemClick="OnRowItemClick"
-                                   Visibility="{Binding ContinueWatching, Converter={StaticResource NullToVisibility}}" />
+                                   ItemClick="OnRowItemClick" />
 
                 <!-- Next Up Episodes Row -->
                 <controls:MediaRow Title="Next Up"
                                    ItemsSource="{Binding NextUp}"
-                                   ItemClick="OnRowItemClick"
-                                   Visibility="{Binding NextUp, Converter={StaticResource NullToVisibility}}" />
+                                   ItemClick="OnRowItemClick" />
 
                 <!-- Latest Movies Row -->
                 <controls:MediaRow Title="Latest Movies"
                                    ItemsSource="{Binding LatestMovies}"
-                                   ItemClick="OnRowItemClick"
-                                   Visibility="{Binding LatestMovies, Converter={StaticResource NullToVisibility}}" />
+                                   ItemClick="OnRowItemClick" />
 
                 <!-- Latest Episodes Row -->
                 <controls:MediaRow Title="Latest TV Episodes"
                                    ItemsSource="{Binding LatestEpisodes}"
-                                   ItemClick="OnRowItemClick"
-                                   Visibility="{Binding LatestEpisodes, Converter={StaticResource NullToVisibility}}" />
+                                   ItemClick="OnRowItemClick" />
 
                 <!-- Empty State Message when no rows exist and not loading -->
                 <Border Margin="40,80" Padding="36" CornerRadius="12"
