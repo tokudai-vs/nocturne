@@ -20,8 +20,6 @@ public partial class PlayerOverlayWindow : Window
 
         InitializeComponent();
 
-        Owner = _parentWindow;
-
         _inactivityTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(2.5)
@@ -33,6 +31,32 @@ public partial class PlayerOverlayWindow : Window
         };
 
         KeyDown += OnWindowKeyDown;
+    }
+
+    private void EnsureOwner()
+    {
+        if (Owner != null) return;
+
+        try
+        {
+            if (_parentWindow.IsVisible)
+            {
+                Owner = _parentWindow;
+            }
+        }
+        catch (Exception ex)
+        {
+            Nocturne.Core.Utils.NocturneLogger.Warn("PlayerOverlay", $"Could not set Window.Owner: {ex.Message}");
+            try
+            {
+                var parentHwnd = new System.Windows.Interop.WindowInteropHelper(_parentWindow).Handle;
+                if (parentHwnd != IntPtr.Zero)
+                {
+                    new System.Windows.Interop.WindowInteropHelper(this).Owner = parentHwnd;
+                }
+            }
+            catch { }
+        }
     }
 
     public void SyncWithParent()
@@ -60,6 +84,8 @@ public partial class PlayerOverlayWindow : Window
         Top = pt.Y / dpiY;
         Width = _parentWindow.ActualWidth;
         Height = _parentWindow.ActualHeight;
+
+        EnsureOwner();
 
         if (_viewModel.IsPlayerActive && !IsVisible)
         {

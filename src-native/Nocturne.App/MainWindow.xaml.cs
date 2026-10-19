@@ -12,14 +12,21 @@ public partial class MainWindow : FluentWindow
     private readonly MainViewModel _viewModel;
     private PlayerOverlayWindow? _playerOverlay;
 
+    private PlayerOverlayWindow GetOrCreatePlayerOverlay()
+    {
+        if (_playerOverlay == null)
+        {
+            _playerOverlay = new PlayerOverlayWindow(_viewModel, this);
+        }
+        return _playerOverlay;
+    }
+
     public MainWindow(MainViewModel viewModel)
     {
         _viewModel = viewModel;
         DataContext = _viewModel;
 
         InitializeComponent();
-
-        _playerOverlay = new PlayerOverlayWindow(_viewModel, this);
 
         _viewModel.PropertyChanged += (s, e) =>
         {
@@ -29,7 +36,7 @@ public partial class MainWindow : FluentWindow
                 {
                     if (_viewModel.IsPlayerActive)
                     {
-                        _playerOverlay?.SyncWithParent();
+                        GetOrCreatePlayerOverlay().SyncWithParent();
                     }
                     else
                     {
@@ -40,10 +47,13 @@ public partial class MainWindow : FluentWindow
             }
         };
 
-        LocationChanged += (s, e) => _playerOverlay?.SyncWithParent();
-        SizeChanged += (s, e) => _playerOverlay?.SyncWithParent();
-        StateChanged += (s, e) => _playerOverlay?.SyncWithParent();
-        Closing += (s, e) => _playerOverlay?.Close();
+        LocationChanged += (s, e) => { if (_viewModel.IsPlayerActive) _playerOverlay?.SyncWithParent(); };
+        SizeChanged += (s, e) => { if (_viewModel.IsPlayerActive) _playerOverlay?.SyncWithParent(); };
+        StateChanged += (s, e) => { if (_viewModel.IsPlayerActive) _playerOverlay?.SyncWithParent(); };
+        Closing += (s, e) =>
+        {
+            try { _playerOverlay?.Close(); } catch { }
+        };
 
         // Wire embedded player host requests
         _viewModel.RequestEmbeddedPlayback += async (item, startTicks) =>
@@ -64,7 +74,7 @@ public partial class MainWindow : FluentWindow
                 {
                     NocturneLogger.Info("MainWindow", $"Player HWND confirmed: {PlayerHwndHost.Hwnd}. Starting {item.Name}");
                     await _viewModel.ExecuteEmbeddedPlaybackAsync(PlayerHwndHost.Hwnd, item, startTicks);
-                    _playerOverlay?.SyncWithParent();
+                    GetOrCreatePlayerOverlay().SyncWithParent();
                 }
                 else
                 {
