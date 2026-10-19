@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Input;
 using Wpf.Ui.Controls;
 using Nocturne.App.ViewModels;
+using Nocturne.App.Views;
 using Nocturne.Core.Utils;
 
 namespace Nocturne.App;
@@ -9,6 +10,7 @@ namespace Nocturne.App;
 public partial class MainWindow : FluentWindow
 {
     private readonly MainViewModel _viewModel;
+    private PlayerOverlayWindow? _playerOverlay;
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -16,6 +18,32 @@ public partial class MainWindow : FluentWindow
         DataContext = _viewModel;
 
         InitializeComponent();
+
+        _playerOverlay = new PlayerOverlayWindow(_viewModel, this);
+
+        _viewModel.PropertyChanged += (s, e) =>
+        {
+            if (e.PropertyName == nameof(MainViewModel.IsPlayerActive))
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (_viewModel.IsPlayerActive)
+                    {
+                        _playerOverlay?.SyncWithParent();
+                    }
+                    else
+                    {
+                        _playerOverlay?.Hide();
+                        Mouse.OverrideCursor = null;
+                    }
+                });
+            }
+        };
+
+        LocationChanged += (s, e) => _playerOverlay?.SyncWithParent();
+        SizeChanged += (s, e) => _playerOverlay?.SyncWithParent();
+        StateChanged += (s, e) => _playerOverlay?.SyncWithParent();
+        Closing += (s, e) => _playerOverlay?.Close();
 
         // Wire embedded player host requests
         _viewModel.RequestEmbeddedPlayback += async (item, startTicks) =>
@@ -36,7 +64,7 @@ public partial class MainWindow : FluentWindow
                 {
                     NocturneLogger.Info("MainWindow", $"Player HWND confirmed: {PlayerHwndHost.Hwnd}. Starting {item.Name}");
                     await _viewModel.ExecuteEmbeddedPlaybackAsync(PlayerHwndHost.Hwnd, item, startTicks);
-                    PlayerHwndHost.Focus();
+                    _playerOverlay?.SyncWithParent();
                 }
                 else
                 {
@@ -88,26 +116,6 @@ public partial class MainWindow : FluentWindow
                 NocturneLogger.Error("MainWindow", "Init error", ex);
             }
         };
-    }
-
-    private void OnExitPlayerClick(object sender, RoutedEventArgs e)
-    {
-        _ = _viewModel.StopPlaybackAsync();
-    }
-
-    private void OnSkipPromptClick(object sender, RoutedEventArgs e)
-    {
-        _viewModel.ExecuteSkipPrompt();
-    }
-
-    private void OnNextEpisodeClick(object sender, RoutedEventArgs e)
-    {
-        _ = _viewModel.PlayNextEpisodeAsync();
-    }
-
-    private void OnPrevEpisodeClick(object sender, RoutedEventArgs e)
-    {
-        _ = _viewModel.PlayPrevEpisodeAsync();
     }
 
     private void OnNavItemClicked(object sender, RoutedEventArgs e)

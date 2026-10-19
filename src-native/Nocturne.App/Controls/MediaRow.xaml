@@ -1,6 +1,7 @@
 <UserControl x:Class="Nocturne.App.Controls.MediaRow"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              xmlns:controls="clr-namespace:Nocturne.App.Controls"
              Margin="0,12,0,24">
     <Grid>
@@ -14,24 +15,68 @@
                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"
                    Margin="20,0,20,10" />
 
-        <!-- Horizontal Scroller -->
-        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                      PreviewMouseWheel="OnPreviewMouseWheel">
-            <ItemsControl x:Name="ItemsHost" Margin="14,0"
-                          VirtualizingPanel.IsVirtualizing="True"
-                          VirtualizingPanel.VirtualizationMode="Recycling"
-                          ScrollViewer.CanContentScroll="True">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <VirtualizingStackPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <controls:MediaCard CardClick="OnMediaCardClick" />
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </ScrollViewer>
+        <!-- Horizontal Scroller Container with Floating Scroll Buttons and Hidden Scrollbar -->
+        <Grid Grid.Row="1" MouseEnter="OnRowMouseEnter" MouseLeave="OnRowMouseLeave">
+            <ScrollViewer x:Name="RowScrollViewer"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Disabled"
+                          PreviewMouseWheel="OnPreviewMouseWheel">
+                <ItemsControl x:Name="ItemsHost" Margin="14,0"
+                              VirtualizingPanel.IsVirtualizing="True"
+                              VirtualizingPanel.VirtualizationMode="Recycling"
+                              ScrollViewer.CanContentScroll="True">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <controls:MediaCard CardClick="OnMediaCardClick" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- Floating Left Scroll Button -->
+            <Button x:Name="LeftScrollButton" Click="OnScrollLeftClick"
+                    HorizontalAlignment="Left" VerticalAlignment="Center"
+                    Width="36" Height="64" Margin="6,0,0,0"
+                    Opacity="0" Cursor="Hand" Panel.ZIndex="10">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="18" Background="#CC111111" BorderBrush="#40FFFFFF" BorderThickness="1">
+                            <ui:SymbolIcon Symbol="ChevronLeft24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                <Setter TargetName="b" Property="Background" Value="#F0111111" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+
+            <!-- Floating Right Scroll Button -->
+            <Button x:Name="RightScrollButton" Click="OnScrollRightClick"
+                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                    Width="36" Height="64" Margin="0,0,6,0"
+                    Opacity="0" Cursor="Hand" Panel.ZIndex="10">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="18" Background="#CC111111" BorderBrush="#40FFFFFF" BorderThickness="1">
+                            <ui:SymbolIcon Symbol="ChevronRight24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                <Setter TargetName="b" Property="Background" Value="#F0111111" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+        </Grid>
     </Grid>
 </UserControl>

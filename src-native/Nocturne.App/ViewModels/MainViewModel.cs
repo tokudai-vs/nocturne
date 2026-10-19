@@ -36,6 +36,11 @@ public class MainViewModel : BaseViewModel
     private EmbyItem? _nextEpisodeItem;
     private EmbyItem? _prevEpisodeItem;
     private double _lastPlaybackSeconds = 0;
+    private double _currentPlaybackSeconds = 0;
+    private double _totalDurationSeconds = 0;
+    private bool _isPaused;
+    private double _volume = 100;
+    private string _timeString = "00:00 / 00:00";
 
     public HomeViewModel HomeVM { get; }
     public LibraryViewModel LibraryVM { get; }
@@ -112,6 +117,37 @@ public class MainViewModel : BaseViewModel
         {
             _lastPlaybackSeconds = sec;
             _introDb.OnPositionChanged(sec, _mpv);
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                CurrentPlaybackSeconds = sec;
+                UpdateTimeString();
+            });
+        };
+
+        _mpv.DurationChanged += dur =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                TotalDurationSeconds = dur;
+                UpdateTimeString();
+            });
+        };
+
+        _mpv.PauseChanged += paused =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                IsPaused = paused;
+            });
+        };
+
+        _mpv.VolumeChanged += vol =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                _volume = vol;
+                OnPropertyChanged(nameof(Volume));
+            });
         };
 
         _mpv.PlaybackEnded += () =>
@@ -238,6 +274,55 @@ public class MainViewModel : BaseViewModel
         get => _canGoPrevEpisode;
         set => SetProperty(ref _canGoPrevEpisode, value);
     }
+
+    public double CurrentPlaybackSeconds
+    {
+        get => _currentPlaybackSeconds;
+        set => SetProperty(ref _currentPlaybackSeconds, value);
+    }
+
+    public double TotalDurationSeconds
+    {
+        get => _totalDurationSeconds;
+        set => SetProperty(ref _totalDurationSeconds, value);
+    }
+
+    public bool IsPaused
+    {
+        get => _isPaused;
+        set => SetProperty(ref _isPaused, value);
+    }
+
+    public double Volume
+    {
+        get => _volume;
+        set
+        {
+            if (SetProperty(ref _volume, value))
+            {
+                _ = _mpv.SetVolumeAsync(value);
+            }
+        }
+    }
+
+    public string TimeString
+    {
+        get => _timeString;
+        set => SetProperty(ref _timeString, value);
+    }
+
+    private void UpdateTimeString()
+    {
+        var cur = TimeSpan.FromSeconds(Math.Max(0, _currentPlaybackSeconds));
+        var tot = TimeSpan.FromSeconds(Math.Max(0, _totalDurationSeconds));
+        var curStr = tot.TotalHours >= 1 ? cur.ToString(@"hh\:mm\:ss") : cur.ToString(@"mm\:ss");
+        var totStr = tot.TotalHours >= 1 ? tot.ToString(@"hh\:mm\:ss") : tot.ToString(@"mm\:ss");
+        TimeString = $"{curStr} / {totStr}";
+    }
+
+    public async Task TogglePauseAsync() => await _mpv.TogglePauseAsync();
+    public async Task SeekToAsync(double seconds) => await _mpv.SeekTo(seconds);
+    public async Task SeekRelativeAsync(double delta) => await _mpv.SeekRelative(delta);
 
     public void NavigateToHome()
     {

@@ -92,6 +92,28 @@ public partial class MediaRow : UserControl
         }
     }
 
+    private void OnRowMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        LeftScrollButton.Opacity = 1;
+        RightScrollButton.Opacity = 1;
+    }
+
+    private void OnRowMouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        LeftScrollButton.Opacity = 0;
+        RightScrollButton.Opacity = 0;
+    }
+
+    private void OnScrollLeftClick(object sender, RoutedEventArgs e)
+    {
+        RowScrollViewer.ScrollToHorizontalOffset(Math.Max(0, RowScrollViewer.HorizontalOffset - 500));
+    }
+
+    private void OnScrollRightClick(object sender, RoutedEventArgs e)
+    {
+        RowScrollViewer.ScrollToHorizontalOffset(RowScrollViewer.HorizontalOffset + 500);
+    }
+
     private void OnMediaCardClick(object sender, RoutedEventArgs e)
     {
         if (sender is MediaCard card && card.DataContext is EmbyItem item)

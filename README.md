@@ -49,19 +49,24 @@ Nocturne v4.0 is a complete rewrite from Electron to **pure native Windows (.NET
   - Crimson Rose (`#E81123`)
   - Sunset Orange (`#FF8C00`)
   - Cyber Cyan (`#00B7C3`)
-- **Cinematic Shell**: Obsidian dark theme with glowing splash screen, hero rotating backdrops, and hover animations.
-- **Plex & Netflix Detail Presentation**: Smooth vertical opacity gradient fade into theme background, flowing typography, official content ratings, resolution/codec badges, genre pills, horizontal cast carousel, and full support for both Dark and Light themes.
+- **Cinematic Shell**: Obsidian dark theme or clean light mode with adaptive glowing splash screen, hero rotating backdrops, and smooth animations.
+- **Plex & Netflix Detail Presentation**: Smooth vertical opacity gradient fade into theme background, high-contrast typography, official content ratings, resolution/codec badges, genre pills, circular cast & crew avatars with floating horizontal scroll buttons, and cohesive light/dark mode support.
 - **TV Episodes with Played Tracking**: 16:9 episode thumbnails with watched checkmark badges, in-progress resume progress bars, and 1-click watched/unwatched toggles.
+- **Smooth Horizontal Navigation**: Hidden scrollbars with hover-activated floating chevron scroll buttons (`<` and `>`) across all content rows and cast carousels.
 - **Right-Click Context Menus**: Play, mark as watched/unwatched, and toggle favorites directly from cards.
 
-### :tv: Video Playback Engine (mpv)
-- **Bundled mpv daemon** running in idle mode with sub-second launch times via Windows Named Pipe IPC (`\\.\pipe\nocturne-mpv-{pid}`).
+### :tv: Video Playback Engine (Embedded mpv)
+- **Embedded Win32 HWND Player**: Embedded directly within Nocturne's main window — zero separate processes or lost focus.
+- **Modern Floating Player HUD**: Sleek translucent overlay that appears on mouse activity and auto-hides after 2.5s of inactivity.
+  - Interactive timeline scrubber with live timestamp formatting (`hh:mm:ss`).
+  - Play, Pause, -10s rewind, +10s fast-forward, volume control, and Fullscreen toggle.
+  - Floating top bar with title, subtitle, episode jump, and quick back button (`Esc`).
 - **Direct play**: No server transcoding needed; native support for 4K UHD, HDR10, Dolby Vision, HEVC, AV1, DTS-HD, and TrueHD Atmos.
 - **In-player navigation**:
-  - `>`: Jump to next episode without closing player.
-  - `<`: Jump to previous episode.
+  - `>` / `N`: Jump to next episode without interrupting playback.
+  - `<` / `P`: Jump to previous episode.
   - `EOF`: Automatically advance to next episode when playback finishes.
-- **TheIntroDB skip segments**: Amber OSC prompt and `Enter` key shortcut to skip intros, recaps, and credits. Re-arms on backward seek.
+- **TheIntroDB skip segments**: Amber HUD prompt and `Enter` key shortcut to skip intros, recaps, and credits. Re-arms on backward seek.
 
 ### :clapper: Trakt.tv Integration
 - **OAuth Device Flow**: 1-click activation via `trakt.tv/activate`.

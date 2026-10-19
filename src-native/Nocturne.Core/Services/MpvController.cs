@@ -24,6 +24,9 @@ public class MpvController : IDisposable
     public event Action<string>? ErrorOccurred;
     public event Action? NextEpisodeRequested;
     public event Action? PreviousEpisodeRequested;
+    public event Action<double>? DurationChanged;
+    public event Action<bool>? PauseChanged;
+    public event Action<double>? VolumeChanged;
 
     public MpvController()
     {
@@ -31,6 +34,8 @@ public class MpvController : IDisposable
     }
 
     public bool IsPlaying { get; private set; }
+    public bool IsPaused { get; private set; }
+    public double CurrentVolume { get; private set; } = 100;
     public double CurrentPositionSeconds { get; private set; }
     public double DurationSeconds { get; private set; }
 
@@ -135,6 +140,7 @@ public class MpvController : IDisposable
         await SendCommandAsync(new object[] { "observe_property", 2, "duration" });
         await SendCommandAsync(new object[] { "observe_property", 3, "eof-reached" });
         await SendCommandAsync(new object[] { "observe_property", 4, "pause" });
+        await SendCommandAsync(new object[] { "observe_property", 5, "volume" });
     }
 
     public async Task PlayEmbeddedAsync(IntPtr hwnd, string url, string title, long startPositionTicks = 0)
@@ -156,11 +162,12 @@ public class MpvController : IDisposable
         {
             $"--wid={(long)hwnd}",
             $"--input-ipc-server=\\\\.\\pipe\\{_pipeName}",
-            "--osc=yes",
+            "--osc=no",
             "--really-quiet",
             "--keep-open=yes",
             "--input-default-bindings=yes",
             "--input-vo-keyboard=yes",
+            "--input-cursor=yes",
             "--force-window=yes",
             "--hwdec=auto"
         };
@@ -255,6 +262,23 @@ public class MpvController : IDisposable
     public async Task PauseAsync()
     {
         await SendCommandAsync(new object[] { "cycle", "pause" });
+    }
+
+    public async Task SetPauseAsync(bool pause)
+    {
+        IsPaused = pause;
+        await SendCommandAsync(new object[] { "set_property", "pause", pause });
+    }
+
+    public async Task TogglePauseAsync()
+    {
+        await SendCommandAsync(new object[] { "cycle", "pause" });
+    }
+
+    public async Task SetVolumeAsync(double volume)
+    {
+        CurrentVolume = Math.Clamp(volume, 0, 100);
+        await SendCommandAsync(new object[] { "set_property", "volume", CurrentVolume });
     }
 
     public async Task StopAsync(bool notifyEnded = true)
@@ -382,6 +406,20 @@ public class MpvController : IDisposable
                             if (durProp.ValueKind == JsonValueKind.Number)
                             {
                                 DurationSeconds = durProp.GetDouble();
+                                DurationChanged?.Invoke(DurationSeconds);
+                            }
+                        }
+                        else if (name == "pause" && root.TryGetProperty("data", out var pauseProp))
+                        {
+                            IsPaused = pauseProp.ValueKind == JsonValueKind.True;
+                            PauseChanged?.Invoke(IsPaused);
+                        }
+                        else if (name == "volume" && root.TryGetProperty("data", out var volProp))
+                        {
+                            if (volProp.ValueKind == JsonValueKind.Number)
+                            {
+                                CurrentVolume = volProp.GetDouble();
+                                VolumeChanged?.Invoke(CurrentVolume);
                             }
                         }
                         else if (name == "eof-reached" && root.TryGetProperty("data", out var eofProp))

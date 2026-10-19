@@ -105,4 +105,26 @@ public partial class DetailPage : UserControl
             _ = vm.LoadItemAsync(item.Id);
         }
     }
+
+    private void OnCastRowMouseEnter(object sender, MouseEventArgs e)
+    {
+        CastScrollLeftButton.Opacity = 1;
+        CastScrollRightButton.Opacity = 1;
+    }
+
+    private void OnCastRowMouseLeave(object sender, MouseEventArgs e)
+    {
+        CastScrollLeftButton.Opacity = 0;
+        CastScrollRightButton.Opacity = 0;
+    }
+
+    private void OnCastScrollLeftClick(object sender, RoutedEventArgs e)
+    {
+        CastScrollViewer.ScrollToHorizontalOffset(Math.Max(0, CastScrollViewer.HorizontalOffset - 350));
+    }
+
+    private void OnCastScrollRightClick(object sender, RoutedEventArgs e)
+    {
+        CastScrollViewer.ScrollToHorizontalOffset(CastScrollViewer.HorizontalOffset + 350);
+    }
 }

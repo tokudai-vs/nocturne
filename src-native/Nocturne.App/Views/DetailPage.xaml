@@ -7,27 +7,31 @@
     <Grid Background="{DynamicResource ApplicationBackgroundBrush}">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <Grid>
-                <!-- Hero Backdrop Image with Seamless Bottom Opacity Fade -->
-                <Grid Height="520" VerticalAlignment="Top" ClipToBounds="True">
-                    <Image Source="{Binding BackdropUrl}" Stretch="UniformToFill">
-                        <Image.OpacityMask>
-                            <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
-                                <GradientStop Color="#FFFFFFFF" Offset="0.0" />
-                                <GradientStop Color="#E6FFFFFF" Offset="0.25" />
-                                <GradientStop Color="#80FFFFFF" Offset="0.55" />
-                                <GradientStop Color="#25FFFFFF" Offset="0.80" />
-                                <GradientStop Color="#00FFFFFF" Offset="1.0" />
-                            </LinearGradientBrush>
-                        </Image.OpacityMask>
-                    </Image>
+                <!-- Hero Backdrop Image with Deep Cinematic Vignette & Bottom Fade -->
+                <Grid Height="500" VerticalAlignment="Top" ClipToBounds="True">
+                    <Image Source="{Binding BackdropUrl}" Stretch="UniformToFill" />
 
-                    <!-- Left Vignette Scrim for Text Contrast -->
+                    <!-- Left Reading Scrim (Ensures White Text is 100% Readable on Any Backdrop) -->
                     <Border>
                         <Border.Background>
                             <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
-                                <GradientStop Color="#B0000000" Offset="0.0" />
-                                <GradientStop Color="#50000000" Offset="0.4" />
-                                <GradientStop Color="#00000000" Offset="0.8" />
+                                <GradientStop Color="#F0000000" Offset="0.0" />
+                                <GradientStop Color="#C0000000" Offset="0.3" />
+                                <GradientStop Color="#60000000" Offset="0.65" />
+                                <GradientStop Color="#00000000" Offset="0.95" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                    </Border>
+
+                    <!-- Bottom Gradient Fade to Black / Page Floor -->
+                    <Border>
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                                <GradientStop Color="#00000000" Offset="0.0" />
+                                <GradientStop Color="#00000000" Offset="0.45" />
+                                <GradientStop Color="#80000000" Offset="0.75" />
+                                <GradientStop Color="#D0000000" Offset="0.9" />
+                                <GradientStop Color="#FF0A0A0A" Offset="1.0" />
                             </LinearGradientBrush>
                         </Border.Background>
                     </Border>
@@ -36,32 +40,25 @@
                 <!-- Main Content Container -->
                 <StackPanel Margin="48,24,48,48">
                     <!-- Back Button -->
-                    <Button Click="OnBackClick" Width="40" Height="40" Margin="0,0,0,20"
-                            HorizontalAlignment="Left" Cursor="Hand"
-                            Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                            BorderThickness="1">
+                    <Button Click="OnBackClick" Width="42" Height="42" Margin="0,0,0,18"
+                            HorizontalAlignment="Left" Cursor="Hand" ToolTip="Back">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border x:Name="b" CornerRadius="20"
-                                        Background="{TemplateBinding Background}"
-                                        BorderBrush="{TemplateBinding BorderBrush}"
-                                        BorderThickness="{TemplateBinding BorderThickness}">
-                                    <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="18"
-                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <Border x:Name="b" CornerRadius="21" Background="#60000000" BorderBrush="#35FFFFFF" BorderThickness="1">
+                                    <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
                                         <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                        <Setter TargetName="b" Property="Background" Value="#90000000" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Button.Template>
                     </Button>
 
-                    <!-- Hero Info Block (Plex / Netflix Presentation) -->
-                    <Grid Margin="0,10,0,36">
+                    <!-- Hero Info Block (Cinematic Presentation with Crisp High Contrast) -->
+                    <Grid Margin="0,4,0,36">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="240" />
                             <ColumnDefinition Width="*" />
@@ -69,58 +66,54 @@
 
                         <!-- Poster -->
                         <Border Grid.Column="0" CornerRadius="12" ClipToBounds="True" Height="360"
-                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1"
-                                Background="{DynamicResource ControlFillColorDefaultBrush}">
+                                BorderBrush="#30FFFFFF" BorderThickness="1" Background="#181818">
                             <Border.Effect>
-                                <DropShadowEffect BlurRadius="28" ShadowDepth="4" Direction="270" Color="#000000" Opacity="0.55" />
+                                <DropShadowEffect BlurRadius="28" ShadowDepth="4" Direction="270" Color="#000000" Opacity="0.65" />
                             </Border.Effect>
                             <Image Source="{Binding PosterUrl}" Stretch="UniformToFill" />
                         </Border>
 
-                        <!-- Details Column -->
+                        <!-- Details Column (High-Contrast White & Silver Typography) -->
                         <StackPanel Grid.Column="1" Margin="36,4,0,0">
                             <!-- Title -->
                             <TextBlock Text="{Binding Item.Name}" FontSize="36" FontWeight="Bold"
-                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                       TextWrapping="Wrap" Margin="0,0,0,6" />
+                                       Foreground="#FFFFFF" TextWrapping="Wrap" Margin="0,0,0,6">
+                                <TextBlock.Effect>
+                                    <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270" Color="#000000" Opacity="0.7" />
+                                </TextBlock.Effect>
+                            </TextBlock>
 
                             <!-- Tagline (if available) -->
                             <TextBlock Text="{Binding Item.FirstTagline}" FontSize="14" FontStyle="Italic"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap" Margin="0,0,0,12"
+                                       Foreground="#D0D0D0" TextWrapping="Wrap" Margin="0,0,0,12"
                                        Visibility="{Binding Item.FirstTagline, Converter={StaticResource NullToVisibility}}" />
 
                             <!-- Meta Badges Row -->
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,14" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding Item.ProductionYear}" FontSize="14" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,14,0" VerticalAlignment="Center" />
+                                           Foreground="#E0E0E0" Margin="0,0,14,0" VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Item.RunTimeTicks, Converter={StaticResource TicksToDuration}}"
-                                           FontSize="14" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,14,0" VerticalAlignment="Center" />
+                                           FontSize="14" Foreground="#CCCCCC" Margin="0,0,14,0" VerticalAlignment="Center" />
 
-                                <!-- Official Rating (PG-13, TV-MA, etc.) -->
-                                <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1"
+                                <!-- Official Rating Badge -->
+                                <Border BorderBrush="#40FFFFFF" BorderThickness="1" Background="#20000000"
                                         CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
                                         Visibility="{Binding Item.OfficialRating, Converter={StaticResource NullToVisibility}}">
-                                    <TextBlock Text="{Binding Item.OfficialRating}" FontSize="11" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding Item.OfficialRating}" FontSize="11" FontWeight="SemiBold" Foreground="#FFFFFF" />
                                 </Border>
 
                                 <!-- Resolution Badge (4K UHD / 1080p) -->
-                                <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1"
+                                <Border Background="#30FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1"
                                         CornerRadius="4" Padding="7,2" Margin="0,0,8,0"
                                         Visibility="{Binding Item.ResolutionBadge, Converter={StaticResource NullToVisibility}}">
-                                    <TextBlock Text="{Binding Item.ResolutionBadge}" FontSize="11" FontWeight="Bold"
-                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                    <TextBlock Text="{Binding Item.ResolutionBadge}" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
                                 </Border>
 
                                 <!-- Codec Badge (HEVC / H264) -->
-                                <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1"
+                                <Border Background="#30FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1"
                                         CornerRadius="4" Padding="7,2" Margin="0,0,12,0"
                                         Visibility="{Binding Item.CodecBadge, Converter={StaticResource NullToVisibility}}">
-                                    <TextBlock Text="{Binding Item.CodecBadge}" FontSize="11" FontWeight="Bold"
-                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                    <TextBlock Text="{Binding Item.CodecBadge}" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
                                 </Border>
 
                                 <!-- Community Rating Badge -->
@@ -144,14 +137,9 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                                BorderThickness="1"
-                                                CornerRadius="12"
-                                                Padding="10,3"
-                                                Margin="0,0,8,0">
-                                            <TextBlock Text="{Binding}" FontSize="12" FontWeight="Medium"
-                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                        <Border Background="#25FFFFFF" BorderBrush="#35FFFFFF" BorderThickness="1"
+                                                CornerRadius="12" Padding="10,3" Margin="0,0,8,0">
+                                            <TextBlock Text="{Binding}" FontSize="12" FontWeight="Medium" Foreground="#E0E0E0" />
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -160,7 +148,7 @@
                             <!-- Version Picker (Multi-Server Dedup) -->
                             <StackPanel Margin="0,0,0,18" Visibility="{Binding HasMultipleVersions, Converter={StaticResource BoolToVisibility}}">
                                 <TextBlock Text="Available Versions" FontSize="12" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,6" />
+                                           Foreground="#CCCCCC" Margin="0,0,0,6" />
                                 <ComboBox HorizontalAlignment="Left" MinWidth="280" Height="36"
                                           ItemsSource="{Binding GroupVersions}"
                                           SelectedItem="{Binding SelectedVersion, Mode=TwoWay}">
@@ -168,8 +156,8 @@
                                         <DataTemplate>
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="{Binding ResolutionBadge}" FontWeight="SemiBold" Margin="0,0,8,0" />
-                                                <TextBlock Text="{Binding CodecBadge}" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,8,0" />
-                                                <TextBlock Text="•" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,8,0" />
+                                                <TextBlock Text="{Binding CodecBadge}" Foreground="#CCCCCC" Margin="0,0,8,0" />
+                                                <TextBlock Text="•" Foreground="#888888" Margin="0,0,8,0" />
                                                 <TextBlock Text="{Binding ServerName}" Foreground="{StaticResource NocturneAmberBrush}" />
                                             </StackPanel>
                                         </DataTemplate>
@@ -189,10 +177,7 @@
 
                                 <!-- Watch Trailer Button -->
                                 <Button Click="OnWatchTrailerClick" Margin="0,0,10,0" Padding="16,10"
-                                        Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                        BorderThickness="1"
+                                        Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1"
                                         Visibility="{Binding HasTrailer, Converter={StaticResource BoolToVisibility}}">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="Video24" FontSize="16" Margin="0,0,8,0" />
@@ -202,10 +187,7 @@
 
                                 <!-- Watched Toggle Button -->
                                 <Button Click="OnPlayedToggleClick" Margin="0,0,8,0" Padding="14,10"
-                                        Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                        BorderThickness="1">
+                                        Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="Checkmark24" FontSize="16" Margin="0,0,6,0"
                                                        Foreground="{Binding IsPlayed, Converter={StaticResource BoolToBrushConverter}}" />
@@ -215,10 +197,7 @@
 
                                 <!-- Favorite Toggle Button -->
                                 <Button Click="OnFavoriteToggleClick" Margin="0,0,8,0" Padding="14,10"
-                                        Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                        BorderThickness="1">
+                                        Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="Heart24" FontSize="16" Margin="0,0,6,0"
                                                        Foreground="{Binding IsFavorite, Converter={StaticResource BoolToBrushConverter}}" />
@@ -228,10 +207,7 @@
 
                                 <!-- Trakt Watchlist Bookmark Toggle -->
                                 <Button Click="OnWatchlistToggleClick" Margin="0,0,8,0" Padding="14,10"
-                                        Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                        BorderThickness="1">
+                                        Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="Bookmark24" FontSize="16" Margin="0,0,6,0"
                                                        Foreground="{Binding IsInWatchlist, Converter={StaticResource BoolToBrushConverter}}" />
@@ -240,12 +216,15 @@
                                 </Button>
                             </StackPanel>
 
-                            <!-- Flowing Overview Text Section (Plex / Netflix presentation - no box borders) -->
+                            <!-- Flowing Overview Text Section (No box borders, crisp readable text) -->
                             <StackPanel Margin="0,4,0,0" MaxWidth="850" HorizontalAlignment="Left">
                                 <TextBlock Text="{Binding Item.Overview}" FontSize="14"
-                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                           Opacity="0.92"
-                                           TextWrapping="Wrap" LineHeight="23" />
+                                           Foreground="#F0F0F0"
+                                           TextWrapping="Wrap" LineHeight="23">
+                                    <TextBlock.Effect>
+                                        <DropShadowEffect BlurRadius="6" ShadowDepth="1" Direction="270" Color="#000000" Opacity="0.6" />
+                                    </TextBlock.Effect>
+                                </TextBlock>
                             </StackPanel>
                         </StackPanel>
                     </Grid>
@@ -375,27 +354,30 @@
                         </ItemsControl>
                     </StackPanel>
 
-                    <!-- Cast & Crew Section (Horizontal Scrolling) -->
-                    <StackPanel Visibility="{Binding HasCast, Converter={StaticResource BoolToVisibility}}" Margin="0,8,0,36">
+                    <!-- Cast & Crew Section (Circular Avatars, Names on Bottom, No Outer Box, Floating Scroll Buttons, Hidden Scrollbar) -->
+                    <StackPanel Visibility="{Binding HasCast, Converter={StaticResource BoolToVisibility}}" Margin="0,12,0,36">
                         <TextBlock Text="Cast &amp; Crew" FontSize="20" FontWeight="Bold"
-                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,14" />
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                            <ItemsControl ItemsSource="{Binding People}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Margin="0,0,12,6" Width="120" Padding="8" CornerRadius="8"
-                                                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                                BorderThickness="1">
-                                            <StackPanel HorizontalAlignment="Center">
-                                                <!-- Avatar / Photo -->
-                                                <Border CornerRadius="8" ClipToBounds="True" Width="104" Height="120"
-                                                        Background="{DynamicResource ControlFillColorDefaultBrush}" Margin="0,0,0,8">
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,16" />
+                        <Grid x:Name="CastRowGrid" MouseEnter="OnCastRowMouseEnter" MouseLeave="OnCastRowMouseLeave">
+                            <ScrollViewer x:Name="CastScrollViewer"
+                                          HorizontalScrollBarVisibility="Hidden"
+                                          VerticalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding People}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <!-- Pure Circular Cast Item with Name on Bottom and NO outer card box -->
+                                            <StackPanel Width="96" Margin="0,0,16,0" HorizontalAlignment="Center">
+                                                <!-- Circular Avatar -->
+                                                <Border Width="80" Height="80" CornerRadius="40" ClipToBounds="True"
+                                                        Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                        BorderThickness="1"
+                                                        HorizontalAlignment="Center" Margin="0,0,0,10">
                                                     <Grid>
                                                         <Image Source="{Binding ImageUrl}" Stretch="UniformToFill" />
                                                         <!-- Fallback Person Symbol -->
@@ -405,21 +387,67 @@
                                                                        Visibility="{Binding ImageUrl, Converter={StaticResource InvertNullToVisibility}}" />
                                                     </Grid>
                                                 </Border>
+
+                                                <!-- Name on Bottom -->
                                                 <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"
                                                            Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                                                           TextTrimming="CharacterEllipsis" TextAlignment="Center" />
+                                                           TextTrimming="CharacterEllipsis" TextAlignment="Center"
+                                                           HorizontalAlignment="Center" MaxWidth="92" />
+
+                                                <!-- Role on Bottom -->
                                                 <TextBlock Text="{Binding Role}" FontSize="11" Margin="0,2,0,0"
                                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                                           TextTrimming="CharacterEllipsis" TextAlignment="Center" />
+                                                           TextTrimming="CharacterEllipsis" TextAlignment="Center"
+                                                           HorizontalAlignment="Center" MaxWidth="92" />
                                             </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+
+                            <!-- Floating Left Scroll Button -->
+                            <Button x:Name="CastScrollLeftButton" Click="OnCastScrollLeftClick"
+                                    HorizontalAlignment="Left" VerticalAlignment="Center"
+                                    Width="36" Height="64" Margin="0,0,0,24"
+                                    Opacity="0" Cursor="Hand" Panel.ZIndex="10">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="b" CornerRadius="18" Background="#CC111111" BorderBrush="#40FFFFFF" BorderThickness="1">
+                                            <ui:SymbolIcon Symbol="ChevronLeft24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                                <Setter TargetName="b" Property="Background" Value="#F0111111" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+
+                            <!-- Floating Right Scroll Button -->
+                            <Button x:Name="CastScrollRightButton" Click="OnCastScrollRightClick"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    Width="36" Height="64" Margin="0,0,0,24"
+                                    Opacity="0" Cursor="Hand" Panel.ZIndex="10">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="b" CornerRadius="18" Background="#CC111111" BorderBrush="#40FFFFFF" BorderThickness="1">
+                                            <ui:SymbolIcon Symbol="ChevronRight24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                                <Setter TargetName="b" Property="Background" Value="#F0111111" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                        </Grid>
                     </StackPanel>
 
-                    <!-- More Like This Row (Visible when HasSimilar is true) -->
+                    <!-- More Like This Row (Powered by MediaRow with hidden scrollbars and chevron buttons) -->
                     <StackPanel Visibility="{Binding HasSimilar, Converter={StaticResource BoolToVisibility}}" Margin="0,8,0,32">
                         <controls:MediaRow Title="More Like This" ItemsSource="{Binding SimilarItems}" ItemClick="OnSimilarItemClick" />
                     </StackPanel>
