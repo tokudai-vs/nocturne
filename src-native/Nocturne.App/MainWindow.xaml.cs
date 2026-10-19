@@ -132,6 +132,13 @@ public partial class MainWindow : FluentWindow
         // Window keyboard shortcuts during player and browsing
         KeyDown += (s, e) =>
         {
+            if (e.Key == Key.K && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+            {
+                SearchBox?.Focus();
+                e.Handled = true;
+                return;
+            }
+
             if (_viewModel.IsPlayerActive)
             {
                 if (e.Key == Key.Escape)
@@ -176,39 +183,42 @@ public partial class MainWindow : FluentWindow
         };
     }
 
-    private void OnNavItemClicked(object sender, RoutedEventArgs e)
+    private void OnHomeTabClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToHome();
+    private void OnLibraryTabClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToLibrary();
+    private void OnSettingsMenuClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToSettings();
+    private void OnAnalyticsMenuClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToAnalytics();
+    private void OnSwitchServerMenuClick(object sender, RoutedEventArgs e) => _viewModel.SwitchServer();
+    private void OnLogoutMenuClick(object sender, RoutedEventArgs e) => _viewModel.Logout();
+
+    private void OnUserProfileClick(object sender, RoutedEventArgs e)
     {
-        if (sender is NavigationViewItem item && item.Tag is string tag)
+        if (UserProfileButton.ContextMenu != null)
         {
-            NavigateToTag(tag);
+            UserProfileButton.ContextMenu.PlacementTarget = UserProfileButton;
+            UserProfileButton.ContextMenu.IsOpen = true;
         }
     }
 
-    private void OnNavSelectionChanged(NavigationView sender, RoutedEventArgs args)
+    private void OnLogoMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender.SelectedItem is NavigationViewItem item && item.Tag is string tag)
+        if (e.ChangedButton == MouseButton.Left)
         {
-            NavigateToTag(tag);
+            _viewModel.NavigateToHome();
         }
     }
 
-    private void NavigateToTag(string tag)
+    private void OnTitleBarMouseDown(object sender, MouseButtonEventArgs e)
     {
-        NocturneLogger.Info("MainWindow", $"Navigating to {tag}");
-        switch (tag)
+        if (e.ChangedButton == MouseButton.Left)
         {
-            case "home":
-                _viewModel.NavigateToHome();
-                break;
-            case "library":
-                _viewModel.NavigateToLibrary();
-                break;
-            case "analytics":
-                _viewModel.NavigateToAnalytics();
-                break;
-            case "settings":
-                _viewModel.NavigateToSettings();
-                break;
+            if (e.ClickCount == 2)
+            {
+                WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            }
+            else
+            {
+                try { DragMove(); } catch { }
+            }
         }
     }
 }

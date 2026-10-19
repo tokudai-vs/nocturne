@@ -170,7 +170,10 @@ public class MpvController : IDisposable
             "--input-cursor=yes",
             "--force-window=yes",
             "--hwdec=auto",
-            "--load-scripts=no"
+            "--load-scripts=no",
+            "--osd-level=0",
+            "--osd-bar=no",
+            "--border=no"
         };
 
         if (Directory.Exists(configDir))

@@ -9,7 +9,11 @@
         MinWidth="1024" MinHeight="600"
         WindowStartupLocation="CenterScreen"
         WindowBackdropType="{Binding BackdropType, Mode=OneWay}"
-        ExtendsContentIntoTitleBar="True">
+        ExtendsContentIntoTitleBar="True"
+        BorderThickness="0"
+        BorderBrush="Transparent"
+        Padding="0"
+        Margin="0">
 
     <ui:FluentWindow.Resources>
         <!-- ViewModel to View Mappings -->
@@ -37,66 +41,183 @@
     </ui:FluentWindow.Resources>
 
     <Grid>
+        <Grid.Resources>
+            <!-- Top Navigation Tab Button Style -->
+            <Style x:Key="TopNavButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="Height" Value="36" />
+                <Setter Property="Padding" Value="14,6" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="b" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </Grid.Resources>
+
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="52" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Windows 11 Native Fluent TitleBar with Snap Layout Support -->
-        <ui:TitleBar Grid.Row="0" Title="Nocturne">
-            <ui:TitleBar.Header>
-                <Grid Margin="12,0,0,0" Visibility="{Binding IsNavigationVisible, Converter={StaticResource BoolToVisibility}}">
-                    <!-- Quick Search Box -->
-                    <ui:TextBox Width="340" Height="32" VerticalAlignment="Center"
-                                PlaceholderText="Search movies, shows, episodes..."
-                                Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged, Delay=300}" />
-                </Grid>
-            </ui:TitleBar.Header>
-        </ui:TitleBar>
-
-        <!-- Main Shell Navigation & Content -->
-        <Grid Grid.Row="1">
+        <!-- Windows 11 Fluent Header & Top Navigation Bar -->
+        <Grid Grid.Row="0" Background="Transparent" MouseDown="OnTitleBarMouseDown">
+            <!-- 3 Columns: Left Navigation & Brand | Center Search | Right User & Controls -->
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <ui:NavigationView Grid.Column="0" x:Name="RootNav"
-                               IsBackButtonVisible="Collapsed"
-                               PaneDisplayMode="Left"
-                               OpenPaneLength="220"
-                               Visibility="{Binding IsNavigationVisible, Converter={StaticResource BoolToVisibility}}"
-                               SelectionChanged="OnNavSelectionChanged">
-                <ui:NavigationView.MenuItems>
-                    <ui:NavigationViewItem Content="Home" Tag="home" Click="OnNavItemClicked">
-                        <ui:NavigationViewItem.Icon>
-                            <ui:SymbolIcon Symbol="Home24" />
-                        </ui:NavigationViewItem.Icon>
-                    </ui:NavigationViewItem>
-                    <ui:NavigationViewItem Content="Libraries" Tag="library" Click="OnNavItemClicked">
-                        <ui:NavigationViewItem.Icon>
-                            <ui:SymbolIcon Symbol="Folder24" />
-                        </ui:NavigationViewItem.Icon>
-                    </ui:NavigationViewItem>
-                    <ui:NavigationViewItem Content="Analytics" Tag="analytics" Click="OnNavItemClicked">
-                        <ui:NavigationViewItem.Icon>
-                            <ui:SymbolIcon Symbol="DataTrending24" />
-                        </ui:NavigationViewItem.Icon>
-                    </ui:NavigationViewItem>
-                </ui:NavigationView.MenuItems>
+            <!-- Column 0: Left Brand & Top Navigation Tabs -->
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                <!-- Nocturne Logo & Title -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,24,0" Cursor="Hand" MouseDown="OnLogoMouseDown">
+                    <Border Width="30" Height="30" CornerRadius="15" Background="{StaticResource NocturneAmberBrush}" Margin="0,0,10,0">
+                        <ui:SymbolIcon Symbol="MoviesAndTv24" FontSize="16" Foreground="#111111" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="NOCTURNE" FontSize="15" FontWeight="Bold"
+                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                </StackPanel>
 
-                <ui:NavigationView.FooterMenuItems>
-                    <ui:NavigationViewItem Content="Settings" Tag="settings" Click="OnNavItemClicked">
-                        <ui:NavigationViewItem.Icon>
-                            <ui:SymbolIcon Symbol="Settings24" />
-                        </ui:NavigationViewItem.Icon>
-                    </ui:NavigationViewItem>
-                </ui:NavigationView.FooterMenuItems>
-            </ui:NavigationView>
+                <!-- Navigation Tabs (Home & Libraries) -->
+                <StackPanel Orientation="Horizontal" Visibility="{Binding IsNavigationVisible, Converter={StaticResource BoolToVisibility}}">
+                    <!-- Home Button -->
+                    <Button Click="OnHomeTabClick" Margin="0,0,6,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsHomeActive}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Home24" FontSize="16" Margin="0,0,8,0"
+                                           Foreground="{Binding IsHomeActive, Converter={StaticResource BoolToBrushConverter}}" />
+                            <TextBlock Text="Home" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                        </StackPanel>
+                    </Button>
 
-            <!-- Main Content Area -->
-            <ContentControl Grid.Column="1" Content="{Binding CurrentViewModel}" />
+                    <!-- Libraries Button -->
+                    <Button Click="OnLibraryTabClick" Margin="0,0,6,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsLibraryActive}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Folder24" FontSize="16" Margin="0,0,8,0"
+                                           Foreground="{Binding IsLibraryActive, Converter={StaticResource BoolToBrushConverter}}" />
+                            <TextBlock Text="Libraries" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Column 1: Centered Search Bar -->
+            <Grid Grid.Column="1" HorizontalAlignment="Center" Width="440"
+                  Visibility="{Binding IsNavigationVisible, Converter={StaticResource BoolToVisibility}}">
+                <ui:TextBox x:Name="SearchBox" Height="36" VerticalAlignment="Center"
+                            PlaceholderText="Search movies, shows, episodes... (Ctrl+K)"
+                            Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged, Delay=250}">
+                    <ui:TextBox.Icon>
+                        <ui:SymbolIcon Symbol="Search24" FontSize="16" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    </ui:TextBox.Icon>
+                </ui:TextBox>
+            </Grid>
+
+            <!-- Column 2: User Profile Dropdown + Windows 11 TitleBar Buttons -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,0">
+                <!-- User Profile Avatar Button -->
+                <Button x:Name="UserProfileButton" Click="OnUserProfileClick"
+                        Width="36" Height="36" Margin="0,0,12,0" Padding="0" Cursor="Hand"
+                        Visibility="{Binding IsNavigationVisible, Converter={StaticResource BoolToVisibility}}"
+                        ToolTip="Profile &amp; Settings">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="b" CornerRadius="18" Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1">
+                                <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding CurrentUserInitial}" FontSize="14" FontWeight="Bold"
+                                               Foreground="{StaticResource NocturneAmberBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                    <Setter TargetName="b" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+
+                    <!-- Context Menu with Settings, Analytics, Switch Server, Logout -->
+                    <Button.ContextMenu>
+                        <ContextMenu x:Name="UserProfileContextMenu" Placement="Bottom"
+                                     Background="{DynamicResource ApplicationBackgroundBrush}"
+                                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+                            <MenuItem Header="{Binding CurrentUserName}" FontWeight="Bold" IsEnabled="False" />
+                            <MenuItem Header="{Binding CurrentServerName}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" IsEnabled="False" />
+                            <Separator />
+                            <MenuItem Header="Analytics" Click="OnAnalyticsMenuClick">
+                                <MenuItem.Icon>
+                                    <ui:SymbolIcon Symbol="DataTrending24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="Settings" Click="OnSettingsMenuClick">
+                                <MenuItem.Icon>
+                                    <ui:SymbolIcon Symbol="Settings24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <Separator />
+                            <MenuItem Header="Switch Server" Click="OnSwitchServerMenuClick">
+                                <MenuItem.Icon>
+                                    <ui:SymbolIcon Symbol="ArrowRepeatAll24" FontSize="16" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="Sign Out" Click="OnLogoutMenuClick">
+                                <MenuItem.Icon>
+                                    <ui:SymbolIcon Symbol="SignOut24" FontSize="16" Foreground="#FF5555" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+
+                <!-- Windows 11 Native Fluent TitleBar with Snap Layout Support -->
+                <ui:TitleBar x:Name="AppTitleBar" Title=""
+                             ShowMaximize="True" ShowMinimize="True" ShowClose="True"
+                             VerticalAlignment="Center" Height="52" Width="138" />
+            </StackPanel>
         </Grid>
+
+        <!-- Pure Edge-to-Edge Content Area -->
+        <ContentControl Grid.Row="1" Content="{Binding CurrentViewModel}" />
 
         <!-- In-Window Video Player Overlay (Full Shell Overlay, ZIndex=600) -->
         <Grid x:Name="PlayerOverlayGrid" Grid.RowSpan="2" Panel.ZIndex="600" Background="#000000"

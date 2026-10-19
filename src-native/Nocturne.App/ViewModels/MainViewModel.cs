@@ -183,6 +183,10 @@ public class MainViewModel : BaseViewModel
         _settings.SettingsChanged += _ => UpdateBackdropFromSettings();
     }
 
+    private string _currentUserName = "User";
+    private string _currentServerName = "Emby Server";
+    private string _currentUserInitial = "U";
+
     public BaseViewModel CurrentViewModel
     {
         get => _currentViewModel;
@@ -191,8 +195,31 @@ public class MainViewModel : BaseViewModel
             if (SetProperty(ref _currentViewModel, value))
             {
                 IsNavigationVisible = value is not OnboardingViewModel;
+                OnPropertyChanged(nameof(IsHomeActive));
+                OnPropertyChanged(nameof(IsLibraryActive));
             }
         }
+    }
+
+    public bool IsHomeActive => CurrentViewModel is HomeViewModel;
+    public bool IsLibraryActive => CurrentViewModel is LibraryViewModel;
+
+    public string CurrentUserName
+    {
+        get => _currentUserName;
+        set => SetProperty(ref _currentUserName, value);
+    }
+
+    public string CurrentServerName
+    {
+        get => _currentServerName;
+        set => SetProperty(ref _currentServerName, value);
+    }
+
+    public string CurrentUserInitial
+    {
+        get => _currentUserInitial;
+        set => SetProperty(ref _currentUserInitial, value);
     }
 
     public WindowBackdropType BackdropType
@@ -371,6 +398,10 @@ public class MainViewModel : BaseViewModel
 
         if (activeServer != null && !string.IsNullOrEmpty(activeServer.AccessToken))
         {
+            CurrentUserName = !string.IsNullOrEmpty(activeServer.Username) ? activeServer.Username : "User";
+            CurrentServerName = !string.IsNullOrEmpty(activeServer.Name) ? activeServer.Name : "Emby Server";
+            CurrentUserInitial = CurrentUserName.Length > 0 ? CurrentUserName[0].ToString().ToUpperInvariant() : "U";
+
             SplashStatusText = $"Connecting to {activeServer.Name}...";
             _embyClient.Configure(activeServer.Url, activeServer.AccessToken, activeServer.UserId);
 
@@ -394,6 +425,20 @@ public class MainViewModel : BaseViewModel
         }
 
         IsSplashVisible = false;
+    }
+
+    public void Logout()
+    {
+        IsNavigationVisible = false;
+        OnboardingVM.LoadSavedServers();
+        CurrentViewModel = OnboardingVM;
+    }
+
+    public void SwitchServer()
+    {
+        IsNavigationVisible = false;
+        OnboardingVM.LoadSavedServers();
+        CurrentViewModel = OnboardingVM;
     }
 
     public async Task StartPlaybackAsync(EmbyItem item, long startTicks = 0)
