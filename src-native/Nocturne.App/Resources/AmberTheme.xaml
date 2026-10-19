@@ -9,6 +9,7 @@
     <SolidColorBrush x:Key="NocturneAmberBrush" Color="{StaticResource NocturneAmberColor}" />
     <SolidColorBrush x:Key="NocturneAmberHoverBrush" Color="{StaticResource NocturneAmberHoverColor}" />
     <SolidColorBrush x:Key="NocturneAmberMutedBrush" Color="{StaticResource NocturneAmberMutedColor}" />
+    <SolidColorBrush x:Key="NocturneAmberTintBrush" Color="#33E5A00D" />
 
     <!-- Glass & Border Brushes -->
     <SolidColorBrush x:Key="GlassBorderDarkBrush" Color="#1FFFFFFF" />
@@ -18,7 +19,7 @@
 
     <!-- Amber Accent Primary Button Style -->
     <Style x:Key="AmberPrimaryButton" TargetType="Button">
-        <Setter Property="Background" Value="{StaticResource NocturneAmberBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
         <Setter Property="Foreground" Value="#111111" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Padding" Value="16,8" />
@@ -33,7 +34,7 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="border" Property="Background" Value="{StaticResource NocturneAmberHoverBrush}" />
+                            <Setter TargetName="border" Property="Background" Value="{DynamicResource NocturneAmberHoverBrush}" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="border" Property="Opacity" Value="0.85" />

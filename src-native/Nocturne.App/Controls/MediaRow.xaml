@@ -50,7 +50,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                                 <Setter TargetName="b" Property="Background" Value="#F0111111" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -70,7 +70,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                                 <Setter TargetName="b" Property="Background" Value="#F0111111" />
                             </Trigger>
                         </ControlTemplate.Triggers>

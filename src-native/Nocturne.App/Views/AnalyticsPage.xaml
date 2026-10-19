@@ -53,7 +53,7 @@
                         BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="18">
                     <StackPanel>
-                        <ui:SymbolIcon Symbol="Clock24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
+                        <ui:SymbolIcon Symbol="Clock24" FontSize="20" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
                         <TextBlock Text="Total Watch Time" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text="{Binding FormattedWatchTime}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"
                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
@@ -65,7 +65,7 @@
                         BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="18">
                     <StackPanel>
-                        <ui:SymbolIcon Symbol="CalendarClock24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
+                        <ui:SymbolIcon Symbol="CalendarClock24" FontSize="20" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
                         <TextBlock Text="Weekly Average" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text="{Binding FormattedAverageWeekly}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"
                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
@@ -77,7 +77,7 @@
                         BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="18">
                     <StackPanel>
-                        <ui:SymbolIcon Symbol="Filmstrip24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
+                        <ui:SymbolIcon Symbol="Filmstrip24" FontSize="20" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
                         <TextBlock Text="Movies Watched" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text="{Binding Stats.MoviesWatched}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"
                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
@@ -89,7 +89,7 @@
                         BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="18">
                     <StackPanel>
-                        <ui:SymbolIcon Symbol="Tv24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
+                        <ui:SymbolIcon Symbol="Tv24" FontSize="20" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,0,8" HorizontalAlignment="Left" />
                         <TextBlock Text="Episodes Watched" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text="{Binding Stats.EpisodesWatched}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"
                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
@@ -106,8 +106,8 @@
                     <DockPanel Margin="0,0,0,14">
                         <TextBlock Text="Trakt.tv Lifetime Statistics" FontSize="15" FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" />
-                        <Border DockPanel.Dock="Right" Background="#30E5A00D" CornerRadius="4" Padding="8,2">
-                            <TextBlock Text="Synced from Trakt" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource NocturneAmberBrush}" />
+                        <Border DockPanel.Dock="Right" Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="8,2">
+                            <TextBlock Text="Synced from Trakt" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberBrush}" />
                         </Border>
                     </DockPanel>
 
@@ -151,10 +151,10 @@
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="Less" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,6,0" />
                             <Border Width="11" Height="11" CornerRadius="2" Background="#18FFFFFF" Margin="2,0" />
-                            <Border Width="11" Height="11" CornerRadius="2" Background="#40E5A00D" Margin="2,0" />
-                            <Border Width="11" Height="11" CornerRadius="2" Background="#80E5A00D" Margin="2,0" />
-                            <Border Width="11" Height="11" CornerRadius="2" Background="#C0E5A00D" Margin="2,0" />
-                            <Border Width="11" Height="11" CornerRadius="2" Background="#FFE5A00D" Margin="2,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="{DynamicResource NocturneAmberBrush}" Opacity="0.25" Margin="2,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="{DynamicResource NocturneAmberBrush}" Opacity="0.5" Margin="2,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="{DynamicResource NocturneAmberBrush}" Opacity="0.75" Margin="2,0" />
+                            <Border Width="11" Height="11" CornerRadius="2" Background="{DynamicResource NocturneAmberBrush}" Opacity="1.0" Margin="2,0" />
                             <TextBlock Text="More" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="6,0,0,0" />
                         </StackPanel>
                     </DockPanel>
@@ -202,7 +202,7 @@
 
                                     <!-- Bar Column -->
                                     <Border Grid.Row="0" VerticalAlignment="Bottom" CornerRadius="4,4,0,0"
-                                            Background="{StaticResource NocturneAmberBrush}"
+                                            Background="{DynamicResource NocturneAmberBrush}"
                                             Height="{Binding HeightRatio, Converter={StaticResource BarHeightConverter}, ConverterParameter=90}" />
 
                                     <!-- Date Label -->
@@ -282,7 +282,7 @@
                                             <TextBlock Text="{Binding Genre}" FontWeight="Medium" FontSize="12" TextTrimming="CharacterEllipsis" />
                                         </DockPanel>
                                         <ProgressBar Value="{Binding Percentage}" Maximum="100" Height="4" Margin="0,3,0,0"
-                                                     Foreground="{StaticResource NocturneAmberBrush}"
+                                                     Foreground="{DynamicResource NocturneAmberBrush}"
                                                      Background="#20FFFFFF" BorderThickness="0" />
                                     </StackPanel>
                                 </DataTemplate>

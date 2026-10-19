@@ -86,7 +86,7 @@
             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
                 <!-- Nocturne Logo & Title -->
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,24,0" Cursor="Hand" MouseDown="OnLogoMouseDown">
-                    <Border Width="30" Height="30" CornerRadius="15" Background="{StaticResource NocturneAmberBrush}" Margin="0,0,10,0">
+                    <Border Width="30" Height="30" CornerRadius="15" Background="{DynamicResource NocturneAmberBrush}" Margin="0,0,10,0">
                         <ui:SymbolIcon Symbol="MoviesAndTv24" FontSize="16" Foreground="#111111" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <TextBlock Text="NOCTURNE" FontSize="15" FontWeight="Bold"
@@ -103,7 +103,7 @@
                                     <DataTrigger Binding="{Binding IsHomeActive}" Value="True">
                                         <Setter Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
                                         <Setter Property="BorderThickness" Value="1" />
-                                        <Setter Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
@@ -124,7 +124,7 @@
                                     <DataTrigger Binding="{Binding IsLibraryActive}" Value="True">
                                         <Setter Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
                                         <Setter Property="BorderThickness" Value="1" />
-                                        <Setter Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
@@ -164,12 +164,12 @@
                                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1">
                                 <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding CurrentUserInitial}" FontSize="14" FontWeight="Bold"
-                                               Foreground="{StaticResource NocturneAmberBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                               Foreground="{DynamicResource NocturneAmberBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Grid>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                    <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                                     <Setter TargetName="b" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
                                 </Trigger>
                             </ControlTemplate.Triggers>
@@ -186,12 +186,12 @@
                             <Separator />
                             <MenuItem Header="Analytics" Click="OnAnalyticsMenuClick">
                                 <MenuItem.Icon>
-                                    <ui:SymbolIcon Symbol="DataTrending24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" />
+                                    <ui:SymbolIcon Symbol="DataTrending24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" />
                                 </MenuItem.Icon>
                             </MenuItem>
                             <MenuItem Header="Settings" Click="OnSettingsMenuClick">
                                 <MenuItem.Icon>
-                                    <ui:SymbolIcon Symbol="Settings24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" />
+                                    <ui:SymbolIcon Symbol="Settings24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" />
                                 </MenuItem.Icon>
                             </MenuItem>
                             <Separator />
@@ -242,7 +242,7 @@
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                 <!-- Glowing Amber Logo -->
                 <TextBlock Text="N O C T U R N E" FontSize="38" FontWeight="Light"
-                           Foreground="{StaticResource NocturneAmberBrush}"
+                           Foreground="{DynamicResource NocturneAmberBrush}"
                            HorizontalAlignment="Center" Margin="0,0,0,28">
                     <TextBlock.Effect>
                         <DropShadowEffect Color="#E5A00D" BlurRadius="28" ShadowDepth="0" Opacity="0.55" />
@@ -251,7 +251,7 @@
 
                 <!-- Loading Ring -->
                 <ui:ProgressRing IsIndeterminate="True" Width="32" Height="32"
-                                 Foreground="{StaticResource NocturneAmberBrush}"
+                                 Foreground="{DynamicResource NocturneAmberBrush}"
                                  HorizontalAlignment="Center" Margin="0,0,0,18" />
 
                 <!-- Status Text -->

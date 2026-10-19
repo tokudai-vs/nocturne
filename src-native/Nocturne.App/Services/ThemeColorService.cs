@@ -62,10 +62,30 @@ public class ThemeColorService
                     hoverBrush.Freeze();
                     var mutedBrush = new SolidColorBrush(mutedColor);
                     mutedBrush.Freeze();
+                    var tintColor = Color.FromArgb(0x33, color.R, color.G, color.B);
+                    var tintBrush = new SolidColorBrush(tintColor);
+                    tintBrush.Freeze();
 
                     Application.Current.Resources["NocturneAmberBrush"] = brush;
                     Application.Current.Resources["NocturneAmberHoverBrush"] = hoverBrush;
                     Application.Current.Resources["NocturneAmberMutedBrush"] = mutedBrush;
+                    Application.Current.Resources["NocturneAmberTintBrush"] = tintBrush;
+
+                    // Standard System and Wpf.Ui Accent Brushes
+                    Application.Current.Resources["SystemAccentColor"] = color;
+                    Application.Current.Resources["SystemAccentColorPrimary"] = color;
+                    Application.Current.Resources["SystemAccentColorLight1"] = hoverColor;
+                    Application.Current.Resources["SystemAccentColorLight2"] = hoverColor;
+                    Application.Current.Resources["SystemAccentColorLight3"] = hoverColor;
+                    Application.Current.Resources["SystemAccentColorDark1"] = mutedColor;
+                    Application.Current.Resources["SystemAccentColorDark2"] = mutedColor;
+                    Application.Current.Resources["SystemAccentColorDark3"] = mutedColor;
+
+                    Application.Current.Resources["SystemAccentColorPrimaryBrush"] = brush;
+                    Application.Current.Resources["AccentFillColorDefaultBrush"] = brush;
+                    Application.Current.Resources["AccentFillColorSecondaryBrush"] = hoverBrush;
+                    Application.Current.Resources["AccentFillColorTertiaryBrush"] = mutedBrush;
+                    Application.Current.Resources["AccentTextFillColorPrimaryBrush"] = brush;
 
                     try
                     {

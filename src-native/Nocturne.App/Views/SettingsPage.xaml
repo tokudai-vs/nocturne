@@ -36,12 +36,12 @@
                                             <TextBlock Text="Set Active" FontSize="12" />
                                         </Button>
 
-                                        <StackPanel VerticalAlignment="Center">
+                                         <StackPanel VerticalAlignment="Center">
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" Margin="0,0,8,0" />
-                                                <Border Background="#33E5A00D" CornerRadius="4" Padding="6,1" VerticalAlignment="Center"
+                                                <Border Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="6,1" VerticalAlignment="Center"
                                                         Visibility="{Binding Id, Converter={StaticResource NullToVisibility}}">
-                                                    <TextBlock Text="Connected" FontSize="10" Foreground="{StaticResource NocturneAmberBrush}" FontWeight="SemiBold" />
+                                                    <TextBlock Text="Connected" FontSize="10" Foreground="{DynamicResource NocturneAmberBrush}" FontWeight="SemiBold" />
                                                 </Border>
                                             </StackPanel>
                                             <TextBlock Text="{Binding Url}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
@@ -54,8 +54,139 @@
 
                     <Separator Margin="0,8,0,16" />
 
-                    <!-- Add New Server Box -->
-                    <TextBlock Text="Add Another Server" FontWeight="SemiBold" Margin="0,0,0,10" />
+                    <!-- Add New Server Header -->
+                    <TextBlock Text="Add Another Server" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,12" />
+
+                    <!-- Emby Connect Feature Panel -->
+                    <Border Background="#14FFFFFF" BorderBrush="{DynamicResource NocturneAmberMutedBrush}" BorderThickness="1"
+                            CornerRadius="8" Padding="16" Margin="0,0,0,16">
+                        <StackPanel>
+                            <!-- Prompt: Button to start Emby Connect -->
+                            <StackPanel Visibility="{Binding IsEmbyConnectActive, Converter={StaticResource InvertBoolToVisibility}}">
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource AmberPrimaryButton}"
+                                            Click="OnStartEmbyConnectClick" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="Cloud24" FontSize="16" Margin="0,0,8,0" />
+                                            <TextBlock Text="Link via Emby Connect" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                    </Button>
+                                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                                        <TextBlock Text="Emby Connect (Recommended)" FontWeight="SemiBold" FontSize="14" />
+                                        <TextBlock Text="Link all your Emby servers instantly using a simple 5-digit PIN code at emby.media/pin."
+                                                   FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
+
+                            <!-- Active Emby Connect Flow: Step 1 PIN Code Screen -->
+                            <StackPanel Visibility="{Binding IsConnectPinActive, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="Emby Connect Authorization" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,6" />
+                                <TextBlock Text="Visit emby.media/pin on any browser and enter the PIN code below:"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,12" />
+
+                                <Border Background="{DynamicResource NocturneAmberTintBrush}" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="2"
+                                        CornerRadius="8" Padding="24,10" HorizontalAlignment="Left" Margin="0,0,0,12">
+                                    <TextBlock Text="{Binding ConnectPin}" FontSize="28" FontWeight="Bold"
+                                               Foreground="{DynamicResource NocturneAmberBrush}" />
+                                </Border>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <Button Style="{StaticResource AmberPrimaryButton}" Click="OnOpenPinBrowserClick" Margin="0,0,10,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="Open24" FontSize="15" Margin="0,0,8,0" />
+                                            <TextBlock Text="Open emby.media/pin in Browser" FontWeight="SemiBold" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Content="Cancel" Click="OnCancelEmbyConnectClick" />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:ProgressRing Width="14" Height="14" Margin="0,0,8,0"
+                                                     Visibility="{Binding IsPollingConnectPin, Converter={StaticResource BoolToVisibility}}" />
+                                    <TextBlock Text="{Binding ConnectStatusMessage}" FontSize="12"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Active Emby Connect Flow: Step 2 Discovered Servers List -->
+                            <StackPanel Visibility="{Binding IsConnectServersListActive, Converter={StaticResource BoolToVisibility}}">
+                                <DockPanel Margin="0,0,0,12">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Style="{StaticResource AmberPrimaryButton}" Click="OnAddAllConnectServersClick"
+                                                IsEnabled="{Binding IsAddingAllServers, Converter={StaticResource InverseBool}}" Margin="0,0,8,0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:ProgressRing Width="14" Height="14" Margin="0,0,8,0"
+                                                                 Visibility="{Binding IsAddingAllServers, Converter={StaticResource BoolToVisibility}}" />
+                                                <ui:SymbolIcon Symbol="AddSquare24" FontSize="16" Margin="0,0,6,0"
+                                                               Visibility="{Binding IsAddingAllServers, Converter={StaticResource InvertBoolToVisibility}}" />
+                                                <TextBlock Text="+ Add All Servers" FontWeight="SemiBold" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Content="Done" Click="OnDoneConnectServersClick" />
+                                    </StackPanel>
+
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Discovered Servers" FontWeight="SemiBold" FontSize="15" />
+                                        <TextBlock Text="{Binding ConnectStatusMessage}" FontSize="12"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </DockPanel>
+
+                                <ItemsControl ItemsSource="{Binding DiscoveredServers}" Margin="0,0,0,8">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,4" Padding="12,10" CornerRadius="6"
+                                                    Background="#1AFFFFFF" BorderBrush="#25FFFFFF" BorderThickness="1">
+                                                <DockPanel>
+                                                    <!-- Right action: Added badge or Add button -->
+                                                    <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" Margin="8,0,0,0">
+                                                        <Border Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="8,3"
+                                                                Visibility="{Binding IsAdded, Converter={StaticResource BoolToVisibility}}">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <ui:SymbolIcon Symbol="Checkmark16" FontSize="12" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,4,0" />
+                                                                <TextBlock Text="Added" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                                            </StackPanel>
+                                                        </Border>
+
+                                                        <Button Padding="12,5" Click="OnAddSingleConnectServerClick" Tag="{Binding}"
+                                                                Visibility="{Binding IsAdded, Converter={StaticResource InvertBoolToVisibility}}"
+                                                                IsEnabled="{Binding IsAdding, Converter={StaticResource InverseBool}}">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <ui:ProgressRing Width="12" Height="12" Margin="0,0,6,0"
+                                                                                 Visibility="{Binding IsAdding, Converter={StaticResource BoolToVisibility}}" />
+                                                                <TextBlock Text="+ Add Server" FontSize="12" FontWeight="SemiBold" />
+                                                            </StackPanel>
+                                                        </Button>
+                                                    </StackPanel>
+
+                                                    <ui:SymbolIcon Symbol="Server24" FontSize="18" Foreground="{DynamicResource NocturneAmberBrush}"
+                                                                   Margin="0,0,10,0" VerticalAlignment="Center" />
+
+                                                    <StackPanel VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" />
+                                                        <TextBlock Text="{Binding Url}" FontSize="11"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                                    </StackPanel>
+                                                </DockPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+
+                            <!-- Error Message banner for Emby Connect -->
+                            <Border Background="#33FF4444" BorderBrush="#80FF4444" BorderThickness="1"
+                                    CornerRadius="6" Padding="10,6" Margin="0,10,0,0"
+                                    Visibility="{Binding ConnectErrorMessage, Converter={StaticResource NullToVisibility}}">
+                                <TextBlock Text="{Binding ConnectErrorMessage}" Foreground="#FF6B6B" FontSize="12" TextWrapping="Wrap" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Manual Direct Server URL Section -->
+                    <TextBlock Text="Or Add Manually via Direct URL" FontWeight="SemiBold" FontSize="13"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,8" />
                     <ui:TextBox PlaceholderText="Server URL (e.g. http://192.168.1.100:8096)"
                                 Text="{Binding NewServerUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />
 
@@ -132,7 +263,7 @@
                                                 Click="OnRemoveCombinedGroupClick" Tag="{Binding Name}">
                                             <ui:SymbolIcon Symbol="Delete16" FontSize="12" Foreground="#FF6B6B" />
                                         </Button>
-                                        <ui:SymbolIcon Symbol="Folder24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                                        <ui:SymbolIcon Symbol="Folder24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,10,0" VerticalAlignment="Center" />
                                         <StackPanel VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                                             <TextBlock Text="Unified Cross-Server Library" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
@@ -194,7 +325,7 @@
                         <Border Grid.Column="2" Background="#14FFFFFF" CornerRadius="6" Padding="12,10">
                             <StackPanel>
                                 <TextBlock Text="Duplicate Groups Merged" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                <TextBlock Text="{Binding DedupGroupsCount}" FontSize="18" FontWeight="Bold" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,2,0,0" />
+                                <TextBlock Text="{Binding DedupGroupsCount}" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,2,0,0" />
                             </StackPanel>
                         </Border>
                     </Grid>
@@ -463,7 +594,7 @@
 
                     <!-- Trakt Code Display -->
                     <StackPanel Margin="0,10,0,14" Visibility="{Binding TraktAuthCode, Converter={StaticResource NullToVisibility}}">
-                        <TextBlock Text="Visit trakt.tv/activate and enter code:" FontSize="13" Foreground="{StaticResource NocturneAmberBrush}" />
+                        <TextBlock Text="Visit trakt.tv/activate and enter code:" FontSize="13" Foreground="{DynamicResource NocturneAmberBrush}" />
                         <TextBlock Text="{Binding TraktAuthCode}" FontSize="28" FontWeight="Bold" Margin="0,4,0,0" Foreground="White" />
                     </StackPanel>
 
@@ -521,7 +652,7 @@
                     CornerRadius="10" Padding="20,16">
                 <StackPanel>
                     <TextBlock Text="Nocturne v4.0.0 (Native Windows Edition)" FontWeight="Bold" FontSize="15"
-                               Foreground="{StaticResource NocturneAmberBrush}" />
+                               Foreground="{DynamicResource NocturneAmberBrush}" />
                     <TextBlock Text="Pure .NET 8 WPF-UI client with zero Chromium, zero web engine overhead, and hardware-accelerated libmpv rendering. All rights reserved."
                                FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,6,0,0" TextWrapping="Wrap" LineHeight="18" />
                 </StackPanel>

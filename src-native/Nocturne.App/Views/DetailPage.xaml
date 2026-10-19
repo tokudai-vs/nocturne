@@ -49,7 +49,7 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                        <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                                         <Setter TargetName="b" Property="Background" Value="#90000000" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
@@ -117,12 +117,12 @@
                                 </Border>
 
                                 <!-- Community Rating Badge -->
-                                <Border Background="#33E5A00D" CornerRadius="4" Padding="8,3" Margin="0,0,8,0"
+                                <Border Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="8,3" Margin="0,0,8,0"
                                         Visibility="{Binding Item.CommunityRating, Converter={StaticResource NullToVisibility}}">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="Star16" FontSize="12" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,5,0" />
+                                        <ui:SymbolIcon Symbol="Star16" FontSize="12" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,5,0" />
                                         <TextBlock Text="{Binding Item.CommunityRating, Converter={StaticResource RatingFormatter}}"
-                                                   FontSize="12" FontWeight="Bold" Foreground="{StaticResource NocturneAmberBrush}" />
+                                                   FontSize="12" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}" />
                                     </StackPanel>
                                 </Border>
                             </StackPanel>
@@ -158,7 +158,7 @@
                                                 <TextBlock Text="{Binding ResolutionBadge}" FontWeight="SemiBold" Margin="0,0,8,0" />
                                                 <TextBlock Text="{Binding CodecBadge}" Foreground="#CCCCCC" Margin="0,0,8,0" />
                                                 <TextBlock Text="•" Foreground="#888888" Margin="0,0,8,0" />
-                                                <TextBlock Text="{Binding ServerName}" Foreground="{StaticResource NocturneAmberBrush}" />
+                                                <TextBlock Text="{Binding ServerName}" Foreground="{DynamicResource NocturneAmberBrush}" />
                                             </StackPanel>
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
@@ -289,7 +289,7 @@
                                                     <!-- In-Progress Resume Progress Bar (Bottom edge) -->
                                                     <ProgressBar VerticalAlignment="Bottom" Height="4"
                                                                  Minimum="0" Maximum="100" Value="{Binding ProgressPercentage, Mode=OneWay}"
-                                                                 Foreground="{StaticResource NocturneAmberBrush}"
+                                                                 Foreground="{DynamicResource NocturneAmberBrush}"
                                                                  Background="#50000000"
                                                                  BorderThickness="0"
                                                                  Visibility="{Binding HasResumeProgress, Converter={StaticResource BoolToVisibility}}" />
@@ -423,7 +423,7 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                                                 <Setter TargetName="b" Property="Background" Value="#F0111111" />
                                             </Trigger>
                                         </ControlTemplate.Triggers>
@@ -443,7 +443,7 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                                                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                                                 <Setter TargetName="b" Property="Background" Value="#F0111111" />
                                             </Trigger>
                                         </ControlTemplate.Triggers>

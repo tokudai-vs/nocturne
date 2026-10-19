@@ -40,7 +40,7 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="b" Property="Background" Value="{StaticResource NocturneAmberBrush}" />
+                                        <Setter TargetName="b" Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -89,7 +89,7 @@
             <Button Click="OnSkipPromptClick" Style="{StaticResource AmberPrimaryButton}"
                     Padding="22,12" Cursor="Hand" ToolTip="Skip Segment (Enter)">
                 <Button.Effect>
-                    <DropShadowEffect Color="#E5A00D" BlurRadius="20" ShadowDepth="0" Opacity="0.6" />
+                    <DropShadowEffect Color="{DynamicResource NocturneAmberColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.6" />
                 </Button.Effect>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <ui:SymbolIcon Symbol="FastForward24" FontSize="18" Margin="0,0,8,0" />
@@ -148,7 +148,7 @@
                         <Button Click="OnPlayPauseClick" Width="44" Height="44" Margin="0,0,10,0" Cursor="Hand">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
-                                    <Border x:Name="b" CornerRadius="22" Background="{StaticResource NocturneAmberBrush}">
+                                    <Border x:Name="b" CornerRadius="22" Background="{DynamicResource NocturneAmberBrush}">
                                         <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
                                             <ui:SymbolIcon Symbol="Pause24" FontSize="20" Foreground="#111111"
                                                            Visibility="{Binding IsPaused, Converter={StaticResource InvertBoolToVisibility}}" />
@@ -158,7 +158,7 @@
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="b" Property="Background" Value="{StaticResource NocturneAmberHoverBrush}" />
+                                            <Setter TargetName="b" Property="Background" Value="{DynamicResource NocturneAmberHoverBrush}" />
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>

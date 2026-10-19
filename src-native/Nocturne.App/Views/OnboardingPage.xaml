@@ -20,10 +20,10 @@
                 <!-- Signature Nocturne Logo & Branding -->
                 <StackPanel HorizontalAlignment="Center" Margin="0,0,0,32">
                     <TextBlock Text="NOCTURNE" FontSize="36" FontWeight="Light"
-                               Foreground="{StaticResource NocturneAmberBrush}"
+                               Foreground="{DynamicResource NocturneAmberBrush}"
                                HorizontalAlignment="Center">
                         <TextBlock.Effect>
-                            <DropShadowEffect Color="#E5A00D" BlurRadius="20" ShadowDepth="0" Opacity="0.4" />
+                            <DropShadowEffect Color="{DynamicResource NocturneAmberColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.4" />
                         </TextBlock.Effect>
                     </TextBlock>
                     <TextBlock Text="The Ultimate Native Emby Client" FontSize="13"
@@ -73,7 +73,7 @@
 
                     <!-- Emby Connect Feature Card -->
                     <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="1.5"
+                            BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1.5"
                             CornerRadius="10" Padding="20,18" Margin="0,0,0,20">
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Style="{StaticResource AmberPrimaryButton}"
@@ -85,9 +85,9 @@
                                 </StackPanel>
                             </Button>
 
-                            <Border Width="42" Height="42" CornerRadius="8" Background="#26E5A00D"
+                            <Border Width="42" Height="42" CornerRadius="8" Background="{DynamicResource NocturneAmberTintBrush}"
                                     Margin="0,0,14,0" VerticalAlignment="Center" HorizontalAlignment="Center">
-                                <ui:SymbolIcon Symbol="Cloud24" FontSize="22" Foreground="{StaticResource NocturneAmberBrush}"
+                                <ui:SymbolIcon Symbol="Cloud24" FontSize="22" Foreground="{DynamicResource NocturneAmberBrush}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
 
@@ -154,13 +154,13 @@
                 <StackPanel Visibility="{Binding IsStep2Visible, Converter={StaticResource BoolToVisibility}}">
 
                     <!-- Server Header Badge -->
-                    <Border Background="#20E5A00D" BorderBrush="#60E5A00D" BorderThickness="1"
+                    <Border Background="{DynamicResource NocturneAmberTintBrush}" BorderBrush="{DynamicResource NocturneAmberMutedBrush}" BorderThickness="1"
                             CornerRadius="20" Padding="16,6" HorizontalAlignment="Center" Margin="0,0,0,24">
                         <StackPanel Orientation="Horizontal">
-                            <ui:SymbolIcon Symbol="Server24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,8,0" />
-                            <TextBlock Text="{Binding ServerName}" FontWeight="SemiBold" Foreground="{StaticResource NocturneAmberBrush}" />
-                            <TextBlock Text=" • v" Foreground="{StaticResource NocturneAmberBrush}" />
-                            <TextBlock Text="{Binding ServerVersion}" Foreground="{StaticResource NocturneAmberBrush}" />
+                            <ui:SymbolIcon Symbol="Server24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                            <TextBlock Text="{Binding ServerName}" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberBrush}" />
+                            <TextBlock Text=" • v" Foreground="{DynamicResource NocturneAmberBrush}" />
+                            <TextBlock Text="{Binding ServerVersion}" Foreground="{DynamicResource NocturneAmberBrush}" />
                         </StackPanel>
                     </Border>
 
@@ -181,11 +181,11 @@
                                             BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                                             Cursor="Hand" MouseLeftButtonUp="OnPublicUserClick">
                                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <Border Width="52" Height="52" CornerRadius="26" Background="#33E5A00D"
-                                                    BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="1"
+                                            <Border Width="52" Height="52" CornerRadius="26" Background="{DynamicResource NocturneAmberTintBrush}"
+                                                    BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1"
                                                     HorizontalAlignment="Center" Margin="0,0,0,8">
                                                 <TextBlock Text="{Binding Name[0]}" FontSize="22" FontWeight="Bold"
-                                                           Foreground="{StaticResource NocturneAmberBrush}"
+                                                           Foreground="{DynamicResource NocturneAmberBrush}"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                                             </Border>
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"
@@ -245,7 +245,7 @@
                             <Button HorizontalAlignment="Stretch" Padding="12,8"
                                     Click="OnSignInWithEmbyConnectForServerClick">
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                    <ui:SymbolIcon Symbol="Cloud24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                                    <ui:SymbolIcon Symbol="Cloud24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
                                     <TextBlock Text="Sign In via Emby Connect for this server" FontWeight="SemiBold" />
                                 </StackPanel>
                             </Button>
@@ -264,10 +264,10 @@
                 <!-- ══════════════════════════════════════════════════════ -->
                 <StackPanel Visibility="{Binding IsEmbyConnectStep, Converter={StaticResource BoolToVisibility}}">
                     <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="1.5"
+                            BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1.5"
                             CornerRadius="12" Padding="28,24" Margin="0,0,0,16">
                         <StackPanel HorizontalAlignment="Center" MaxWidth="440">
-                            <ui:SymbolIcon Symbol="Cloud24" FontSize="36" Foreground="{StaticResource NocturneAmberBrush}"
+                            <ui:SymbolIcon Symbol="Cloud24" FontSize="36" Foreground="{DynamicResource NocturneAmberBrush}"
                                            HorizontalAlignment="Center" Margin="0,0,0,10" />
 
                             <TextBlock Text="Emby Connect Authorization" FontSize="18" FontWeight="SemiBold"
@@ -285,10 +285,10 @@
                             </Border>
 
                             <!-- Big Glowing PIN Code Display -->
-                            <Border Background="#26E5A00D" BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="2"
+                            <Border Background="{DynamicResource NocturneAmberTintBrush}" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="2"
                                     CornerRadius="10" Padding="32,12" HorizontalAlignment="Center" Margin="0,4,0,18">
                                 <TextBlock Text="{Binding ConnectPin}" FontSize="36" FontWeight="Bold"
-                                           Foreground="{StaticResource NocturneAmberBrush}" HorizontalAlignment="Center" />
+                                           Foreground="{DynamicResource NocturneAmberBrush}" HorizontalAlignment="Center" />
                             </Border>
 
                             <!-- Action button to launch browser -->
@@ -346,7 +346,7 @@
                                                     <TextBlock Text="Connect" FontSize="13" />
                                                 </Button>
 
-                                                <ui:SymbolIcon Symbol="Server24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}"
+                                                <ui:SymbolIcon Symbol="Server24" FontSize="20" Foreground="{DynamicResource NocturneAmberBrush}"
                                                                Margin="0,0,12,0" VerticalAlignment="Center" />
 
                                                 <StackPanel VerticalAlignment="Center">

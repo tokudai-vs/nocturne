@@ -19,7 +19,7 @@
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="BorderBrush" Value="{StaticResource NocturneAmberBrush}" />
+                    <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
                     <Trigger.EnterActions>
                         <BeginStoryboard>
                             <Storyboard>
@@ -87,10 +87,10 @@
                 <!-- Version Count Badge (for deduplicated items) -->
                 <Border x:Name="VersionBadge" HorizontalAlignment="Left" VerticalAlignment="Top"
                         Margin="6" Padding="6,2" CornerRadius="4" Background="#D9141414"
-                        BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="1"
+                        BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1"
                         Visibility="Collapsed">
                     <TextBlock x:Name="VersionBadgeText" Text="2 copies" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{StaticResource NocturneAmberBrush}" />
+                               Foreground="{DynamicResource NocturneAmberBrush}" />
                 </Border>
 
                 <!-- Played Badge -->
@@ -103,7 +103,7 @@
 
                 <!-- Progress Bar -->
                 <ProgressBar x:Name="ProgressBar" Height="4" VerticalAlignment="Bottom"
-                             Foreground="{StaticResource NocturneAmberBrush}"
+                             Foreground="{DynamicResource NocturneAmberBrush}"
                              Background="#40000000" BorderThickness="0"
                              Visibility="Collapsed" />
             </Grid>

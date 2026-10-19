@@ -1,10 +1,54 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Windows;
 using Wpf.Ui.Appearance;
 using Nocturne.App.Services;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
 
 namespace Nocturne.App.ViewModels;
+
+public class DiscoveredConnectServerUi : BaseViewModel
+{
+    public ConnectServer Server { get; }
+    public string Name => Server.Name ?? "Emby Server";
+    public string Url => !string.IsNullOrEmpty(Server.Url) ? Server.Url : Server.LocalAddress ?? string.Empty;
+
+    private bool _isAlreadyAdded;
+    public bool IsAlreadyAdded
+    {
+        get => _isAlreadyAdded;
+        set => SetProperty(ref _isAlreadyAdded, value);
+    }
+
+    private bool _isAdding;
+    public bool IsAdding
+    {
+        get => _isAdding;
+        set => SetProperty(ref _isAdding, value);
+    }
+
+    private bool _isAdded;
+    public bool IsAdded
+    {
+        get => _isAdded;
+        set => SetProperty(ref _isAdded, value);
+    }
+
+    private string? _errorMessage;
+    public string? ErrorMessage
+    {
+        get => _errorMessage;
+        set => SetProperty(ref _errorMessage, value);
+    }
+
+    public DiscoveredConnectServerUi(ConnectServer server, bool isAlreadyAdded)
+    {
+        Server = server;
+        _isAlreadyAdded = isAlreadyAdded;
+        _isAdded = isAlreadyAdded;
+    }
+}
 
 public class SettingsViewModel : BaseViewModel
 {
@@ -23,6 +67,21 @@ public class SettingsViewModel : BaseViewModel
     private string _newPassword = string.Empty;
     private string _serverAddError = string.Empty;
     private bool _isAddingServer;
+
+    // Emby Connect linking fields
+    private bool _isEmbyConnectActive;
+    private bool _isConnectPinActive;
+    private bool _isConnectServersListActive;
+    private bool _isPollingConnectPin;
+    private string _connectPin = string.Empty;
+    private string _connectStatusMessage = string.Empty;
+    private string? _connectErrorMessage;
+    private string _connectUserId = string.Empty;
+    private string _connectAccessToken = string.Empty;
+    private bool _isAddingAllServers;
+    private CancellationTokenSource? _connectPinCts;
+
+    public ObservableCollection<DiscoveredConnectServerUi> DiscoveredServers { get; } = new();
 
     // Appearance
     private string _selectedTheme = "auto";
@@ -288,6 +347,344 @@ public class SettingsViewModel : BaseViewModel
         _db.ClearServerData(serverId);
         LoadServers();
         OnPropertyChanged(nameof(ActiveServerId));
+    }
+
+    // Emby Connect Properties & Methods
+    public bool IsEmbyConnectActive
+    {
+        get => _isEmbyConnectActive;
+        set => SetProperty(ref _isEmbyConnectActive, value);
+    }
+
+    public bool IsConnectPinActive
+    {
+        get => _isConnectPinActive;
+        set => SetProperty(ref _isConnectPinActive, value);
+    }
+
+    public bool IsConnectServersListActive
+    {
+        get => _isConnectServersListActive;
+        set => SetProperty(ref _isConnectServersListActive, value);
+    }
+
+    public bool IsPollingConnectPin
+    {
+        get => _isPollingConnectPin;
+        set => SetProperty(ref _isPollingConnectPin, value);
+    }
+
+    public string ConnectPin
+    {
+        get => _connectPin;
+        set => SetProperty(ref _connectPin, value);
+    }
+
+    public string ConnectStatusMessage
+    {
+        get => _connectStatusMessage;
+        set => SetProperty(ref _connectStatusMessage, value);
+    }
+
+    public string? ConnectErrorMessage
+    {
+        get => _connectErrorMessage;
+        set => SetProperty(ref _connectErrorMessage, value);
+    }
+
+    public bool IsAddingAllServers
+    {
+        get => _isAddingAllServers;
+        set => SetProperty(ref _isAddingAllServers, value);
+    }
+
+    public async Task StartEmbyConnectFlowAsync()
+    {
+        ConnectErrorMessage = null;
+        ConnectStatusMessage = "Requesting PIN code from Emby Connect...";
+        IsEmbyConnectActive = true;
+        IsConnectPinActive = false;
+        IsConnectServersListActive = false;
+        DiscoveredServers.Clear();
+
+        _connectPinCts?.Cancel();
+        _connectPinCts = new CancellationTokenSource();
+
+        try
+        {
+            var pinRes = await _connect.CreatePinAsync();
+            if (pinRes == null || string.IsNullOrEmpty(pinRes.Pin))
+            {
+                ConnectErrorMessage = "Could not generate PIN code. Please ensure you are connected to the internet.";
+                return;
+            }
+
+            ConnectPin = pinRes.Pin;
+            IsConnectPinActive = true;
+            IsPollingConnectPin = true;
+            ConnectStatusMessage = "Waiting for confirmation at emby.media/pin...";
+
+            var pin = pinRes.Pin;
+            var token = _connectPinCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                var stopwatch = Stopwatch.StartNew();
+                while (!token.IsCancellationRequested && stopwatch.Elapsed < TimeSpan.FromMinutes(10))
+                {
+                    try
+                    {
+                        await Task.Delay(2000, token);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+
+                    if (token.IsCancellationRequested) break;
+
+                    var status = await _connect.CheckPinStatusAsync(pin);
+                    if (status != null && status.IsConfirmed)
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        {
+                            await HandleConnectPinConfirmedAsync(pin);
+                        });
+                        break;
+                    }
+
+                    if (status != null && status.IsExpired)
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            ConnectErrorMessage = "The PIN code has expired. Please try again.";
+                            IsConnectPinActive = false;
+                            IsPollingConnectPin = false;
+                        });
+                        break;
+                    }
+                }
+            }, token);
+        }
+        catch (Exception ex)
+        {
+            ConnectErrorMessage = $"Error starting Emby Connect: {ex.Message}";
+        }
+    }
+
+    private async Task HandleConnectPinConfirmedAsync(string pin)
+    {
+        IsPollingConnectPin = false;
+        IsConnectPinActive = false;
+        ConnectStatusMessage = "PIN confirmed! Fetching your Emby servers...";
+
+        try
+        {
+            var exchange = await _connect.ExchangePinAsync(pin);
+            if (exchange == null || string.IsNullOrEmpty(exchange.AccessToken) || string.IsNullOrEmpty(exchange.UserId))
+            {
+                ConnectErrorMessage = "Failed to finalize Emby Connect authorization.";
+                return;
+            }
+
+            _connectUserId = exchange.UserId;
+            _connectAccessToken = exchange.AccessToken;
+
+            var servers = await _connect.GetServersAsync(exchange.UserId, exchange.AccessToken);
+            if (servers.Count == 0)
+            {
+                ConnectErrorMessage = "No Emby servers found on this Emby Connect account.";
+                return;
+            }
+
+            var existing = _settings.Current.Servers;
+            DiscoveredServers.Clear();
+            foreach (var s in servers)
+            {
+                var isAlready = existing.Any(e =>
+                    (!string.IsNullOrEmpty(e.Id) && !string.IsNullOrEmpty(s.SystemId) && e.Id.Equals(s.SystemId, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(e.Url) && !string.IsNullOrEmpty(s.Url) && e.Url.TrimEnd('/').Equals(s.Url.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(e.Url) && !string.IsNullOrEmpty(s.LocalAddress) && e.Url.TrimEnd('/').Equals(s.LocalAddress.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)));
+
+                DiscoveredServers.Add(new DiscoveredConnectServerUi(s, isAlready));
+            }
+
+            IsConnectServersListActive = true;
+            ConnectStatusMessage = $"Found {servers.Count} server(s) on your Emby Connect account.";
+        }
+        catch (Exception ex)
+        {
+            ConnectErrorMessage = $"Failed to fetch servers: {ex.Message}";
+        }
+    }
+
+    public async Task AddAllConnectServersAsync()
+    {
+        if (string.IsNullOrEmpty(_connectUserId) || DiscoveredServers.Count == 0) return;
+
+        IsAddingAllServers = true;
+        ConnectStatusMessage = "Connecting and adding servers...";
+        int addedCount = 0;
+
+        foreach (var item in DiscoveredServers)
+        {
+            if (item.IsAdded) continue;
+
+            item.IsAdding = true;
+            try
+            {
+                var (tok, uid, resolvedUrl) = await _connect.ConnectToServerFastAsync(item.Server, _connectUserId);
+                if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid) && !string.IsNullOrEmpty(resolvedUrl))
+                {
+                    var info = await _embyClient.GetServerInfoAsync(resolvedUrl);
+                    var serverName = info?.ServerName ?? item.Server.Name ?? "Emby Server";
+                    var serverVer = info?.Version ?? item.Server.SystemId ?? "4.x";
+
+                    var newServer = new ServerConfig
+                    {
+                        Id = !string.IsNullOrEmpty(item.Server.SystemId) ? item.Server.SystemId : Guid.NewGuid().ToString("N")[..8],
+                        Name = serverName,
+                        Url = resolvedUrl,
+                        UserId = uid,
+                        Username = serverName,
+                        AccessToken = tok,
+                        Version = serverVer,
+                        AddedAt = DateTime.UtcNow,
+                        LastConnected = DateTime.UtcNow
+                    };
+
+                    _settings.Update(s =>
+                    {
+                        s.Servers.RemoveAll(x => (x.Id == newServer.Id) || (x.Url == newServer.Url && x.UserId == newServer.UserId));
+                        s.Servers.Add(newServer);
+                        if (string.IsNullOrEmpty(s.ActiveServerId))
+                        {
+                            s.ActiveServerId = newServer.Id;
+                        }
+                    });
+
+                    item.IsAdded = true;
+                    item.IsAlreadyAdded = true;
+                    addedCount++;
+                }
+                else
+                {
+                    item.ErrorMessage = "Connection failed";
+                }
+            }
+            catch (Exception ex)
+            {
+                item.ErrorMessage = ex.Message;
+            }
+            finally
+            {
+                item.IsAdding = false;
+            }
+        }
+
+        LoadServers();
+        IsAddingAllServers = false;
+
+        if (addedCount > 0)
+        {
+            ConnectStatusMessage = $"Successfully added {addedCount} server(s) from Emby Connect!";
+            _ = _sync.SyncAllAsync();
+        }
+        else
+        {
+            ConnectStatusMessage = "All available servers were already added or could not be reached.";
+        }
+    }
+
+    public async Task AddSingleConnectServerAsync(DiscoveredConnectServerUi item)
+    {
+        if (item == null || item.IsAdded || string.IsNullOrEmpty(_connectUserId)) return;
+
+        item.IsAdding = true;
+        ConnectStatusMessage = $"Connecting to {item.Name}...";
+
+        try
+        {
+            var (tok, uid, resolvedUrl) = await _connect.ConnectToServerFastAsync(item.Server, _connectUserId);
+            if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid) && !string.IsNullOrEmpty(resolvedUrl))
+            {
+                var info = await _embyClient.GetServerInfoAsync(resolvedUrl);
+                var serverName = info?.ServerName ?? item.Server.Name ?? "Emby Server";
+                var serverVer = info?.Version ?? item.Server.SystemId ?? "4.x";
+
+                var newServer = new ServerConfig
+                {
+                    Id = !string.IsNullOrEmpty(item.Server.SystemId) ? item.Server.SystemId : Guid.NewGuid().ToString("N")[..8],
+                    Name = serverName,
+                    Url = resolvedUrl,
+                    UserId = uid,
+                    Username = serverName,
+                    AccessToken = tok,
+                    Version = serverVer,
+                    AddedAt = DateTime.UtcNow,
+                    LastConnected = DateTime.UtcNow
+                };
+
+                _settings.Update(s =>
+                {
+                    s.Servers.RemoveAll(x => (x.Id == newServer.Id) || (x.Url == newServer.Url && x.UserId == newServer.UserId));
+                    s.Servers.Add(newServer);
+                    if (string.IsNullOrEmpty(s.ActiveServerId))
+                    {
+                        s.ActiveServerId = newServer.Id;
+                    }
+                });
+
+                item.IsAdded = true;
+                item.IsAlreadyAdded = true;
+                LoadServers();
+                ConnectStatusMessage = $"Added {serverName} successfully!";
+                _ = _sync.SyncAllAsync();
+            }
+            else
+            {
+                item.ErrorMessage = "Connection failed";
+                ConnectStatusMessage = $"Failed to connect to {item.Name}.";
+            }
+        }
+        catch (Exception ex)
+        {
+            item.ErrorMessage = ex.Message;
+            ConnectStatusMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            item.IsAdding = false;
+        }
+    }
+
+    public void CancelEmbyConnectFlow()
+    {
+        _connectPinCts?.Cancel();
+        IsPollingConnectPin = false;
+        IsConnectPinActive = false;
+        IsConnectServersListActive = false;
+        IsEmbyConnectActive = false;
+        ConnectErrorMessage = null;
+        ConnectStatusMessage = string.Empty;
+    }
+
+    public void CloseConnectFlow()
+    {
+        CancelEmbyConnectFlow();
+    }
+
+    public void OpenPinBrowser()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://emby.media/pin",
+                UseShellExecute = true
+            });
+        }
+        catch { }
     }
 
     // Appearance Properties

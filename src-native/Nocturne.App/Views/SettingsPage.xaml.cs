@@ -44,6 +44,45 @@ public partial class SettingsPage : UserControl
         }
     }
 
+    private async void OnStartEmbyConnectClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.StartEmbyConnectFlowAsync();
+        }
+    }
+
+    private void OnOpenPinBrowserClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.OpenPinBrowser();
+    }
+
+    private void OnCancelEmbyConnectClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.CancelEmbyConnectFlow();
+    }
+
+    private async void OnAddAllConnectServersClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.AddAllConnectServersAsync();
+        }
+    }
+
+    private async void OnAddSingleConnectServerClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: DiscoveredConnectServerUi item } && ViewModel != null)
+        {
+            await ViewModel.AddSingleConnectServerAsync(item);
+        }
+    }
+
+    private void OnDoneConnectServersClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.CloseConnectFlow();
+    }
+
     private void OnAddCombinedGroupClick(object sender, RoutedEventArgs e)
     {
         ViewModel?.AddCombinedGroup();

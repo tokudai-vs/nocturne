@@ -83,31 +83,34 @@ public class RatingFormatter : IValueConverter
 public class HeatmapLevelToBrushConverter : IValueConverter
 {
     private static readonly SolidColorBrush Level0 = new(Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF));
-    private static readonly SolidColorBrush Level1 = new(Color.FromArgb(0x40, 0xE5, 0xA0, 0x0D));
-    private static readonly SolidColorBrush Level2 = new(Color.FromArgb(0x80, 0xE5, 0xA0, 0x0D));
-    private static readonly SolidColorBrush Level3 = new(Color.FromArgb(0xC0, 0xE5, 0xA0, 0x0D));
-    private static readonly SolidColorBrush Level4 = new(Color.FromArgb(0xFF, 0xE5, 0xA0, 0x0D));
 
     static HeatmapLevelToBrushConverter()
     {
         Level0.Freeze();
-        Level1.Freeze();
-        Level2.Freeze();
-        Level3.Freeze();
-        Level4.Freeze();
     }
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         int level = value is int i ? i : 0;
-        return level switch
+        if (level <= 0) return Level0;
+
+        var baseColor = Color.FromRgb(0xE5, 0xA0, 0x0D);
+        if (Application.Current?.Resources["NocturneAmberColor"] is Color c)
         {
-            1 => Level1,
-            2 => Level2,
-            3 => Level3,
-            >= 4 => Level4,
-            _ => Level0
+            baseColor = c;
+        }
+
+        byte alpha = level switch
+        {
+            1 => 0x40,
+            2 => 0x80,
+            3 => 0xC0,
+            _ => 0xFF
         };
+
+        var brush = new SolidColorBrush(Color.FromArgb(alpha, baseColor.R, baseColor.G, baseColor.B));
+        brush.Freeze();
+        return brush;
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
@@ -136,7 +139,15 @@ public class BoolToBrushConverter : IValueConverter
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        return value is true ? TrueBrush : FalseBrush;
+        if (value is true)
+        {
+            if (Application.Current?.Resources["NocturneAmberBrush"] is Brush dynamicBrush)
+            {
+                return dynamicBrush;
+            }
+            return TrueBrush;
+        }
+        return FalseBrush;
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
