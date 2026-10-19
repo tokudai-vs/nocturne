@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
-using System.Windows.Input;
+using System.Diagnostics;
+using System.Windows;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
+using Nocturne.Core.Utils;
 
 namespace Nocturne.App.ViewModels;
 
@@ -10,11 +12,21 @@ public class OnboardingViewModel : BaseViewModel
     private readonly EmbyClient _emby;
     private readonly SettingsService _settings;
     private readonly SyncEngine _sync;
+    private readonly EmbyConnectService _connect;
 
     private string _serverUrl = "http://";
     private bool _isConnecting;
     private string _errorMessage = string.Empty;
     private bool _isUserSelectionStep;
+    private bool _isEmbyConnectStep;
+    private bool _isConnectServersStep;
+    private string _connectPin = string.Empty;
+    private bool _isPollingPin;
+    private string? _lastConnectUserId;
+    private string? _lastConnectToken;
+    private string? _specificTargetServerUrl;
+    private CancellationTokenSource? _pinPollingCts;
+
     private string _serverName = string.Empty;
     private string _serverVersion = string.Empty;
     private PublicUser? _selectedUser;
@@ -26,12 +38,14 @@ public class OnboardingViewModel : BaseViewModel
 
     public ObservableCollection<ServerConfig> SavedServers { get; } = new();
     public ObservableCollection<PublicUser> PublicUsers { get; } = new();
+    public ObservableCollection<ConnectServer> ConnectServers { get; } = new();
 
-    public OnboardingViewModel(EmbyClient emby, SettingsService settings, SyncEngine sync)
+    public OnboardingViewModel(EmbyClient emby, SettingsService settings, SyncEngine sync, EmbyConnectService connect)
     {
         _emby = emby;
         _settings = settings;
         _sync = sync;
+        _connect = connect;
 
         LoadSavedServers();
     }
@@ -57,7 +71,55 @@ public class OnboardingViewModel : BaseViewModel
     public bool IsUserSelectionStep
     {
         get => _isUserSelectionStep;
-        set => SetProperty(ref _isUserSelectionStep, value);
+        set
+        {
+            if (SetProperty(ref _isUserSelectionStep, value))
+            {
+                OnPropertyChanged(nameof(IsServerConnectStep));
+                OnPropertyChanged(nameof(IsStep2Visible));
+            }
+        }
+    }
+
+    public bool IsEmbyConnectStep
+    {
+        get => _isEmbyConnectStep;
+        set
+        {
+            if (SetProperty(ref _isEmbyConnectStep, value))
+            {
+                OnPropertyChanged(nameof(IsServerConnectStep));
+                OnPropertyChanged(nameof(IsStep2Visible));
+            }
+        }
+    }
+
+    public bool IsConnectServersStep
+    {
+        get => _isConnectServersStep;
+        set
+        {
+            if (SetProperty(ref _isConnectServersStep, value))
+            {
+                OnPropertyChanged(nameof(IsServerConnectStep));
+                OnPropertyChanged(nameof(IsStep2Visible));
+            }
+        }
+    }
+
+    public bool IsServerConnectStep => !IsUserSelectionStep && !IsEmbyConnectStep && !IsConnectServersStep;
+    public bool IsStep2Visible => IsUserSelectionStep && !IsEmbyConnectStep && !IsConnectServersStep;
+
+    public string ConnectPin
+    {
+        get => _connectPin;
+        set => SetProperty(ref _connectPin, value);
+    }
+
+    public bool IsPollingPin
+    {
+        get => _isPollingPin;
+        set => SetProperty(ref _isPollingPin, value);
     }
 
     public string ServerName
@@ -138,6 +200,8 @@ public class OnboardingViewModel : BaseViewModel
             }
 
             IsUserSelectionStep = true;
+            IsEmbyConnectStep = false;
+            IsConnectServersStep = false;
             IsManualMode = PublicUsers.Count == 0;
         }
         catch (Exception ex)
@@ -180,46 +244,18 @@ public class OnboardingViewModel : BaseViewModel
 
             if (res != null && res.User != null)
             {
-                // Save or update server in settings
-                var existing = _settings.Current.Servers.FirstOrDefault(s => s.Url == cleanUrl && s.UserId == res.User.Id);
-                if (existing != null)
-                {
-                    existing.AccessToken = res.AccessToken;
-                    existing.Username = username;
-                    existing.Name = ServerName;
-                    existing.Version = ServerVersion;
-                    existing.LastConnected = DateTime.UtcNow;
-                    _settings.Current.ActiveServerId = existing.Id;
-                }
-                else
-                {
-                    var newServer = new ServerConfig
-                    {
-                        Id = Guid.NewGuid().ToString("N")[..8],
-                        Name = ServerName,
-                        Url = cleanUrl,
-                        UserId = res.User.Id,
-                        Username = username,
-                        AccessToken = res.AccessToken,
-                        Version = ServerVersion,
-                        AddedAt = DateTime.UtcNow,
-                        LastConnected = DateTime.UtcNow
-                    };
-                    _settings.Current.Servers.Add(newServer);
-                    _settings.Current.ActiveServerId = newServer.Id;
-                }
-
-                _settings.Current.FirstLaunchComplete = true;
-                _settings.Save();
-
-                // Trigger sync in background
-                _ = _sync.SyncAllAsync();
-
-                Authenticated?.Invoke();
+                await CompleteAuthenticationAsync(cleanUrl, res.AccessToken, res.User.Id, ServerName);
             }
             else
             {
-                ErrorMessage = "Invalid username or password. Please verify your credentials.";
+                if (string.IsNullOrEmpty(password))
+                {
+                    ErrorMessage = "Authentication failed. If this user account has no local password or is linked to Emby Connect, please use 'Sign In with Emby Connect' below.";
+                }
+                else
+                {
+                    ErrorMessage = "Invalid username or password. Please verify your credentials, or use 'Sign In with Emby Connect' below.";
+                }
             }
         }
         catch (Exception ex)
@@ -229,6 +265,289 @@ public class OnboardingViewModel : BaseViewModel
         finally
         {
             IsConnecting = false;
+        }
+    }
+
+    public async Task StartEmbyConnectPinFlowAsync(string? specificServerUrl = null)
+    {
+        ErrorMessage = string.Empty;
+        _specificTargetServerUrl = specificServerUrl;
+
+        _pinPollingCts?.Cancel();
+        _pinPollingCts = new CancellationTokenSource();
+
+        IsConnecting = true;
+        try
+        {
+            var pinRes = await _connect.CreatePinAsync();
+            if (pinRes == null || string.IsNullOrEmpty(pinRes.Pin))
+            {
+                ErrorMessage = "Could not generate Emby Connect PIN code. Please ensure you are connected to the internet.";
+                return;
+            }
+
+            ConnectPin = pinRes.Pin;
+            IsPollingPin = true;
+            IsEmbyConnectStep = true;
+            IsUserSelectionStep = false;
+            IsConnectServersStep = false;
+
+            var pin = pinRes.Pin;
+            var token = _pinPollingCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                var stopwatch = Stopwatch.StartNew();
+                while (!token.IsCancellationRequested && stopwatch.Elapsed < TimeSpan.FromMinutes(10))
+                {
+                    try
+                    {
+                        await Task.Delay(2000, token);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+
+                    if (token.IsCancellationRequested) break;
+
+                    var status = await _connect.CheckPinStatusAsync(pin);
+                    if (status != null && status.IsConfirmed)
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        {
+                            await HandlePinConfirmedAsync(pin);
+                        });
+                        break;
+                    }
+
+                    if (status != null && status.IsExpired)
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            ErrorMessage = "The PIN has expired. Please try again.";
+                            IsEmbyConnectStep = false;
+                            IsPollingPin = false;
+                        });
+                        break;
+                    }
+                }
+            }, token);
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Failed to start Emby Connect sign-in: {ex.Message}";
+            IsEmbyConnectStep = false;
+        }
+        finally
+        {
+            IsConnecting = false;
+        }
+    }
+
+    private async Task HandlePinConfirmedAsync(string pin)
+    {
+        IsPollingPin = false;
+        IsConnecting = true;
+        try
+        {
+            var exchange = await _connect.ExchangePinAsync(pin);
+            if (exchange == null || string.IsNullOrEmpty(exchange.AccessToken) || string.IsNullOrEmpty(exchange.UserId))
+            {
+                ErrorMessage = "Failed to finalize Emby Connect authorization.";
+                IsEmbyConnectStep = false;
+                return;
+            }
+
+            _lastConnectUserId = exchange.UserId;
+            _lastConnectToken = exchange.AccessToken;
+
+            var servers = await _connect.GetServersAsync(exchange.UserId, exchange.AccessToken);
+
+            // If a specific server was targeted (from step 2)
+            if (!string.IsNullOrEmpty(_specificTargetServerUrl))
+            {
+                var cleanTarget = EmbyClient.NormalizeServerUrl(_specificTargetServerUrl);
+                var matched = servers.FirstOrDefault(s =>
+                    (!string.IsNullOrEmpty(s.Url) && cleanTarget.Contains(s.Url.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(s.LocalAddress) && cleanTarget.Contains(s.LocalAddress.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)))
+                    ?? servers.FirstOrDefault();
+
+                if (matched != null && !string.IsNullOrEmpty(matched.AccessKey))
+                {
+                    var (tok, uid, _) = await _connect.ExchangeServerTokenAsync(cleanTarget, exchange.UserId, matched.AccessKey);
+                    if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid))
+                    {
+                        await CompleteAuthenticationAsync(cleanTarget, tok, uid, matched.Name ?? ServerName ?? "Emby Server");
+                        return;
+                    }
+                }
+
+                ErrorMessage = $"Could not link {ServerName} via Emby Connect. Verify that this server is bound to your Emby Connect account.";
+                IsEmbyConnectStep = false;
+                IsUserSelectionStep = true;
+                return;
+            }
+
+            // General Emby Connect flow (from step 1)
+            if (servers.Count == 0)
+            {
+                ErrorMessage = "No Emby servers found on this Emby Connect account.";
+                IsEmbyConnectStep = false;
+                return;
+            }
+
+            if (servers.Count == 1)
+            {
+                var single = servers[0];
+                var targetAddr = !string.IsNullOrWhiteSpace(single.LocalAddress) ? single.LocalAddress : single.Url;
+                if (!string.IsNullOrEmpty(targetAddr))
+                {
+                    var cleanAddr = EmbyClient.NormalizeServerUrl(targetAddr);
+                    var (tok, uid, _) = await _connect.ExchangeServerTokenAsync(cleanAddr, exchange.UserId, single.AccessKey);
+                    if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid))
+                    {
+                        await CompleteAuthenticationAsync(cleanAddr, tok, uid, single.Name ?? "Emby Server");
+                        return;
+                    }
+                }
+            }
+
+            ConnectServers.Clear();
+            foreach (var s in servers)
+            {
+                ConnectServers.Add(s);
+            }
+            IsEmbyConnectStep = false;
+            IsConnectServersStep = true;
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Emby Connect error: {ex.Message}";
+            IsEmbyConnectStep = false;
+        }
+        finally
+        {
+            IsConnecting = false;
+        }
+    }
+
+    public async Task ConnectToEmbyConnectServerAsync(ConnectServer server)
+    {
+        if (string.IsNullOrEmpty(_lastConnectUserId))
+        {
+            ErrorMessage = "Emby Connect session missing. Please authorize again.";
+            IsConnectServersStep = false;
+            return;
+        }
+
+        IsConnecting = true;
+        ErrorMessage = string.Empty;
+
+        try
+        {
+            var candidateAddresses = new List<string>();
+            if (!string.IsNullOrWhiteSpace(server.LocalAddress)) candidateAddresses.Add(server.LocalAddress.Trim());
+            if (!string.IsNullOrWhiteSpace(server.Url)) candidateAddresses.Add(server.Url.Trim());
+
+            foreach (var addr in candidateAddresses)
+            {
+                var clean = EmbyClient.NormalizeServerUrl(addr);
+                var (tok, uid, _) = await _connect.ExchangeServerTokenAsync(clean, _lastConnectUserId, server.AccessKey);
+                if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid))
+                {
+                    await CompleteAuthenticationAsync(clean, tok, uid, server.Name);
+                    return;
+                }
+            }
+
+            ErrorMessage = $"Could not connect to {server.Name}. Please verify network connectivity to the server.";
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Connection to {server.Name} failed: {ex.Message}";
+        }
+        finally
+        {
+            IsConnecting = false;
+        }
+    }
+
+    private async Task CompleteAuthenticationAsync(string serverUrl, string token, string userId, string serverName)
+    {
+        var cleanUrl = EmbyClient.NormalizeServerUrl(serverUrl);
+        _emby.Configure(cleanUrl, token, userId);
+
+        var userInfo = await _emby.GetUserAsync(userId);
+        var username = userInfo?.Name ?? "Emby User";
+
+        var serverInfo = await _emby.GetServerInfoAsync(cleanUrl);
+        var sName = serverInfo?.ServerName ?? serverName;
+        var sVersion = serverInfo?.Version ?? "4.x";
+
+        var existing = _settings.Current.Servers.FirstOrDefault(s => s.Url == cleanUrl && s.UserId == userId);
+        if (existing != null)
+        {
+            existing.AccessToken = token;
+            existing.Username = username;
+            existing.Name = sName;
+            existing.Version = sVersion;
+            existing.LastConnected = DateTime.UtcNow;
+            _settings.Current.ActiveServerId = existing.Id;
+        }
+        else
+        {
+            var newServer = new ServerConfig
+            {
+                Id = Guid.NewGuid().ToString("N")[..8],
+                Name = sName,
+                Url = cleanUrl,
+                UserId = userId,
+                Username = username,
+                AccessToken = token,
+                Version = sVersion,
+                AddedAt = DateTime.UtcNow,
+                LastConnected = DateTime.UtcNow
+            };
+            _settings.Current.Servers.Add(newServer);
+            _settings.Current.ActiveServerId = newServer.Id;
+        }
+
+        _settings.Current.FirstLaunchComplete = true;
+        _settings.Save();
+
+        _ = _sync.SyncAllAsync();
+        Authenticated?.Invoke();
+    }
+
+    public void OpenPinBrowser()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://emby.media/pin",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("OnboardingViewModel", $"Could not launch browser: {ex.Message}");
+        }
+    }
+
+    public void CancelEmbyConnect()
+    {
+        _pinPollingCts?.Cancel();
+        IsEmbyConnectStep = false;
+        IsConnectServersStep = false;
+        IsPollingPin = false;
+        ConnectPin = string.Empty;
+        ErrorMessage = string.Empty;
+
+        if (!string.IsNullOrEmpty(_specificTargetServerUrl))
+        {
+            IsUserSelectionStep = true;
         }
     }
 
@@ -281,7 +600,10 @@ public class OnboardingViewModel : BaseViewModel
 
     public void GoBackToServers()
     {
+        _pinPollingCts?.Cancel();
         IsUserSelectionStep = false;
+        IsEmbyConnectStep = false;
+        IsConnectServersStep = false;
         SelectedUser = null;
         Password = string.Empty;
         ErrorMessage = string.Empty;

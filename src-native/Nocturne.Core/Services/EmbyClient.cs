@@ -108,6 +108,8 @@ public class EmbyClient
         }
     }
 
+    public static string GetDeviceId() => GetOrCreateDeviceId();
+
     public static string NormalizeServerUrl(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return string.Empty;
@@ -134,7 +136,7 @@ public class EmbyClient
         _http.DefaultRequestHeaders.Clear();
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        var authHeader = $"MediaBrowser Client=\"Nocturne\", Device=\"Windows Native\", DeviceId=\"{_deviceId}\", Version=\"4.0.0\"";
+        var authHeader = $"MediaBrowser Client=\"Nocturne\", Device=\"Windows\", DeviceId=\"{_deviceId}\", Version=\"4.0.0\"";
         if (!string.IsNullOrEmpty(_token))
         {
             authHeader += $", Token=\"{_token}\"";
@@ -142,6 +144,17 @@ public class EmbyClient
 
         // Use TryAddWithoutValidation to bypass RFC strict parser
         _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Authorization", authHeader);
+        _http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", authHeader);
+        _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Client", "Nocturne");
+        _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Device-Name", "Windows");
+        _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Device-Id", _deviceId);
+        _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Client-Version", "4.0.0");
+
+        if (!string.IsNullOrEmpty(_token))
+        {
+            _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Token", _token);
+            _http.DefaultRequestHeaders.TryAddWithoutValidation("X-MediaBrowser-Token", _token);
+        }
     }
 
     private string BuildUrl(string path)
@@ -235,69 +248,141 @@ public class EmbyClient
         var normUrl = NormalizeServerUrl(url);
         Configure(normUrl);
 
-        var payload = new AuthenticatePayload
+        var hasPassword = !string.IsNullOrEmpty(password);
+        NocturneLogger.Info("EmbyClient", $"Attempting auth for user '{username}' at {normUrl} (hasPassword: {hasPassword})...");
+
+        var endpoints = new[]
         {
-            Username = username,
-            Pw = password ?? string.Empty
+            BuildUrl("/Users/AuthenticateByName"),
+            $"{normUrl}/Users/AuthenticateByName"
         };
 
-        var json = JsonSerializer.Serialize(payload, JsonOptions);
-        NocturneLogger.Info("EmbyClient", $"Attempting auth for user '{username}' at {normUrl}...");
-
-        // Try /emby/Users/AuthenticateByName
-        try
+        foreach (var targetUrl in endpoints)
         {
-            var targetUrl = BuildUrl("/Users/AuthenticateByName");
-            using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var resp = await _http.PostAsync(targetUrl, content);
-            if (resp.IsSuccessStatusCode)
+            // Strategy 1: Standard JSON with Username & Pw
+            try
             {
-                var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
-                if (res != null && res.User != null)
+                var payload = new AuthenticatePayload
                 {
-                    Configure(normUrl, res.AccessToken, res.User.Id);
-                    NocturneLogger.Info("EmbyClient", $"Authentication successful for {username}! Token acquired.");
-                    return res;
+                    Username = username,
+                    Pw = password ?? string.Empty
+                };
+                var json = JsonSerializer.Serialize(payload, JsonOptions);
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var resp = await _http.PostAsync(targetUrl, content);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
+                    if (res != null && res.User != null)
+                    {
+                        Configure(normUrl, res.AccessToken, res.User.Id);
+                        NocturneLogger.Info("EmbyClient", $"Authentication successful for {username} (JSON Pw)!");
+                        return res;
+                    }
+                }
+                else
+                {
+                    var body = await resp.Content.ReadAsStringAsync();
+                    NocturneLogger.Warn("EmbyClient", $"JSON auth returned {resp.StatusCode} at {targetUrl}: {body}");
                 }
             }
-            else
+            catch (Exception ex)
             {
-                var body = await resp.Content.ReadAsStringAsync();
-                NocturneLogger.Warn("EmbyClient", $"Auth failed at {targetUrl} (Status {resp.StatusCode}): {body}");
+                NocturneLogger.Warn("EmbyClient", $"JSON auth error at {targetUrl}: {ex.Message}");
+            }
+
+            // Strategy 2: Form URL Encoded: Username=...&Pw=...
+            try
+            {
+                var formData = new Dictionary<string, string>
+                {
+                    { "Username", username },
+                    { "Pw", password ?? string.Empty }
+                };
+                using var formContent = new FormUrlEncodedContent(formData);
+                var resp = await _http.PostAsync(targetUrl, formContent);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
+                    if (res != null && res.User != null)
+                    {
+                        Configure(normUrl, res.AccessToken, res.User.Id);
+                        NocturneLogger.Info("EmbyClient", $"Authentication successful for {username} (Form Pw)!");
+                        return res;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("EmbyClient", $"Form auth error at {targetUrl}: {ex.Message}");
+            }
+
+            // Strategy 3 (when password is empty or not set): Omit Pw property entirely
+            if (!hasPassword)
+            {
+                try
+                {
+                    var noPwJson = JsonSerializer.Serialize(new { Username = username }, JsonOptions);
+                    using var content = new StringContent(noPwJson, Encoding.UTF8, "application/json");
+                    var resp = await _http.PostAsync(targetUrl, content);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
+                        if (res != null && res.User != null)
+                        {
+                            Configure(normUrl, res.AccessToken, res.User.Id);
+                            NocturneLogger.Info("EmbyClient", $"Authentication successful for {username} (JSON no-pw)!");
+                            return res;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    NocturneLogger.Warn("EmbyClient", $"JSON no-pw auth error at {targetUrl}: {ex.Message}");
+                }
+
+                // Strategy 4 (when password is empty): Form urlencoded without Pw
+                try
+                {
+                    var formData = new Dictionary<string, string> { { "Username", username } };
+                    using var formContent = new FormUrlEncodedContent(formData);
+                    var resp = await _http.PostAsync(targetUrl, formContent);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
+                        if (res != null && res.User != null)
+                        {
+                            Configure(normUrl, res.AccessToken, res.User.Id);
+                            NocturneLogger.Info("EmbyClient", $"Authentication successful for {username} (Form no-pw)!");
+                            return res;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    NocturneLogger.Warn("EmbyClient", $"Form no-pw auth error at {targetUrl}: {ex.Message}");
+                }
+            }
+        }
+
+        NocturneLogger.Warn("EmbyClient", $"All direct authentication strategies failed for '{username}' at {normUrl}. Account may be linked to Emby Connect without local password.");
+        return null;
+    }
+
+    public async Task<EmbyUser?> GetUserAsync(string userId)
+    {
+        try
+        {
+            var resp = await _http.GetAsync(BuildUrl($"/Users/{userId}"));
+            if (resp.IsSuccessStatusCode)
+            {
+                return await resp.Content.ReadFromJsonAsync<EmbyUser>();
             }
         }
         catch (Exception ex)
         {
-            NocturneLogger.Error("EmbyClient", "Auth request failed", ex);
+            NocturneLogger.Warn("EmbyClient", $"GetUserAsync failed: {ex.Message}");
         }
-
-        // Fallback without /emby
-        try
-        {
-            var fallbackUrl = $"{normUrl}/Users/AuthenticateByName";
-            using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var resp = await _http.PostAsync(fallbackUrl, content);
-            if (resp.IsSuccessStatusCode)
-            {
-                var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
-                if (res != null && res.User != null)
-                {
-                    Configure(normUrl, res.AccessToken, res.User.Id);
-                    NocturneLogger.Info("EmbyClient", $"Authentication successful for {username} via fallback URL!");
-                    return res;
-                }
-            }
-            else
-            {
-                var body = await resp.Content.ReadAsStringAsync();
-                NocturneLogger.Warn("EmbyClient", $"Auth failed at {fallbackUrl} (Status {resp.StatusCode}): {body}");
-            }
-        }
-        catch (Exception ex)
-        {
-            NocturneLogger.Error("EmbyClient", "Fallback auth request failed", ex);
-        }
-
         return null;
     }
 

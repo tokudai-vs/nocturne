@@ -15,6 +15,7 @@ public class SettingsViewModel : BaseViewModel
     private readonly SyncEngine _sync;
     private readonly TraktService _trakt;
     private readonly ThemeColorService _themeColors;
+    private readonly EmbyConnectService _connect;
 
     // Server adding fields
     private string _newServerUrl = "http://";
@@ -76,7 +77,8 @@ public class SettingsViewModel : BaseViewModel
         DedupEngine dedup,
         SyncEngine sync,
         TraktService trakt,
-        ThemeColorService themeColors)
+        ThemeColorService themeColors,
+        EmbyConnectService connect)
     {
         _settings = settings;
         _embyClient = embyClient;
@@ -85,6 +87,7 @@ public class SettingsViewModel : BaseViewModel
         _sync = sync;
         _trakt = trakt;
         _themeColors = themeColors;
+        _connect = connect;
 
         LoadFromSettings();
 

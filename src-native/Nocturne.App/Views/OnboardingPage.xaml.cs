@@ -93,4 +93,38 @@ public partial class OnboardingPage : UserControl
             PasswordBox.Password = string.Empty;
         }
     }
+
+    private async void OnSignInWithEmbyConnectClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.StartEmbyConnectPinFlowAsync();
+        }
+    }
+
+    private async void OnSignInWithEmbyConnectForServerClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.StartEmbyConnectPinFlowAsync(ViewModel.ServerUrl);
+        }
+    }
+
+    private void OnOpenPinBrowserClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.OpenPinBrowser();
+    }
+
+    private void OnCancelEmbyConnectClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.CancelEmbyConnect();
+    }
+
+    private async void OnConnectEmbyConnectServerClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: ConnectServer server } && ViewModel != null)
+        {
+            await ViewModel.ConnectToEmbyConnectServerAsync(server);
+        }
+    }
 }

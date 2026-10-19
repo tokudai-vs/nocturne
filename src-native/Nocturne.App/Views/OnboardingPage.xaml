@@ -15,10 +15,10 @@
         </Border>
 
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,60" MaxWidth="520">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48" MaxWidth="540">
 
                 <!-- Signature Nocturne Logo & Branding -->
-                <StackPanel HorizontalAlignment="Center" Margin="0,0,0,36">
+                <StackPanel HorizontalAlignment="Center" Margin="0,0,0,32">
                     <TextBlock Text="NOCTURNE" FontSize="36" FontWeight="Light"
                                Foreground="{StaticResource NocturneAmberBrush}"
                                HorizontalAlignment="Center">
@@ -31,8 +31,10 @@
                                HorizontalAlignment="Center" Margin="0,6,0,0" />
                 </StackPanel>
 
-                <!-- STEP 1: Connect Server Form -->
-                <StackPanel Visibility="{Binding IsUserSelectionStep, Converter={StaticResource InvertBoolToVisibility}}">
+                <!-- ══════════════════════════════════════════════════════ -->
+                <!-- STEP 1: Main Connect Screen (Emby Connect or Direct)  -->
+                <!-- ══════════════════════════════════════════════════════ -->
+                <StackPanel Visibility="{Binding IsServerConnectStep, Converter={StaticResource BoolToVisibility}}">
 
                     <!-- Saved Servers List -->
                     <StackPanel Visibility="{Binding SavedServers, Converter={StaticResource NullToVisibility}}" Margin="0,0,0,24">
@@ -66,17 +68,59 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
-                        <Separator Margin="0,20,0,16" />
+                        <Separator Margin="0,16,0,16" />
                     </StackPanel>
 
-                    <!-- Server Connection Box -->
+                    <!-- Emby Connect Feature Card -->
+                    <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="1.5"
+                            CornerRadius="10" Padding="20,18" Margin="0,0,0,20">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource AmberPrimaryButton}"
+                                    Padding="18,10" Click="OnSignInWithEmbyConnectClick"
+                                    IsEnabled="{Binding IsConnecting, Converter={StaticResource InverseBool}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="Key24" FontSize="15" Margin="0,0,6,0" />
+                                    <TextBlock Text="Sign In" FontWeight="SemiBold" FontSize="13" />
+                                </StackPanel>
+                            </Button>
+
+                            <Border Width="42" Height="42" CornerRadius="8" Background="#26E5A00D"
+                                    Margin="0,0,14,0" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <ui:SymbolIcon Symbol="Cloud24" FontSize="22" Foreground="{StaticResource NocturneAmberBrush}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Sign In with Emby Connect" FontSize="15" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                <TextBlock Text="Instant PIN code sign-in • No local password required"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,3,0,0" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Divider -->
+                    <Grid Margin="0,4,0,20">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Separator Grid.Column="0" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="or connect directly with Server URL" FontSize="11" Margin="12,0"
+                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                        <Separator Grid.Column="2" VerticalAlignment="Center" />
+                    </Grid>
+
+                    <!-- Direct Server Connection Box -->
                     <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                             CornerRadius="10" Padding="24">
                         <StackPanel>
-                            <TextBlock Text="Connect to Emby Server" FontSize="16" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,6" />
-                            <TextBlock Text="Enter the IP address or hostname of your Emby server"
+                            <TextBlock Text="Direct Server Address" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,4" />
+                            <TextBlock Text="Enter the IP address or hostname of your self-hosted Emby server"
                                        FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,16" />
 
                             <ui:TextBox x:Name="ServerUrlInput"
@@ -104,8 +148,10 @@
                     </Border>
                 </StackPanel>
 
-                <!-- STEP 2: User Selection & Sign In Form -->
-                <StackPanel Visibility="{Binding IsUserSelectionStep, Converter={StaticResource BoolToVisibility}}">
+                <!-- ══════════════════════════════════════════════════════ -->
+                <!-- STEP 2: User Selection & Direct Server Sign In         -->
+                <!-- ══════════════════════════════════════════════════════ -->
+                <StackPanel Visibility="{Binding IsStep2Visible, Converter={StaticResource BoolToVisibility}}">
 
                     <!-- Server Header Badge -->
                     <Border Background="#20E5A00D" BorderBrush="#60E5A00D" BorderThickness="1"
@@ -135,7 +181,6 @@
                                             BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                                             Cursor="Hand" MouseLeftButtonUp="OnPublicUserClick">
                                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <!-- User Circle Avatar -->
                                             <Border Width="52" Height="52" CornerRadius="26" Background="#33E5A00D"
                                                     BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="1"
                                                     HorizontalAlignment="Center" Margin="0,0,0,8">
@@ -155,7 +200,7 @@
                                 Click="OnSwitchToManualClick" />
                     </StackPanel>
 
-                    <!-- Sign In Credentials Box (For Selected User or Manual) -->
+                    <!-- Sign In Credentials Box -->
                     <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                             CornerRadius="10" Padding="24" Margin="0,0,0,16">
@@ -194,11 +239,136 @@
                                     <TextBlock Text="Sign In" FontWeight="SemiBold" FontSize="14" />
                                 </StackPanel>
                             </Button>
+
+                            <!-- Emby Connect Alternative for this Server -->
+                            <Separator Margin="0,18,0,14" />
+                            <Button HorizontalAlignment="Stretch" Padding="12,8"
+                                    Click="OnSignInWithEmbyConnectForServerClick">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <ui:SymbolIcon Symbol="Cloud24" FontSize="16" Foreground="{StaticResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                                    <TextBlock Text="Sign In via Emby Connect for this server" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Button>
+                            <TextBlock Text="No password set? Authorize with Emby Connect PIN code to link directly"
+                                       FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                       HorizontalAlignment="Center" Margin="0,4,0,0" />
                         </StackPanel>
                     </Border>
 
                     <!-- Change Server Button -->
                     <Button Content="← Change Server" HorizontalAlignment="Center" Click="OnChangeServerClick" />
+                </StackPanel>
+
+                <!-- ══════════════════════════════════════════════════════ -->
+                <!-- STEP 3: Emby Connect PIN Code Authorization Screen     -->
+                <!-- ══════════════════════════════════════════════════════ -->
+                <StackPanel Visibility="{Binding IsEmbyConnectStep, Converter={StaticResource BoolToVisibility}}">
+                    <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="1.5"
+                            CornerRadius="12" Padding="28,24" Margin="0,0,0,16">
+                        <StackPanel HorizontalAlignment="Center" MaxWidth="440">
+                            <ui:SymbolIcon Symbol="Cloud24" FontSize="36" Foreground="{StaticResource NocturneAmberBrush}"
+                                           HorizontalAlignment="Center" Margin="0,0,0,10" />
+
+                            <TextBlock Text="Emby Connect Authorization" FontSize="18" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" Margin="0,0,0,6" />
+                            <TextBlock Text="Follow these simple steps on your browser or phone:"
+                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       HorizontalAlignment="Center" Margin="0,0,0,18" />
+
+                            <Border Background="#12FFFFFF" CornerRadius="8" Padding="16,12" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock Text="1. Go to emby.media/pin on any device" FontWeight="SemiBold" FontSize="13" />
+                                    <TextBlock Text="2. Sign into your Emby Connect account" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                    <TextBlock Text="3. Enter the 5-digit PIN code displayed below:" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Big Glowing PIN Code Display -->
+                            <Border Background="#26E5A00D" BorderBrush="{StaticResource NocturneAmberBrush}" BorderThickness="2"
+                                    CornerRadius="10" Padding="32,12" HorizontalAlignment="Center" Margin="0,4,0,18">
+                                <TextBlock Text="{Binding ConnectPin}" FontSize="36" FontWeight="Bold"
+                                           Foreground="{StaticResource NocturneAmberBrush}" HorizontalAlignment="Center" />
+                            </Border>
+
+                            <!-- Action button to launch browser -->
+                            <Button Style="{StaticResource AmberPrimaryButton}" Height="38"
+                                    HorizontalAlignment="Stretch" Margin="0,0,0,16" Click="OnOpenPinBrowserClick">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <ui:SymbolIcon Symbol="Open24" FontSize="15" Margin="0,0,8,0" />
+                                    <TextBlock Text="Open emby.media/pin in Browser" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Button>
+
+                            <!-- Polling status indicator -->
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
+                                <ui:ProgressRing Width="16" Height="16" Margin="0,0,10,0"
+                                                 Visibility="{Binding IsPollingPin, Converter={StaticResource BoolToVisibility}}" />
+                                <TextBlock Text="Waiting for confirmation on emby.media/pin..."
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+
+                            <!-- Error message banner if any -->
+                            <Border Background="#33FF4444" BorderBrush="#80FF4444" BorderThickness="1"
+                                    CornerRadius="6" Padding="10,6" Margin="0,12,0,0"
+                                    Visibility="{Binding ErrorMessage, Converter={StaticResource NullToVisibility}}">
+                                <TextBlock Text="{Binding ErrorMessage}" Foreground="#FF6B6B" FontSize="12" TextWrapping="Wrap" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Button Content="← Cancel Emby Connect" HorizontalAlignment="Center" Click="OnCancelEmbyConnectClick" />
+                </StackPanel>
+
+                <!-- ══════════════════════════════════════════════════════ -->
+                <!-- STEP 4: Emby Connect Discovered Server Selection       -->
+                <!-- ══════════════════════════════════════════════════════ -->
+                <StackPanel Visibility="{Binding IsConnectServersStep, Converter={StaticResource BoolToVisibility}}">
+                    <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                            CornerRadius="12" Padding="24" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Text="Select Your Server" FontSize="17" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,4" />
+                            <TextBlock Text="The following servers are linked to your Emby Connect account:"
+                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,18" />
+
+                            <ItemsControl ItemsSource="{Binding ConnectServers}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,5" Padding="14,12" CornerRadius="8"
+                                                Background="#14FFFFFF" BorderBrush="#20FFFFFF" BorderThickness="1">
+                                            <DockPanel>
+                                                <Button DockPanel.Dock="Right" Style="{StaticResource AmberPrimaryButton}"
+                                                        Padding="16,7" Margin="10,0,0,0"
+                                                        Click="OnConnectEmbyConnectServerClick" Tag="{Binding}">
+                                                    <TextBlock Text="Connect" FontSize="13" />
+                                                </Button>
+
+                                                <ui:SymbolIcon Symbol="Server24" FontSize="20" Foreground="{StaticResource NocturneAmberBrush}"
+                                                               Margin="0,0,12,0" VerticalAlignment="Center" />
+
+                                                <StackPanel VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" />
+                                                    <TextBlock Text="{Binding Url}" FontSize="12"
+                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                                </StackPanel>
+                                            </DockPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Error Message Banner -->
+                            <Border Background="#33FF4444" BorderBrush="#80FF4444" BorderThickness="1"
+                                    CornerRadius="6" Padding="10,6" Margin="0,14,0,0"
+                                    Visibility="{Binding ErrorMessage, Converter={StaticResource NullToVisibility}}">
+                                <TextBlock Text="{Binding ErrorMessage}" Foreground="#FF6B6B" FontSize="12" TextWrapping="Wrap" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Button Content="← Back" HorizontalAlignment="Center" Click="OnCancelEmbyConnectClick" />
                 </StackPanel>
 
             </StackPanel>

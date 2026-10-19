@@ -31,7 +31,9 @@ Nocturne v4.0 is a complete rewrite from Electron to **pure native Windows (.NET
 - **Background sync engine** with batched fetching and checkpointed state to resume gracefully across app restarts.
 - **Disk-backed image cache** with LRU eviction and configurable size limits.
 
-### :satellite: Multi-Server Architecture
+### :satellite: Multi-Server Architecture & Authentication
+- **Emby Connect & PIN Authorization** — Sign in instantly via `emby.media/pin` with zero local password requirements (ideal for accounts configured via Emby Connect without a local password).
+- **Multi-Strategy Authentication** — Resilient login pipeline supporting JSON, form-encoded, and passwordless accounts with automatic RFC header negotiation.
 - Add multiple Emby servers and switch seamlessly between them from the user menu.
 - **Separate or combined library mode** — view each server independently or merge libraries across servers into a unified shelf.
 - **6-pass deduplication pipeline** — matches duplicate titles by TMDB ID → IMDB ID → Name+Year across servers and folders.

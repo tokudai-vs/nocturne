@@ -96,6 +96,7 @@ public partial class App : Application
         services.AddSingleton<TraktService>();
         services.AddSingleton<IntroDbService>();
         services.AddSingleton<ThemeColorService>();
+        services.AddSingleton<EmbyConnectService>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();
