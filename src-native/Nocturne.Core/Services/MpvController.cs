@@ -66,9 +66,9 @@ public class MpvController : IDisposable
         {
             FileName = mpvExe,
             Arguments = string.Join(" ", args),
-            CreateNoWindow = true,
+            CreateNoWindow = false,
             UseShellExecute = false,
-            WindowStyle = ProcessWindowStyle.Hidden
+            WindowStyle = ProcessWindowStyle.Normal
         };
 
         try
@@ -153,12 +153,14 @@ public class MpvController : IDisposable
         }
 
         await SendCommandAsync(new object[] { "set_property", "force-media-title", title });
+        await SendCommandAsync(new object[] { "set_property", "force-window", "yes" });
         await SendCommandAsync(new object[] { "set_property", "fullscreen", "yes" });
+        await SendCommandAsync(new object[] { "set_property", "ontop", "yes" });
         await SendCommandAsync(new object[] { "loadfile", url, "replace" });
 
         IsPlaying = true;
         PlaybackStarted?.Invoke();
-        NocturneLogger.Info("MpvController", $"Playback started: {title}");
+        NocturneLogger.Info("MpvController", $"Playback started: {title} ({url})");
     }
 
     public async Task PauseAsync()
@@ -170,6 +172,8 @@ public class MpvController : IDisposable
     {
         await SendCommandAsync(new object[] { "stop" });
         await SendCommandAsync(new object[] { "set_property", "fullscreen", "no" });
+        await SendCommandAsync(new object[] { "set_property", "force-window", "no" });
+        await SendCommandAsync(new object[] { "set_property", "ontop", "no" });
         IsPlaying = false;
         PlaybackEnded?.Invoke();
     }
@@ -265,6 +269,9 @@ public class MpvController : IDisposable
                     }
                     else if (ev == "end-file")
                     {
+                        _ = SendCommandAsync(new object[] { "set_property", "fullscreen", "no" });
+                        _ = SendCommandAsync(new object[] { "set_property", "force-window", "no" });
+                        _ = SendCommandAsync(new object[] { "set_property", "ontop", "no" });
                         IsPlaying = false;
                         PlaybackEnded?.Invoke();
                     }

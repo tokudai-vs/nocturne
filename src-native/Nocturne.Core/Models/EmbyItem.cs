@@ -1,9 +1,12 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Nocturne.Core.Models;
 
 public class EmbyItem
 {
+    [JsonConverter(typeof(FlexibleStringConverter))]
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string? OriginalTitle { get; set; }
@@ -14,8 +17,10 @@ public class EmbyItem
     public float? CommunityRating { get; set; }
     public int? IndexNumber { get; set; } // Episode number
     public int? ParentIndexNumber { get; set; } // Season number
+    [JsonConverter(typeof(FlexibleStringConverter))]
     public string? SeriesId { get; set; }
     public string? SeriesName { get; set; }
+    [JsonConverter(typeof(FlexibleStringConverter))]
     public string? SeasonId { get; set; }
     public string? SeasonName { get; set; }
     public string? OfficialRating { get; set; }
@@ -23,8 +28,11 @@ public class EmbyItem
     public Dictionary<string, string>? ProviderIds { get; set; }
     public Dictionary<string, string>? ImageTags { get; set; }
     public List<string>? BackdropImageTags { get; set; }
+    [JsonConverter(typeof(FlexibleStringListConverter))]
     public List<string>? Genres { get; set; }
+    [JsonConverter(typeof(FlexibleStringListConverter))]
     public List<string>? Studios { get; set; }
+    [JsonConverter(typeof(FlexibleStringListConverter))]
     public List<string>? Taglines { get; set; }
     public List<BaseItemPerson>? People { get; set; }
     public List<MediaUrl>? RemoteTrailers { get; set; }
@@ -116,6 +124,7 @@ public class BaseItemPerson
     public string? Role { get; set; }
     public string? Type { get; set; } // Actor, Director, Writer
     public string? PrimaryImageTag { get; set; }
+    [JsonConverter(typeof(FlexibleStringConverter))]
     public string? Id { get; set; }
 }
 
@@ -136,6 +145,7 @@ public class UserItemData
 
 public class MediaSourceInfo
 {
+    [JsonConverter(typeof(FlexibleStringConverter))]
     public string Id { get; set; } = string.Empty;
     public string? Name { get; set; }
     public string? Path { get; set; }
@@ -162,4 +172,98 @@ public class ItemsResult<T>
 {
     public List<T> Items { get; set; } = new();
     public int TotalRecordCount { get; set; }
+}
+
+public class FlexibleStringConverter : JsonConverter<string>
+{
+    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        return reader.TokenType switch
+        {
+            JsonTokenType.String => reader.GetString(),
+            JsonTokenType.Number => reader.TryGetInt64(out var l) ? l.ToString() : reader.GetDouble().ToString(CultureInfo.InvariantCulture),
+            JsonTokenType.True => "true",
+            JsonTokenType.False => "false",
+            JsonTokenType.Null => null,
+            _ => null
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value);
+    }
+}
+
+public class FlexibleStringListConverter : JsonConverter<List<string>>
+{
+    public override List<string>? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return null;
+        var list = new List<string>();
+
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var str = reader.GetString();
+            if (!string.IsNullOrEmpty(str)) list.Add(str);
+            return list;
+        }
+
+        if (reader.TokenType == JsonTokenType.StartArray)
+        {
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                if (reader.TokenType == JsonTokenType.String)
+                {
+                    var s = reader.GetString();
+                    if (!string.IsNullOrEmpty(s)) list.Add(s);
+                }
+                else if (reader.TokenType == JsonTokenType.Number)
+                {
+                    list.Add(reader.GetInt64().ToString());
+                }
+                else if (reader.TokenType == JsonTokenType.StartObject)
+                {
+                    string? name = null;
+                    while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+                    {
+                        if (reader.TokenType == JsonTokenType.PropertyName)
+                        {
+                            var prop = reader.GetString();
+                            reader.Read();
+                            if (string.Equals(prop, "Name", StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (reader.TokenType == JsonTokenType.String)
+                                    name = reader.GetString();
+                                else if (reader.TokenType == JsonTokenType.Number)
+                                    name = reader.GetInt64().ToString();
+                            }
+                            else
+                            {
+                                reader.TrySkip();
+                            }
+                        }
+                    }
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        list.Add(name);
+                    }
+                }
+                else
+                {
+                    reader.TrySkip();
+                }
+            }
+            return list;
+        }
+
+        return list;
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<string> value, JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        foreach (var s in value) writer.WriteStringValue(s);
+        writer.WriteEndArray();
+    }
 }

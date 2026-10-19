@@ -15,8 +15,12 @@
                    Margin="20,0,20,10" />
 
         <!-- Horizontal Scroller -->
-        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-            <ItemsControl x:Name="ItemsHost" Margin="14,0">
+        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                      PreviewMouseWheel="OnPreviewMouseWheel">
+            <ItemsControl x:Name="ItemsHost" Margin="14,0"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
+                          ScrollViewer.CanContentScroll="True">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <VirtualizingStackPanel Orientation="Horizontal" />

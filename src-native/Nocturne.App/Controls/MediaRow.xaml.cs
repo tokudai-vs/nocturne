@@ -16,9 +16,9 @@ public partial class MediaRow : UserControl
             new PropertyMetadata(null, (d, e) => ((MediaRow)d).ItemsHost.ItemsSource = (IEnumerable)e.NewValue));
 
     public static readonly RoutedEvent ItemClickEvent =
-        EventManager.RegisterRoutedEvent(nameof(ItemClick), RoutingStrategy.Bubble, typeof(EventHandler<EmbyItem>), typeof(MediaRow));
+        EventManager.RegisterRoutedEvent(nameof(ItemClick), RoutingStrategy.Bubble, typeof(RoutedEventHandler), typeof(MediaRow));
 
-    public event EventHandler<EmbyItem> ItemClick
+    public event RoutedEventHandler ItemClick
     {
         add => AddHandler(ItemClickEvent, value);
         remove => RemoveHandler(ItemClickEvent, value);
@@ -41,11 +41,34 @@ public partial class MediaRow : UserControl
         InitializeComponent();
     }
 
+    private void OnPreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        if (sender is ScrollViewer sv)
+        {
+            if (e.Delta < 0)
+                sv.ScrollToHorizontalOffset(sv.HorizontalOffset + 140);
+            else if (e.Delta > 0)
+                sv.ScrollToHorizontalOffset(Math.Max(0, sv.HorizontalOffset - 140));
+            e.Handled = true;
+        }
+    }
+
     private void OnMediaCardClick(object sender, RoutedEventArgs e)
     {
         if (sender is MediaCard card && card.DataContext is EmbyItem item)
         {
-            RaiseEvent(new RoutedEventArgs(ItemClickEvent, item));
+            RaiseEvent(new ItemClickEventArgs(ItemClickEvent, this, item));
         }
+    }
+}
+
+public class ItemClickEventArgs : RoutedEventArgs
+{
+    public EmbyItem Item { get; }
+
+    public ItemClickEventArgs(RoutedEvent routedEvent, object source, EmbyItem item)
+        : base(routedEvent, source)
+    {
+        Item = item;
     }
 }

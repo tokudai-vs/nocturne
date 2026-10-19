@@ -77,4 +77,57 @@ public class EmbyClientTests
         Assert.Equal("token_abc123", client.Token);
         Assert.Equal("user_xyz789", client.UserId);
     }
+
+    [Fact]
+    public void EmbyItem_DeserializesWithObjectStudiosAndGenres()
+    {
+        var json = """
+        {
+            "Id": "1234",
+            "Name": "Ozark",
+            "Studios": [
+                { "Name": "Media Rights Capital", "Id": 101 },
+                { "Name": "Aggregate Films", "Id": 102 }
+            ],
+            "Genres": ["Crime", "Drama"]
+        }
+        """;
+
+        var item = JsonSerializer.Deserialize<Nocturne.Core.Models.EmbyItem>(json);
+        Assert.NotNull(item);
+        Assert.Equal("1234", item.Id);
+        Assert.Equal("Ozark", item.Name);
+        Assert.NotNull(item.Studios);
+        Assert.Equal(2, item.Studios.Count);
+        Assert.Equal("Media Rights Capital", item.Studios[0]);
+        Assert.Equal("Aggregate Films", item.Studios[1]);
+        Assert.NotNull(item.Genres);
+        Assert.Equal(2, item.Genres.Count);
+    }
+
+    [Fact]
+    public void EmbyItem_DeserializesWithStringStudiosAndNumericIds()
+    {
+        var json = """
+        {
+            "Id": 5678,
+            "Name": "Bad Apples",
+            "Studios": ["Universal Pictures", "Sony"],
+            "People": [
+                { "Name": "Actor 1", "Id": 9999 }
+            ]
+        }
+        """;
+
+        var item = JsonSerializer.Deserialize<Nocturne.Core.Models.EmbyItem>(json);
+        Assert.NotNull(item);
+        Assert.Equal("5678", item.Id);
+        Assert.Equal("Bad Apples", item.Name);
+        Assert.NotNull(item.Studios);
+        Assert.Equal(2, item.Studios.Count);
+        Assert.Equal("Universal Pictures", item.Studios[0]);
+        Assert.NotNull(item.People);
+        Assert.Single(item.People);
+        Assert.Equal("9999", item.People[0].Id);
+    }
 }

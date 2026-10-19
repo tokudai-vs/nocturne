@@ -28,25 +28,39 @@ public partial class MainWindow : FluentWindow
         };
     }
 
+    private void OnNavItemClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is NavigationViewItem item && item.Tag is string tag)
+        {
+            NavigateToTag(tag);
+        }
+    }
+
     private void OnNavSelectionChanged(NavigationView sender, RoutedEventArgs args)
     {
         if (sender.SelectedItem is NavigationViewItem item && item.Tag is string tag)
         {
-            switch (tag)
-            {
-                case "home":
-                    _viewModel.NavigateToHome();
-                    break;
-                case "library":
-                    _viewModel.NavigateToLibrary();
-                    break;
-                case "analytics":
-                    _viewModel.NavigateToAnalytics();
-                    break;
-                case "settings":
-                    _viewModel.NavigateToSettings();
-                    break;
-            }
+            NavigateToTag(tag);
+        }
+    }
+
+    private void NavigateToTag(string tag)
+    {
+        Nocturne.Core.Utils.NocturneLogger.Info("MainWindow", $"Navigating to {tag}");
+        switch (tag)
+        {
+            case "home":
+                _viewModel.NavigateToHome();
+                break;
+            case "library":
+                _viewModel.NavigateToLibrary();
+                break;
+            case "analytics":
+                _viewModel.NavigateToAnalytics();
+                break;
+            case "settings":
+                _viewModel.NavigateToSettings();
+                break;
         }
     }
 }

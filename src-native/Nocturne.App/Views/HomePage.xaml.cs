@@ -35,9 +35,13 @@ public partial class HomePage : UserControl
         }
     }
 
-    private void OnRowItemClick(object sender, EmbyItem item)
+    private void OnRowItemClick(object sender, RoutedEventArgs e)
     {
-        if (DataContext is HomeViewModel vm)
+        var item = (e as Controls.ItemClickEventArgs)?.Item
+            ?? (e.OriginalSource as FrameworkElement)?.DataContext as EmbyItem
+            ?? (e.Source as FrameworkElement)?.DataContext as EmbyItem;
+
+        if (item != null && DataContext is HomeViewModel vm)
         {
             vm.OpenItemDetail(item);
         }

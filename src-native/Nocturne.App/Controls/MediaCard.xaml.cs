@@ -70,8 +70,10 @@ public partial class MediaCard : UserControl
                         var bmp = new BitmapImage();
                         bmp.BeginInit();
                         bmp.UriSource = new Uri(url);
+                        bmp.DecodePixelWidth = 220;
                         bmp.CacheOption = BitmapCacheOption.OnLoad;
                         bmp.EndInit();
+                        if (bmp.CanFreeze) bmp.Freeze();
                         PosterImage.Source = bmp;
                     }
                     catch { }
