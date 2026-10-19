@@ -122,11 +122,85 @@ public class DatabaseService : IDisposable
                 );
             ";
             cmd.ExecuteNonQuery();
+
+            EnsureSchema(_connection);
+
             NocturneLogger.Info("DatabaseService", "Database initialized in WAL mode successfully.");
         }
         catch (Exception ex)
         {
             NocturneLogger.Error("DatabaseService", "Database initialization error", ex);
+        }
+    }
+
+    private void EnsureSchema(SqliteConnection conn)
+    {
+        // 1. cached_items migration
+        MigrateTableColumns(conn, "cached_items", new Dictionary<string, string>
+        {
+            { "genres", "TEXT" },
+            { "tmdb_id", "TEXT" },
+            { "imdb_id", "TEXT" },
+            { "dedup_group_id", "TEXT" }
+        });
+
+        // 2. watch_events migration
+        MigrateTableColumns(conn, "watch_events", new Dictionary<string, string>
+        {
+            { "series_name", "TEXT" },
+            { "genres", "TEXT" }
+        });
+
+        // 3. dedup_groups migration
+        MigrateTableColumns(conn, "dedup_groups", new Dictionary<string, string>
+        {
+            { "item_ids", "TEXT" },
+            { "title", "TEXT" }
+        });
+
+        using var idxCmd = conn.CreateCommand();
+        idxCmd.CommandText = @"
+            CREATE INDEX IF NOT EXISTS idx_cached_items_type ON cached_items(type);
+            CREATE INDEX IF NOT EXISTS idx_cached_items_parent ON cached_items(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_cached_items_series ON cached_items(series_id);
+            CREATE INDEX IF NOT EXISTS idx_cached_items_dedup ON cached_items(dedup_group_id);
+            CREATE INDEX IF NOT EXISTS idx_cached_items_tmdb ON cached_items(tmdb_id);
+            CREATE INDEX IF NOT EXISTS idx_cached_items_imdb ON cached_items(imdb_id);
+            CREATE INDEX IF NOT EXISTS idx_watch_events_time ON watch_events(watched_at);
+            CREATE INDEX IF NOT EXISTS idx_watch_events_source ON watch_events(source);
+        ";
+        idxCmd.ExecuteNonQuery();
+    }
+
+    private void MigrateTableColumns(SqliteConnection conn, string tableName, Dictionary<string, string> requiredColumns)
+    {
+        try
+        {
+            var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $"PRAGMA table_info({tableName});";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    existingColumns.Add(reader.GetString(1));
+                }
+            }
+
+            foreach (var (col, colType) in requiredColumns)
+            {
+                if (!existingColumns.Contains(col))
+                {
+                    using var alterCmd = conn.CreateCommand();
+                    alterCmd.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {col} {colType};";
+                    alterCmd.ExecuteNonQuery();
+                    NocturneLogger.Info("DatabaseService", $"Migrated schema: added column '{col}' to table '{tableName}'.");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("DatabaseService", $"Schema migration warning for table {tableName}: {ex.Message}");
         }
     }
 

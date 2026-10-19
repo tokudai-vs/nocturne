@@ -178,10 +178,17 @@ public class LibraryViewModel : BaseViewModel
             }
             else
             {
-                var cached = _db.GetCachedItems(parentId: viewId, limit: 100);
-                if (cached.Count > 0)
+                try
                 {
-                    foreach (var item in cached) Items.Add(item);
+                    var cached = _db.GetCachedItems(parentId: viewId, limit: 100);
+                    if (cached.Count > 0)
+                    {
+                        foreach (var item in cached) Items.Add(item);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    NocturneLogger.Warn("LibraryViewModel", $"Cache load fallback: {ex.Message}");
                 }
 
                 var res = await _embyClient.GetItemsAsync(parentId: viewId, limit: 100, sortBy: SortBy, sortOrder: SortOrder, fields: EmbyClient.LightItemFields);

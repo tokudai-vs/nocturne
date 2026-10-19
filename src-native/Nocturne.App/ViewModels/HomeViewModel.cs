@@ -61,30 +61,37 @@ public class HomeViewModel : BaseViewModel
         try
         {
             // 1. Instant Cache-First Display (0 ms)
-            if (LatestMovies.Count == 0 && LatestEpisodes.Count == 0)
+            try
             {
-                var cachedMovies = _db.GetCachedItems("Movie", limit: 16);
-                var cachedEpisodes = _db.GetCachedItems("Episode", limit: 16);
-                if (cachedMovies.Count > 0 || cachedEpisodes.Count > 0)
+                if (LatestMovies.Count == 0 && LatestEpisodes.Count == 0)
                 {
-                    Application.Current.Dispatcher.Invoke(() =>
+                    var cachedMovies = _db.GetCachedItems("Movie", limit: 16);
+                    var cachedEpisodes = _db.GetCachedItems("Episode", limit: 16);
+                    if (cachedMovies.Count > 0 || cachedEpisodes.Count > 0)
                     {
-                        foreach (var m in cachedMovies) LatestMovies.Add(m);
-                        foreach (var ep in cachedEpisodes) LatestEpisodes.Add(ep);
-
-                        if (HeroItem == null)
+                        Application.Current.Dispatcher.Invoke(() =>
                         {
-                            var heroCandidate = LatestMovies.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                                             ?? LatestMovies.FirstOrDefault();
-                            if (heroCandidate != null)
+                            foreach (var m in cachedMovies) LatestMovies.Add(m);
+                            foreach (var ep in cachedEpisodes) LatestEpisodes.Add(ep);
+
+                            if (HeroItem == null)
                             {
-                                HeroItem = heroCandidate;
-                                var tag = heroCandidate.BackdropImageTags?.FirstOrDefault() ?? heroCandidate.ImageTags?.GetValueOrDefault("Primary");
-                                HeroBackdropUrl = _embyClient.BuildImageUrl(heroCandidate.Id, "Backdrop", 1920, tag);
+                                var heroCandidate = LatestMovies.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
+                                                 ?? LatestMovies.FirstOrDefault();
+                                if (heroCandidate != null)
+                                {
+                                    HeroItem = heroCandidate;
+                                    var tag = heroCandidate.BackdropImageTags?.FirstOrDefault() ?? heroCandidate.ImageTags?.GetValueOrDefault("Primary");
+                                    HeroBackdropUrl = _embyClient.BuildImageUrl(heroCandidate.Id, "Backdrop", 1920, tag);
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("HomeViewModel", $"Cache read fallback: {ex.Message}");
             }
 
             // 2. Fast Emby API fetch in parallel using LightItemFields
