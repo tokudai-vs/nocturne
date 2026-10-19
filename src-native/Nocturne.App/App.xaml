@@ -21,6 +21,7 @@
             <converters:RatingFormatter x:Key="RatingFormatter" />
             <converters:HeatmapLevelToBrushConverter x:Key="HeatmapBrush" />
             <converters:HeightRatioToBarHeightConverter x:Key="BarHeightConverter" />
+            <converters:BoolToBrushConverter x:Key="BoolToBrushConverter" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

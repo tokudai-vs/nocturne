@@ -135,6 +135,9 @@ public class DetailViewModel : BaseViewModel
         set => SetProperty(ref _activeSkipPrompt, value);
     }
 
+    public string PlayButtonText => (Item?.UserData?.PlaybackPositionTicks ?? 0) > 0 && !IsPlayed ? "Resume" : "Play";
+    public string PlayedButtonText => IsPlayed ? "Watched" : "Mark Watched";
+
     public bool HasTrailer => Item?.RemoteTrailers != null && Item.RemoteTrailers.Count > 0;
     public bool HasMultipleVersions => GroupVersions.Count > 1;
     public bool IsSeries => Item?.Type == "Series";
@@ -154,6 +157,8 @@ public class DetailViewModel : BaseViewModel
             Item = item;
             IsPlayed = item.UserData?.Played ?? false;
             IsFavorite = item.UserData?.IsFavorite ?? false;
+            OnPropertyChanged(nameof(PlayButtonText));
+            OnPropertyChanged(nameof(PlayedButtonText));
 
             var primaryTag = item.ImageTags?.GetValueOrDefault("Primary");
             PosterUrl = _embyClient.BuildImageUrl(item.Id, "Primary", 500, primaryTag);
@@ -284,10 +289,34 @@ public class DetailViewModel : BaseViewModel
         var playItem = target ?? Item;
         if (playItem == null) return;
 
-        // If series, play first unwatched episode
-        if (playItem.Type == "Series" && Episodes.Count > 0)
+        // If series, resolve to first unwatched episode
+        if (playItem.Type == "Series")
         {
-            playItem = Episodes.FirstOrDefault(e => !e.IsPlayed) ?? Episodes[0];
+            EmbyItem? ep = null;
+            if (Episodes.Count > 0)
+            {
+                ep = Episodes.FirstOrDefault(e => !e.IsPlayed) ?? Episodes[0];
+            }
+            else
+            {
+                var seasons = Seasons.Count > 0 ? Seasons.ToList() : await _embyClient.GetSeasonsAsync(playItem.Id);
+                var season = SelectedSeason ?? seasons.FirstOrDefault();
+                if (season != null)
+                {
+                    var eps = await _embyClient.GetEpisodesAsync(playItem.Id, season.Id);
+                    ep = eps.FirstOrDefault(e => !e.IsPlayed) ?? eps.FirstOrDefault();
+                }
+            }
+
+            if (ep != null)
+            {
+                playItem = ep;
+            }
+            else
+            {
+                NocturneLogger.Warn("DetailViewModel", $"No playable episodes found for series {playItem.Name}");
+                return;
+            }
         }
 
         var startTicks = playItem.UserData?.PlaybackPositionTicks ?? 0;
@@ -352,7 +381,35 @@ public class DetailViewModel : BaseViewModel
         if (success)
         {
             IsPlayed = newPlayed;
-            if (Item.UserData != null) Item.UserData.Played = newPlayed;
+            if (Item.UserData == null) Item.UserData = new UserItemData();
+            Item.UserData.Played = newPlayed;
+            if (newPlayed) Item.UserData.PlaybackPositionTicks = 0;
+            Item.OnPropertyChanged(nameof(EmbyItem.IsPlayed));
+            Item.OnPropertyChanged(nameof(EmbyItem.HasResumeProgress));
+            Item.OnPropertyChanged(nameof(EmbyItem.ProgressPercentage));
+            Item.OnPropertyChanged(nameof(EmbyItem.UserData));
+            OnPropertyChanged(nameof(PlayButtonText));
+            OnPropertyChanged(nameof(PlayedButtonText));
+        }
+    }
+
+    public async Task ToggleEpisodePlayedAsync(EmbyItem ep)
+    {
+        if (ep == null) return;
+        var newPlayed = !ep.IsPlayed;
+        var success = newPlayed
+            ? await _embyClient.MarkPlayedAsync(ep.Id)
+            : await _embyClient.MarkUnplayedAsync(ep.Id);
+
+        if (success)
+        {
+            if (ep.UserData == null) ep.UserData = new UserItemData();
+            ep.UserData.Played = newPlayed;
+            if (newPlayed) ep.UserData.PlaybackPositionTicks = 0;
+            ep.OnPropertyChanged(nameof(EmbyItem.IsPlayed));
+            ep.OnPropertyChanged(nameof(EmbyItem.HasResumeProgress));
+            ep.OnPropertyChanged(nameof(EmbyItem.ProgressPercentage));
+            ep.OnPropertyChanged(nameof(EmbyItem.UserData));
         }
     }
 

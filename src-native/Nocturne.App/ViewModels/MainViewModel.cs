@@ -23,6 +23,7 @@ public class MainViewModel : BaseViewModel
     private bool _isNavigationVisible = true;
 
     // Player State
+    private bool _isStartingPlayback;
     private bool _isPlayerActive;
     private string _playerTitle = string.Empty;
     private string _playerSubtitle = string.Empty;
@@ -115,9 +116,10 @@ public class MainViewModel : BaseViewModel
 
         _mpv.PlaybackEnded += () =>
         {
+            if (_isStartingPlayback) return;
             Application.Current?.Dispatcher?.Invoke(async () =>
             {
-                if (IsPlayerActive)
+                if (IsPlayerActive && !_isStartingPlayback)
                 {
                     if (_settings.Current.AutoPlayNextEpisode && CanGoNextEpisode && _nextEpisodeItem != null)
                     {
@@ -367,10 +369,22 @@ public class MainViewModel : BaseViewModel
         CanGoNextEpisode = _nextEpisodeItem != null;
         CanGoPrevEpisode = _prevEpisodeItem != null;
         IsPlayerActive = true;
+        _isStartingPlayback = true;
 
-        if (RequestEmbeddedPlayback != null)
+        try
         {
-            await RequestEmbeddedPlayback.Invoke(item, startTicks);
+            if (RequestEmbeddedPlayback != null)
+            {
+                await RequestEmbeddedPlayback.Invoke(item, startTicks);
+            }
+        }
+        finally
+        {
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(1500);
+                _isStartingPlayback = false;
+            });
         }
     }
 
@@ -380,6 +394,7 @@ public class MainViewModel : BaseViewModel
         var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
         var streamUrl = _embyClient.GetStreamUrl(item.Id, mediaSourceId);
 
+        NocturneLogger.Info("MainViewModel", $"Starting embedded mpv: {item.Name} ({item.Id}) at tick {startTicks} in HWND {hwnd}");
         await _mpv.PlayEmbeddedAsync(hwnd, streamUrl, item.Name, startTicks);
         await _embyClient.ReportPlaybackStartAsync(item.Id, mediaSourceId, startTicks);
         await _trakt.ScrobbleStartAsync(item, item.ProgressPercentage);

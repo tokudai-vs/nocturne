@@ -106,8 +106,9 @@ public class MpvController : IDisposable
         {
             try
             {
+                if (_pipeClient == null) break;
                 await _pipeClient.ConnectAsync(400);
-                if (_pipeClient.IsConnected) break;
+                if (_pipeClient != null && _pipeClient.IsConnected) break;
             }
             catch
             {
@@ -116,7 +117,7 @@ public class MpvController : IDisposable
             attempts++;
         }
 
-        if (!_pipeClient.IsConnected)
+        if (_pipeClient == null || !_pipeClient.IsConnected)
         {
             ErrorOccurred?.Invoke("Failed to connect to mpv named pipe.");
             return;
@@ -138,7 +139,7 @@ public class MpvController : IDisposable
 
     public async Task PlayEmbeddedAsync(IntPtr hwnd, string url, string title, long startPositionTicks = 0)
     {
-        await StopAsync();
+        await StopAsync(notifyEnded: false);
 
         var mpvExe = FindMpvExecutable();
         if (string.IsNullOrEmpty(mpvExe) || !File.Exists(mpvExe))
@@ -190,8 +191,11 @@ public class MpvController : IDisposable
             _mpvProcess.EnableRaisingEvents = true;
             _mpvProcess.Exited += (s, e) =>
             {
-                IsPlaying = false;
-                PlaybackEnded?.Invoke();
+                if (IsPlaying)
+                {
+                    IsPlaying = false;
+                    PlaybackEnded?.Invoke();
+                }
             };
 
             await ConnectPipeAsync();
@@ -253,8 +257,9 @@ public class MpvController : IDisposable
         await SendCommandAsync(new object[] { "cycle", "pause" });
     }
 
-    public async Task StopAsync()
+    public async Task StopAsync(bool notifyEnded = true)
     {
+        var wasPlaying = IsPlaying;
         if (_writer != null && _isReady)
         {
             try
@@ -288,7 +293,10 @@ public class MpvController : IDisposable
         }
 
         IsPlaying = false;
-        PlaybackEnded?.Invoke();
+        if (notifyEnded && wasPlaying)
+        {
+            PlaybackEnded?.Invoke();
+        }
     }
 
     public async Task SeekTo(double absoluteSeconds)

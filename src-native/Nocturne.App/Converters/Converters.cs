@@ -128,3 +128,16 @@ public class HeightRatioToBarHeightConverter : IValueConverter
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
+
+public class BoolToBrushConverter : IValueConverter
+{
+    public Brush TrueBrush { get; set; } = new SolidColorBrush(Color.FromRgb(0xE5, 0xA0, 0x0D));
+    public Brush FalseBrush { get; set; } = new SolidColorBrush(Color.FromArgb(0x80, 0xAA, 0xAA, 0xAA));
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        return value is true ? TrueBrush : FalseBrush;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+}

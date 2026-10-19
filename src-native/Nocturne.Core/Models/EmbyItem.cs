@@ -1,11 +1,20 @@
+using System.ComponentModel;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Nocturne.Core.Models;
 
-public class EmbyItem
+public class EmbyItem : INotifyPropertyChanged
 {
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
     [JsonConverter(typeof(FlexibleStringConverter))]
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
@@ -38,7 +47,20 @@ public class EmbyItem
     public List<BaseItemPerson>? People { get; set; }
     public List<MediaUrl>? RemoteTrailers { get; set; }
 
-    public UserItemData? UserData { get; set; }
+    private UserItemData? _userData;
+    public UserItemData? UserData
+    {
+        get => _userData;
+        set
+        {
+            _userData = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsPlayed));
+            OnPropertyChanged(nameof(ProgressPercentage));
+            OnPropertyChanged(nameof(HasResumeProgress));
+        }
+    }
+
     public List<MediaSourceInfo>? MediaSources { get; set; }
 
     // Multi-server or local metadata
@@ -61,6 +83,8 @@ public class EmbyItem
     {
         "Episode" when ParentIndexNumber.HasValue && IndexNumber.HasValue =>
             $"S{ParentIndexNumber:D2}E{IndexNumber:D2} - {Name}",
+        "Episode" when IndexNumber.HasValue =>
+            $"E{IndexNumber:D2} - {Name}",
         _ => Name
     };
 
@@ -75,6 +99,9 @@ public class EmbyItem
 
     [JsonIgnore]
     public bool IsPlayed => UserData?.Played ?? false;
+
+    [JsonIgnore]
+    public string? FirstTagline => Taglines?.FirstOrDefault();
 
     [JsonIgnore]
     public string TmdbId => ProviderIds?.GetValueOrDefault("Tmdb")
@@ -121,6 +148,9 @@ public class EmbyItem
             return Math.Clamp((double)UserData.PlaybackPositionTicks / RunTimeTicks.Value * 100.0, 0.0, 100.0);
         }
     }
+
+    [JsonIgnore]
+    public bool HasResumeProgress => !IsPlayed && ProgressPercentage > 0;
 }
 
 public class BaseItemPerson

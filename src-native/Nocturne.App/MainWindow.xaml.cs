@@ -22,25 +22,25 @@ public partial class MainWindow : FluentWindow
         {
             try
             {
-                // Ensure HWND is created and measured
-                if (PlayerHwndHost.Hwnd == IntPtr.Zero)
+                // Ensure HWND is created and measured with Render priority
+                var retries = 0;
+                while (PlayerHwndHost.Hwnd == IntPtr.Zero && retries < 20)
                 {
-                    PlayerHwndHost.UpdateLayout();
-                    if (PlayerHwndHost.Hwnd == IntPtr.Zero)
-                    {
-                        await Task.Delay(60);
-                        PlayerHwndHost.UpdateLayout();
-                    }
+                    await Dispatcher.InvokeAsync(() => UpdateLayout(), System.Windows.Threading.DispatcherPriority.Render);
+                    if (PlayerHwndHost.Hwnd != IntPtr.Zero) break;
+                    await Task.Delay(50);
+                    retries++;
                 }
 
                 if (PlayerHwndHost.Hwnd != IntPtr.Zero)
                 {
+                    NocturneLogger.Info("MainWindow", $"Player HWND confirmed: {PlayerHwndHost.Hwnd}. Starting {item.Name}");
                     await _viewModel.ExecuteEmbeddedPlaybackAsync(PlayerHwndHost.Hwnd, item, startTicks);
                     PlayerHwndHost.Focus();
                 }
                 else
                 {
-                    NocturneLogger.Error("MainWindow", "PlayerHwndHost.Hwnd was not created!");
+                    NocturneLogger.Error("MainWindow", "PlayerHwndHost.Hwnd was not created after waiting!");
                 }
             }
             catch (Exception ex)

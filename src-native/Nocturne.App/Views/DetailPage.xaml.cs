@@ -54,6 +54,14 @@ public partial class DetailPage : UserControl
         }
     }
 
+    private void OnToggleEpisodePlayedClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement el && el.DataContext is EmbyItem ep && DataContext is DetailViewModel vm)
+        {
+            _ = vm.ToggleEpisodePlayedAsync(ep);
+        }
+    }
+
     private void OnPlayedToggleClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is DetailViewModel vm)

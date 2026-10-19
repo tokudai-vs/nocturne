@@ -26,6 +26,12 @@ public class MpvHwndHost : HwndHost
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyWindow(IntPtr hwnd);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOACTIVATE = 0x0010;
+
     public IntPtr Hwnd { get; private set; }
 
     public event Action<IntPtr>? HwndCreated;
@@ -46,6 +52,17 @@ public class MpvHwndHost : HwndHost
 
         HwndCreated?.Invoke(Hwnd);
         return new HandleRef(this, Hwnd);
+    }
+
+    protected override void OnWindowPositionChanged(System.Windows.Rect rcBoundingBox)
+    {
+        base.OnWindowPositionChanged(rcBoundingBox);
+        if (Hwnd != IntPtr.Zero)
+        {
+            var w = Math.Max(1, (int)rcBoundingBox.Width);
+            var h = Math.Max(1, (int)rcBoundingBox.Height);
+            SetWindowPos(Hwnd, IntPtr.Zero, 0, 0, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
     }
 
     protected override void DestroyWindowCore(HandleRef hwnd)
