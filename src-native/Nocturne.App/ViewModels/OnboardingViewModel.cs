@@ -33,6 +33,8 @@ public class OnboardingViewModel : BaseViewModel
     private string _password = string.Empty;
     private bool _isManualMode;
     private string _manualUsername = string.Empty;
+    private string _connectingServerName = string.Empty;
+    private string _connectingStatusMessage = string.Empty;
 
     public event Action? Authenticated;
 
@@ -60,6 +62,18 @@ public class OnboardingViewModel : BaseViewModel
     {
         get => _isConnecting;
         set => SetProperty(ref _isConnecting, value);
+    }
+
+    public string ConnectingServerName
+    {
+        get => _connectingServerName;
+        set => SetProperty(ref _connectingServerName, value);
+    }
+
+    public string ConnectingStatusMessage
+    {
+        get => _connectingStatusMessage;
+        set => SetProperty(ref _connectingStatusMessage, value);
     }
 
     public string ErrorMessage
@@ -400,16 +414,14 @@ public class OnboardingViewModel : BaseViewModel
             if (servers.Count == 1)
             {
                 var single = servers[0];
-                var targetAddr = !string.IsNullOrWhiteSpace(single.LocalAddress) ? single.LocalAddress : single.Url;
-                if (!string.IsNullOrEmpty(targetAddr))
+                ConnectingServerName = single.Name ?? "Emby Server";
+                ConnectingStatusMessage = $"Connecting to {ConnectingServerName}...";
+                var (tok, uid, resolvedUrl) = await _connect.ConnectToServerFastAsync(single, exchange.UserId);
+                if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid) && !string.IsNullOrEmpty(resolvedUrl))
                 {
-                    var cleanAddr = EmbyClient.NormalizeServerUrl(targetAddr);
-                    var (tok, uid, _) = await _connect.ExchangeServerTokenAsync(cleanAddr, exchange.UserId, single.AccessKey);
-                    if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid))
-                    {
-                        await CompleteAuthenticationAsync(cleanAddr, tok, uid, single.Name ?? "Emby Server");
-                        return;
-                    }
+                    ConnectingStatusMessage = $"Configuring {ConnectingServerName}...";
+                    await CompleteAuthenticationAsync(resolvedUrl, tok, uid, single.Name ?? "Emby Server");
+                    return;
                 }
             }
 
@@ -442,23 +454,18 @@ public class OnboardingViewModel : BaseViewModel
         }
 
         IsConnecting = true;
+        ConnectingServerName = server.Name ?? "Server";
+        ConnectingStatusMessage = $"Connecting to {ConnectingServerName}...";
         ErrorMessage = string.Empty;
 
         try
         {
-            var candidateAddresses = new List<string>();
-            if (!string.IsNullOrWhiteSpace(server.LocalAddress)) candidateAddresses.Add(server.LocalAddress.Trim());
-            if (!string.IsNullOrWhiteSpace(server.Url)) candidateAddresses.Add(server.Url.Trim());
-
-            foreach (var addr in candidateAddresses)
+            var (tok, uid, resolvedUrl) = await _connect.ConnectToServerFastAsync(server, _lastConnectUserId);
+            if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid) && !string.IsNullOrEmpty(resolvedUrl))
             {
-                var clean = EmbyClient.NormalizeServerUrl(addr);
-                var (tok, uid, _) = await _connect.ExchangeServerTokenAsync(clean, _lastConnectUserId, server.AccessKey);
-                if (!string.IsNullOrEmpty(tok) && !string.IsNullOrEmpty(uid))
-                {
-                    await CompleteAuthenticationAsync(clean, tok, uid, server.Name);
-                    return;
-                }
+                ConnectingStatusMessage = $"Configuring {ConnectingServerName}...";
+                await CompleteAuthenticationAsync(resolvedUrl, tok, uid, server.Name ?? "Emby Server");
+                return;
             }
 
             ErrorMessage = $"Could not connect to {server.Name}. Please verify network connectivity to the server.";
@@ -470,6 +477,7 @@ public class OnboardingViewModel : BaseViewModel
         finally
         {
             IsConnecting = false;
+            ConnectingStatusMessage = string.Empty;
         }
     }
 
@@ -484,6 +492,9 @@ public class OnboardingViewModel : BaseViewModel
         var serverInfo = await _emby.GetServerInfoAsync(cleanUrl);
         var sName = serverInfo?.ServerName ?? serverName;
         var sVersion = serverInfo?.Version ?? "4.x";
+
+        // Double check configuration is active and has token
+        _emby.Configure(cleanUrl, token, userId);
 
         var existing = _settings.Current.Servers.FirstOrDefault(s => s.Url == cleanUrl && s.UserId == userId);
         if (existing != null)

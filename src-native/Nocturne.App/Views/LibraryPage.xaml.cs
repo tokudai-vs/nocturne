@@ -11,6 +11,13 @@ public partial class LibraryPage : UserControl
     public LibraryPage()
     {
         InitializeComponent();
+        Loaded += async (_, _) =>
+        {
+            if (DataContext is LibraryViewModel vm && vm.Views.Count == 0)
+            {
+                await vm.LoadViewsAsync();
+            }
+        };
     }
 
     private void OnCardClick(object sender, RoutedEventArgs e)

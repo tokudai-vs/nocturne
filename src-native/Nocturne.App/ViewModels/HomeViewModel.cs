@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
 using Nocturne.Core.Utils;
@@ -48,52 +49,94 @@ public class HomeViewModel : BaseViewModel
         set => SetProperty(ref _isLoading, value);
     }
 
+    public bool IsEmpty => !IsLoading && ContinueWatching.Count == 0 && NextUp.Count == 0 && LatestMovies.Count == 0 && LatestEpisodes.Count == 0;
+
     public async Task LoadAsync()
     {
         if (!_embyClient.IsAuthenticated) return;
 
         IsLoading = true;
+        OnPropertyChanged(nameof(IsEmpty));
+
         try
         {
+            // 1. Instant Cache-First Display (0 ms)
+            if (LatestMovies.Count == 0 && LatestEpisodes.Count == 0)
+            {
+                var cachedMovies = _db.GetCachedItems("Movie", limit: 16);
+                var cachedEpisodes = _db.GetCachedItems("Episode", limit: 16);
+                if (cachedMovies.Count > 0 || cachedEpisodes.Count > 0)
+                {
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        foreach (var m in cachedMovies) LatestMovies.Add(m);
+                        foreach (var ep in cachedEpisodes) LatestEpisodes.Add(ep);
+
+                        if (HeroItem == null)
+                        {
+                            var heroCandidate = LatestMovies.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
+                                             ?? LatestMovies.FirstOrDefault();
+                            if (heroCandidate != null)
+                            {
+                                HeroItem = heroCandidate;
+                                var tag = heroCandidate.BackdropImageTags?.FirstOrDefault() ?? heroCandidate.ImageTags?.GetValueOrDefault("Primary");
+                                HeroBackdropUrl = _embyClient.BuildImageUrl(heroCandidate.Id, "Backdrop", 1920, tag);
+                            }
+                        }
+                    });
+                }
+            }
+
+            // 2. Fast Emby API fetch in parallel using LightItemFields
             var resumeTask = _embyClient.GetResumeAsync();
             var nextUpTask = _embyClient.GetNextUpAsync();
-            var latestMoviesTask = _embyClient.GetItemsAsync(includeItemTypes: "Movie", limit: 16, sortBy: "DateCreated", sortOrder: "Descending");
-            var latestEpisodesTask = _embyClient.GetItemsAsync(includeItemTypes: "Episode", limit: 16, sortBy: "DateCreated", sortOrder: "Descending");
+            var latestMoviesTask = _embyClient.GetItemsAsync(includeItemTypes: "Movie", limit: 16, sortBy: "DateCreated", sortOrder: "Descending", fields: EmbyClient.LightItemFields);
+            var latestEpisodesTask = _embyClient.GetItemsAsync(includeItemTypes: "Episode", limit: 16, sortBy: "DateCreated", sortOrder: "Descending", fields: EmbyClient.LightItemFields);
 
             await Task.WhenAll(resumeTask, nextUpTask, latestMoviesTask, latestEpisodesTask);
 
-            // Continue Watching
-            ContinueWatching.Clear();
             var resumeItems = await resumeTask;
-            foreach (var item in resumeItems) ContinueWatching.Add(item);
-
-            // Next Up
-            NextUp.Clear();
             var nextUpItems = await nextUpTask;
-            foreach (var item in nextUpItems) NextUp.Add(item);
-
-            // Latest Movies
-            LatestMovies.Clear();
             var movies = (await latestMoviesTask).Items;
-            foreach (var m in movies) LatestMovies.Add(m);
-
-            // Latest Episodes
-            LatestEpisodes.Clear();
             var eps = (await latestEpisodesTask).Items;
-            foreach (var ep in eps) LatestEpisodes.Add(ep);
 
-            // Select Hero item (prefer Continue Watching, fallback to Latest Movies)
-            var hero = ContinueWatching.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                    ?? LatestMovies.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                    ?? ContinueWatching.FirstOrDefault()
-                    ?? LatestMovies.FirstOrDefault();
-
-            if (hero != null)
+            Application.Current.Dispatcher.Invoke(() =>
             {
-                HeroItem = hero;
-                var tag = hero.BackdropImageTags?.FirstOrDefault() ?? hero.ImageTags?.GetValueOrDefault("Primary");
-                HeroBackdropUrl = _embyClient.BuildImageUrl(hero.Id, "Backdrop", 1920, tag);
-            }
+                // Continue Watching
+                ContinueWatching.Clear();
+                foreach (var item in resumeItems) ContinueWatching.Add(item);
+
+                // Next Up
+                NextUp.Clear();
+                foreach (var item in nextUpItems) NextUp.Add(item);
+
+                // Latest Movies
+                if (movies.Count > 0 || LatestMovies.Count == 0)
+                {
+                    LatestMovies.Clear();
+                    foreach (var m in movies) LatestMovies.Add(m);
+                }
+
+                // Latest Episodes
+                if (eps.Count > 0 || LatestEpisodes.Count == 0)
+                {
+                    LatestEpisodes.Clear();
+                    foreach (var ep in eps) LatestEpisodes.Add(ep);
+                }
+
+                // Select Hero item (prefer Continue Watching, fallback to Latest Movies)
+                var hero = ContinueWatching.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
+                        ?? LatestMovies.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
+                        ?? ContinueWatching.FirstOrDefault()
+                        ?? LatestMovies.FirstOrDefault();
+
+                if (hero != null)
+                {
+                    HeroItem = hero;
+                    var tag = hero.BackdropImageTags?.FirstOrDefault() ?? hero.ImageTags?.GetValueOrDefault("Primary");
+                    HeroBackdropUrl = _embyClient.BuildImageUrl(hero.Id, "Backdrop", 1920, tag);
+                }
+            });
         }
         catch (Exception ex)
         {
@@ -102,6 +145,7 @@ public class HomeViewModel : BaseViewModel
         finally
         {
             IsLoading = false;
+            OnPropertyChanged(nameof(IsEmpty));
         }
     }
 

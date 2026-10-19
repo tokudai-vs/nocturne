@@ -129,21 +129,25 @@ public class EmbyConnectService
     public async Task<(string? AccessToken, string? LocalUserId, string? ResolvedUrl)> ExchangeServerTokenAsync(
         string serverUrl,
         string connectUserId,
-        string accessKey)
+        string accessKey,
+        int timeoutSeconds = 4)
     {
         var cleanUrl = EmbyClient.NormalizeServerUrl(serverUrl);
         var authHeader = $"MediaBrowser Client=\"Nocturne\", Device=\"Windows\", DeviceId=\"{_deviceId}\", Version=\"4.0.0\"";
 
         var candidateUrls = new[]
         {
-            $"{cleanUrl}/Connect/Exchange?format=json&ConnectUserId={Uri.EscapeDataString(connectUserId)}",
-            $"{cleanUrl}/emby/Connect/Exchange?format=json&ConnectUserId={Uri.EscapeDataString(connectUserId)}"
+            cleanUrl.EndsWith("/emby", StringComparison.OrdinalIgnoreCase)
+                ? $"{cleanUrl}/Connect/Exchange?format=json&ConnectUserId={Uri.EscapeDataString(connectUserId)}"
+                : $"{cleanUrl}/emby/Connect/Exchange?format=json&ConnectUserId={Uri.EscapeDataString(connectUserId)}",
+            $"{cleanUrl}/Connect/Exchange?format=json&ConnectUserId={Uri.EscapeDataString(connectUserId)}"
         };
 
         foreach (var url in candidateUrls)
         {
             try
             {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
                 using var req = new HttpRequestMessage(HttpMethod.Get, url);
                 req.Headers.TryAddWithoutValidation("X-Emby-Token", accessKey);
                 req.Headers.TryAddWithoutValidation("X-MediaBrowser-Token", accessKey);
@@ -155,7 +159,7 @@ public class EmbyConnectService
                 req.Headers.TryAddWithoutValidation("X-Emby-Client-Version", "4.0.0");
                 req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-                var resp = await _http.SendAsync(req);
+                var resp = await _http.SendAsync(req, cts.Token);
                 if (resp.IsSuccessStatusCode)
                 {
                     var data = await resp.Content.ReadFromJsonAsync<ConnectExchangeResponse>();
@@ -177,6 +181,49 @@ public class EmbyConnectService
             {
                 NocturneLogger.Warn("EmbyConnect", $"Exchange exception at {url}: {ex.Message}");
             }
+        }
+
+        return (null, null, null);
+    }
+
+    public async Task<(string? AccessToken, string? LocalUserId, string? ResolvedUrl)> ConnectToServerFastAsync(
+        ConnectServer server,
+        string connectUserId)
+    {
+        var tasks = new List<Task<(string? AccessToken, string? LocalUserId, string? ResolvedUrl)>>();
+        var testedUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(server.LocalAddress))
+        {
+            var cleanLocal = EmbyClient.NormalizeServerUrl(server.LocalAddress);
+            if (testedUrls.Add(cleanLocal))
+            {
+                tasks.Add(ExchangeServerTokenAsync(cleanLocal, connectUserId, server.AccessKey, timeoutSeconds: 3));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(server.Url))
+        {
+            var cleanRemote = EmbyClient.NormalizeServerUrl(server.Url);
+            if (testedUrls.Add(cleanRemote))
+            {
+                tasks.Add(ExchangeServerTokenAsync(cleanRemote, connectUserId, server.AccessKey, timeoutSeconds: 5));
+            }
+        }
+
+        while (tasks.Count > 0)
+        {
+            var finished = await Task.WhenAny(tasks);
+            tasks.Remove(finished);
+            try
+            {
+                var result = await finished;
+                if (!string.IsNullOrEmpty(result.AccessToken) && !string.IsNullOrEmpty(result.LocalUserId))
+                {
+                    return result;
+                }
+            }
+            catch { }
         }
 
         return (null, null, null);

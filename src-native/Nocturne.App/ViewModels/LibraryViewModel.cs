@@ -178,8 +178,18 @@ public class LibraryViewModel : BaseViewModel
             }
             else
             {
-                var res = await _embyClient.GetItemsAsync(parentId: viewId, limit: 100, sortBy: SortBy, sortOrder: SortOrder);
-                foreach (var item in res.Items) Items.Add(item);
+                var cached = _db.GetCachedItems(parentId: viewId, limit: 100);
+                if (cached.Count > 0)
+                {
+                    foreach (var item in cached) Items.Add(item);
+                }
+
+                var res = await _embyClient.GetItemsAsync(parentId: viewId, limit: 100, sortBy: SortBy, sortOrder: SortOrder, fields: EmbyClient.LightItemFields);
+                if (res.Items.Count > 0 || Items.Count == 0)
+                {
+                    Items.Clear();
+                    foreach (var item in res.Items) Items.Add(item);
+                }
             }
         }
         catch (Exception ex)

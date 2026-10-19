@@ -64,6 +64,7 @@ public class PlaybackStopPayload
 public class EmbyClient
 {
     private readonly HttpClient _http;
+    private readonly HttpClient _standalone;
     private string _baseUrl = string.Empty;
     private string _userId = string.Empty;
     private string _token = string.Empty;
@@ -76,7 +77,28 @@ public class EmbyClient
     public EmbyClient()
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _standalone = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _deviceId = GetOrCreateDeviceId();
+    }
+
+    private HttpRequestMessage CreateStandaloneRequest(HttpMethod method, string url, string? token = null)
+    {
+        var req = new HttpRequestMessage(method, url);
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        var authHeader = $"MediaBrowser Client=\"Nocturne\", Device=\"Windows\", DeviceId=\"{_deviceId}\", Version=\"4.0.0\"";
+        if (!string.IsNullOrEmpty(token))
+        {
+            authHeader += $", Token=\"{token}\"";
+            req.Headers.TryAddWithoutValidation("X-Emby-Token", token);
+            req.Headers.TryAddWithoutValidation("X-MediaBrowser-Token", token);
+        }
+        req.Headers.TryAddWithoutValidation("X-Emby-Authorization", authHeader);
+        req.Headers.TryAddWithoutValidation("Authorization", authHeader);
+        req.Headers.TryAddWithoutValidation("X-Emby-Client", "Nocturne");
+        req.Headers.TryAddWithoutValidation("X-Emby-Device-Name", "Windows");
+        req.Headers.TryAddWithoutValidation("X-Emby-Device-Id", _deviceId);
+        req.Headers.TryAddWithoutValidation("X-Emby-Client-Version", "4.0.0");
+        return req;
     }
 
     private static string GetOrCreateDeviceId()
@@ -167,41 +189,38 @@ public class EmbyClient
         return $"{_baseUrl}/emby{p}";
     }
 
-    public async Task<EmbyServerInfo?> GetServerInfoAsync(string url)
+    public async Task<EmbyServerInfo?> GetServerInfoAsync(string? url = null)
     {
-        var cleanUrl = NormalizeServerUrl(url);
-        Configure(cleanUrl);
+        var target = string.IsNullOrWhiteSpace(url) ? _baseUrl : NormalizeServerUrl(url);
+        if (string.IsNullOrWhiteSpace(target)) return null;
 
-        // Try /emby/System/Info/Public first
-        try
+        var paths = new[]
         {
-            var resp = await _http.GetAsync(BuildUrl("/System/Info/Public"));
-            if (resp.IsSuccessStatusCode)
-            {
-                var info = await resp.Content.ReadFromJsonAsync<EmbyServerInfo>();
-                NocturneLogger.Info("EmbyClient", $"Connected to {info?.ServerName} (v{info?.Version}) via /emby");
-                return info;
-            }
-        }
-        catch (Exception ex)
-        {
-            NocturneLogger.Warn("EmbyClient", $"/emby/System/Info/Public check failed: {ex.Message}");
-        }
+            target.EndsWith("/emby", StringComparison.OrdinalIgnoreCase) ? $"{target}/System/Info/Public" : $"{target}/emby/System/Info/Public",
+            $"{target}/System/Info/Public"
+        };
 
-        // Fallback without /emby prefix
-        try
+        foreach (var p in paths)
         {
-            var resp = await _http.GetAsync($"{cleanUrl}/System/Info/Public");
-            if (resp.IsSuccessStatusCode)
+            try
             {
-                var info = await resp.Content.ReadFromJsonAsync<EmbyServerInfo>();
-                NocturneLogger.Info("EmbyClient", $"Connected to {info?.ServerName} (v{info?.Version}) without /emby");
-                return info;
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+                using var req = CreateStandaloneRequest(HttpMethod.Get, p);
+                var resp = await _standalone.SendAsync(req, cts.Token);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var info = await resp.Content.ReadFromJsonAsync<EmbyServerInfo>();
+                    if (info != null)
+                    {
+                        NocturneLogger.Info("EmbyClient", $"Connected to {info.ServerName} (v{info.Version}) at {p}");
+                        return info;
+                    }
+                }
             }
-        }
-        catch (Exception ex)
-        {
-            NocturneLogger.Warn("EmbyClient", $"{cleanUrl}/System/Info/Public check failed: {ex.Message}");
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("EmbyClient", $"{p} check failed: {ex.Message}");
+            }
         }
 
         return null;
@@ -210,34 +229,31 @@ public class EmbyClient
     public async Task<List<PublicUser>> GetPublicUsersAsync(string url)
     {
         var cleanUrl = NormalizeServerUrl(url);
-        Configure(cleanUrl);
+        if (string.IsNullOrWhiteSpace(cleanUrl)) return new List<PublicUser>();
 
-        try
+        var paths = new[]
         {
-            var resp = await _http.GetAsync(BuildUrl("/Users/Public"));
-            if (resp.IsSuccessStatusCode)
-            {
-                var users = await resp.Content.ReadFromJsonAsync<List<PublicUser>>();
-                return users ?? new List<PublicUser>();
-            }
-        }
-        catch (Exception ex)
-        {
-            NocturneLogger.Warn("EmbyClient", $"GetPublicUsers (/emby) error: {ex.Message}");
-        }
+            cleanUrl.EndsWith("/emby", StringComparison.OrdinalIgnoreCase) ? $"{cleanUrl}/Users/Public" : $"{cleanUrl}/emby/Users/Public",
+            $"{cleanUrl}/Users/Public"
+        };
 
-        try
+        foreach (var p in paths)
         {
-            var resp = await _http.GetAsync($"{cleanUrl}/Users/Public");
-            if (resp.IsSuccessStatusCode)
+            try
             {
-                var users = await resp.Content.ReadFromJsonAsync<List<PublicUser>>();
-                return users ?? new List<PublicUser>();
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+                using var req = CreateStandaloneRequest(HttpMethod.Get, p);
+                var resp = await _standalone.SendAsync(req, cts.Token);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var users = await resp.Content.ReadFromJsonAsync<List<PublicUser>>();
+                    if (users != null) return users;
+                }
             }
-        }
-        catch (Exception ex)
-        {
-            NocturneLogger.Warn("EmbyClient", $"GetPublicUsers (root) error: {ex.Message}");
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("EmbyClient", $"{p} error: {ex.Message}");
+            }
         }
 
         return new List<PublicUser>();
@@ -246,14 +262,12 @@ public class EmbyClient
     public async Task<AuthResult?> AuthenticateAsync(string url, string username, string password)
     {
         var normUrl = NormalizeServerUrl(url);
-        Configure(normUrl);
-
         var hasPassword = !string.IsNullOrEmpty(password);
         NocturneLogger.Info("EmbyClient", $"Attempting auth for user '{username}' at {normUrl} (hasPassword: {hasPassword})...");
 
         var endpoints = new[]
         {
-            BuildUrl("/Users/AuthenticateByName"),
+            normUrl.EndsWith("/emby", StringComparison.OrdinalIgnoreCase) ? $"{normUrl}/Users/AuthenticateByName" : $"{normUrl}/emby/Users/AuthenticateByName",
             $"{normUrl}/Users/AuthenticateByName"
         };
 
@@ -268,8 +282,10 @@ public class EmbyClient
                     Pw = password ?? string.Empty
                 };
                 var json = JsonSerializer.Serialize(payload, JsonOptions);
-                using var content = new StringContent(json, Encoding.UTF8, "application/json");
-                var resp = await _http.PostAsync(targetUrl, content);
+                using var req = CreateStandaloneRequest(HttpMethod.Post, targetUrl);
+                req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                var resp = await _standalone.SendAsync(req, cts.Token);
                 if (resp.IsSuccessStatusCode)
                 {
                     var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
@@ -299,8 +315,10 @@ public class EmbyClient
                     { "Username", username },
                     { "Pw", password ?? string.Empty }
                 };
-                using var formContent = new FormUrlEncodedContent(formData);
-                var resp = await _http.PostAsync(targetUrl, formContent);
+                using var req = CreateStandaloneRequest(HttpMethod.Post, targetUrl);
+                req.Content = new FormUrlEncodedContent(formData);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                var resp = await _standalone.SendAsync(req, cts.Token);
                 if (resp.IsSuccessStatusCode)
                 {
                     var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
@@ -323,8 +341,10 @@ public class EmbyClient
                 try
                 {
                     var noPwJson = JsonSerializer.Serialize(new { Username = username }, JsonOptions);
-                    using var content = new StringContent(noPwJson, Encoding.UTF8, "application/json");
-                    var resp = await _http.PostAsync(targetUrl, content);
+                    using var req = CreateStandaloneRequest(HttpMethod.Post, targetUrl);
+                    req.Content = new StringContent(noPwJson, Encoding.UTF8, "application/json");
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                    var resp = await _standalone.SendAsync(req, cts.Token);
                     if (resp.IsSuccessStatusCode)
                     {
                         var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
@@ -345,8 +365,10 @@ public class EmbyClient
                 try
                 {
                     var formData = new Dictionary<string, string> { { "Username", username } };
-                    using var formContent = new FormUrlEncodedContent(formData);
-                    var resp = await _http.PostAsync(targetUrl, formContent);
+                    using var req = CreateStandaloneRequest(HttpMethod.Post, targetUrl);
+                    req.Content = new FormUrlEncodedContent(formData);
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                    var resp = await _standalone.SendAsync(req, cts.Token);
                     if (resp.IsSuccessStatusCode)
                     {
                         var res = await resp.Content.ReadFromJsonAsync<AuthResult>();
@@ -411,7 +433,8 @@ public class EmbyClient
         int limit = 50,
         int startIndex = 0,
         string sortBy = "SortName",
-        string sortOrder = "Ascending")
+        string sortOrder = "Ascending",
+        string? fields = null)
     {
         if (!IsAuthenticated) return new ItemsResult<EmbyItem>();
 
@@ -421,7 +444,7 @@ public class EmbyClient
         query["StartIndex"] = startIndex.ToString();
         query["SortBy"] = sortBy;
         query["SortOrder"] = sortOrder;
-        query["Fields"] = FullItemFields;
+        query["Fields"] = fields ?? LightItemFields;
 
         if (!string.IsNullOrEmpty(parentId)) query["ParentId"] = parentId;
         if (!string.IsNullOrEmpty(includeItemTypes)) query["IncludeItemTypes"] = includeItemTypes;

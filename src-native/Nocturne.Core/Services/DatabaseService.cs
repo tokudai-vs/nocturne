@@ -190,7 +190,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public List<EmbyItem> GetCachedItems(string? type = null, string? serverId = null, int limit = 50)
+    public List<EmbyItem> GetCachedItems(string? type = null, string? serverId = null, int limit = 50, string? parentId = null)
     {
         var items = new List<EmbyItem>();
         lock (_connection!)
@@ -206,6 +206,11 @@ public class DatabaseService : IDisposable
             {
                 sql += "AND server_id = $server_id ";
                 cmd.Parameters.AddWithValue("$server_id", serverId);
+            }
+            if (!string.IsNullOrEmpty(parentId))
+            {
+                sql += "AND parent_id = $parent_id ";
+                cmd.Parameters.AddWithValue("$parent_id", parentId);
             }
             sql += "ORDER BY name ASC LIMIT $limit;";
             cmd.CommandText = sql;

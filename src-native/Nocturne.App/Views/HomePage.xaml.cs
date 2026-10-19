@@ -10,6 +10,21 @@ public partial class HomePage : UserControl
     public HomePage()
     {
         InitializeComponent();
+        Loaded += async (_, _) =>
+        {
+            if (DataContext is HomeViewModel vm)
+            {
+                await vm.LoadAsync();
+            }
+        };
+    }
+
+    private async void OnRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is HomeViewModel vm)
+        {
+            await vm.LoadAsync();
+        }
     }
 
     private void OnPlayHeroClick(object sender, RoutedEventArgs e)

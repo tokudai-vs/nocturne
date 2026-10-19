@@ -34,4 +34,47 @@ public class EmbyClientTests
         Assert.DoesNotContain("\"username\"", json);
         Assert.DoesNotContain("\"pw\"", json);
     }
+
+    [Fact]
+    public void Configure_SetsUrlAndToken_PreservesIsAuthenticated()
+    {
+        var client = new EmbyClient();
+        Assert.False(client.IsAuthenticated);
+
+        client.Configure("http://emby.local:8096", "token_abc123", "user_xyz789");
+
+        Assert.True(client.IsAuthenticated);
+        Assert.Equal("token_abc123", client.Token);
+        Assert.Equal("user_xyz789", client.UserId);
+        Assert.Equal("http://emby.local:8096", client.BaseUrl);
+    }
+
+    [Fact]
+    public async Task GetServerInfoAsync_DoesNotWipeExistingTokenOrUserId()
+    {
+        var client = new EmbyClient();
+        client.Configure("http://emby.local:8096", "token_abc123", "user_xyz789");
+
+        // Attempting to query server info (even for an unreachable address) must never reset active token or userId
+        var result = await client.GetServerInfoAsync("http://192.0.2.1:8096");
+
+        Assert.True(client.IsAuthenticated);
+        Assert.Equal("token_abc123", client.Token);
+        Assert.Equal("user_xyz789", client.UserId);
+        Assert.Equal("http://emby.local:8096", client.BaseUrl);
+    }
+
+    [Fact]
+    public async Task GetPublicUsersAsync_DoesNotWipeExistingTokenOrUserId()
+    {
+        var client = new EmbyClient();
+        client.Configure("http://emby.local:8096", "token_abc123", "user_xyz789");
+
+        // Querying public users must never reset active token or userId
+        var result = await client.GetPublicUsersAsync("http://192.0.2.1:8096");
+
+        Assert.True(client.IsAuthenticated);
+        Assert.Equal("token_abc123", client.Token);
+        Assert.Equal("user_xyz789", client.UserId);
+    }
 }

@@ -115,8 +115,24 @@ public class MainViewModel : BaseViewModel
         set => SetProperty(ref _isNavigationVisible, value);
     }
 
-    public void NavigateToHome() => CurrentViewModel = HomeVM;
-    public void NavigateToLibrary() => CurrentViewModel = LibraryVM;
+    public void NavigateToHome()
+    {
+        CurrentViewModel = HomeVM;
+        if (HomeVM.ContinueWatching.Count == 0 && HomeVM.LatestMovies.Count == 0)
+        {
+            _ = HomeVM.LoadAsync();
+        }
+    }
+
+    public void NavigateToLibrary()
+    {
+        CurrentViewModel = LibraryVM;
+        if (LibraryVM.Views.Count == 0)
+        {
+            _ = LibraryVM.LoadViewsAsync();
+        }
+    }
+
     public void NavigateToSettings() => CurrentViewModel = SettingsVM;
     public void NavigateToAnalytics() => CurrentViewModel = AnalyticsVM;
 
