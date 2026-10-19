@@ -169,7 +169,8 @@ public class MpvController : IDisposable
             "--input-vo-keyboard=yes",
             "--input-cursor=yes",
             "--force-window=yes",
-            "--hwdec=auto"
+            "--hwdec=auto",
+            "--load-scripts=no"
         };
 
         if (Directory.Exists(configDir))

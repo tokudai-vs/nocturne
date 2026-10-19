@@ -82,13 +82,19 @@ public partial class MediaRow : UserControl
 
     private void OnPreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
     {
-        if (sender is ScrollViewer sv)
+        if (!e.Handled && sender is UIElement element)
         {
-            if (e.Delta < 0)
-                sv.ScrollToHorizontalOffset(sv.HorizontalOffset + 140);
-            else if (e.Delta > 0)
-                sv.ScrollToHorizontalOffset(Math.Max(0, sv.HorizontalOffset - 140));
             e.Handled = true;
+
+            var eventArg = new System.Windows.Input.MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+            {
+                RoutedEvent = UIElement.MouseWheelEvent,
+                Source = sender
+            };
+
+            var parent = System.Windows.Media.VisualTreeHelper.GetParent(element) as UIElement
+                         ?? (element as FrameworkElement)?.Parent as UIElement;
+            parent?.RaiseEvent(eventArg);
         }
     }
 

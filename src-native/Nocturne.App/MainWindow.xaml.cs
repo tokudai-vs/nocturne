@@ -11,6 +11,47 @@ public partial class MainWindow : FluentWindow
 {
     private readonly MainViewModel _viewModel;
     private PlayerOverlayWindow? _playerOverlay;
+    private bool _isFullscreen = false;
+    private WindowState _previousState = WindowState.Normal;
+    private WindowStyle _previousStyle = WindowStyle.SingleBorderWindow;
+    private ResizeMode _previousResize = ResizeMode.CanResize;
+
+    public void ToggleFullscreen()
+    {
+        if (!_isFullscreen)
+        {
+            _previousState = WindowState;
+            _previousStyle = WindowStyle;
+            _previousResize = ResizeMode;
+
+            WindowStyle = WindowStyle.None;
+            ResizeMode = ResizeMode.NoResize;
+            if (WindowState == WindowState.Maximized)
+            {
+                WindowState = WindowState.Normal;
+            }
+            WindowState = WindowState.Maximized;
+            _isFullscreen = true;
+        }
+        else
+        {
+            ExitFullscreen();
+        }
+
+        _playerOverlay?.SyncWithParent();
+    }
+
+    public void ExitFullscreen()
+    {
+        if (_isFullscreen)
+        {
+            WindowStyle = _previousStyle;
+            ResizeMode = _previousResize;
+            WindowState = _previousState;
+            _isFullscreen = false;
+            _playerOverlay?.SyncWithParent();
+        }
+    }
 
     private PlayerOverlayWindow GetOrCreatePlayerOverlay()
     {
@@ -40,6 +81,7 @@ public partial class MainWindow : FluentWindow
                     }
                     else
                     {
+                        ExitFullscreen();
                         _playerOverlay?.Hide();
                         Mouse.OverrideCursor = null;
                     }
@@ -94,7 +136,13 @@ public partial class MainWindow : FluentWindow
             {
                 if (e.Key == Key.Escape)
                 {
+                    ExitFullscreen();
                     _ = _viewModel.StopPlaybackAsync();
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.F)
+                {
+                    ToggleFullscreen();
                     e.Handled = true;
                 }
                 else if (e.Key == Key.Enter && _viewModel.IsSkipPromptVisible)

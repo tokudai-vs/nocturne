@@ -361,7 +361,8 @@
                         <Grid x:Name="CastRowGrid" MouseEnter="OnCastRowMouseEnter" MouseLeave="OnCastRowMouseLeave">
                             <ScrollViewer x:Name="CastScrollViewer"
                                           HorizontalScrollBarVisibility="Hidden"
-                                          VerticalScrollBarVisibility="Disabled">
+                                          VerticalScrollBarVisibility="Disabled"
+                                          PreviewMouseWheel="OnCastScrollViewerPreviewMouseWheel">
                                 <ItemsControl ItemsSource="{Binding People}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
@@ -373,20 +374,25 @@
                                             <!-- Pure Circular Cast Item with Name on Bottom and NO outer card box -->
                                             <StackPanel Width="96" Margin="0,0,16,0" HorizontalAlignment="Center">
                                                 <!-- Circular Avatar -->
-                                                <Border Width="80" Height="80" CornerRadius="40" ClipToBounds="True"
-                                                        Background="{DynamicResource ControlFillColorDefaultBrush}"
-                                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                                        BorderThickness="1"
-                                                        HorizontalAlignment="Center" Margin="0,0,0,10">
-                                                    <Grid>
-                                                        <Image Source="{Binding ImageUrl}" Stretch="UniformToFill" />
-                                                        <!-- Fallback Person Symbol -->
-                                                        <ui:SymbolIcon Symbol="Person24" FontSize="36"
-                                                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"
-                                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                                       Visibility="{Binding ImageUrl, Converter={StaticResource InvertNullToVisibility}}" />
-                                                    </Grid>
-                                                </Border>
+                                                <Grid Width="80" Height="80" HorizontalAlignment="Center" Margin="0,0,0,10">
+                                                    <!-- Base Circle Stroke & Background -->
+                                                    <Border CornerRadius="40"
+                                                            Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                            BorderThickness="1" />
+                                                    <!-- Fallback Person Symbol -->
+                                                    <ui:SymbolIcon Symbol="Person24" FontSize="36"
+                                                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                   Visibility="{Binding ImageUrl, Converter={StaticResource InvertNullToVisibility}}" />
+                                                    <!-- True Circular Clipped Image -->
+                                                    <Image Source="{Binding ImageUrl}" Stretch="UniformToFill" Width="80" Height="80"
+                                                           Visibility="{Binding ImageUrl, Converter={StaticResource NullToVisibility}}">
+                                                        <Image.Clip>
+                                                            <EllipseGeometry Center="40,40" RadiusX="39.5" RadiusY="39.5" />
+                                                        </Image.Clip>
+                                                    </Image>
+                                                </Grid>
 
                                                 <!-- Name on Bottom -->
                                                 <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"

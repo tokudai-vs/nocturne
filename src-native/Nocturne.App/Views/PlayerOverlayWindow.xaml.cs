@@ -146,6 +146,10 @@ public partial class PlayerOverlayWindow : Window
         _inactivityTimer.Stop();
         Mouse.OverrideCursor = null;
         Hide();
+        if (_parentWindow is MainWindow mw)
+        {
+            mw.ExitFullscreen();
+        }
         _ = _viewModel.StopPlaybackAsync();
     }
 
@@ -193,15 +197,22 @@ public partial class PlayerOverlayWindow : Window
 
     private void ToggleFullscreen()
     {
-        if (_parentWindow.WindowState == WindowState.Maximized)
+        if (_parentWindow is MainWindow mw)
         {
-            _parentWindow.WindowState = WindowState.Normal;
+            mw.ToggleFullscreen();
         }
         else
         {
-            _parentWindow.WindowState = WindowState.Maximized;
+            if (_parentWindow.WindowState == WindowState.Maximized)
+            {
+                _parentWindow.WindowState = WindowState.Normal;
+            }
+            else
+            {
+                _parentWindow.WindowState = WindowState.Maximized;
+            }
+            SyncWithParent();
         }
-        SyncWithParent();
     }
 
     private void OnSliderMouseDown(object sender, MouseButtonEventArgs e)

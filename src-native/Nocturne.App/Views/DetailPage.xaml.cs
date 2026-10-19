@@ -127,4 +127,22 @@ public partial class DetailPage : UserControl
     {
         CastScrollViewer.ScrollToHorizontalOffset(CastScrollViewer.HorizontalOffset + 350);
     }
+
+    private void OnCastScrollViewerPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!e.Handled && sender is UIElement element)
+        {
+            e.Handled = true;
+
+            var eventArg = new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+            {
+                RoutedEvent = UIElement.MouseWheelEvent,
+                Source = sender
+            };
+
+            var parent = System.Windows.Media.VisualTreeHelper.GetParent(element) as UIElement
+                         ?? (element as FrameworkElement)?.Parent as UIElement;
+            parent?.RaiseEvent(eventArg);
+        }
+    }
 }
