@@ -50,6 +50,8 @@ Nocturne v4.0 is a complete rewrite from Electron to **pure native Windows (.NET
   - Sunset Orange (`#FF8C00`)
   - Cyber Cyan (`#00B7C3`)
 - **Cinematic Shell**: Obsidian dark theme with glowing splash screen, hero rotating backdrops, and hover animations.
+- **Plex & Netflix Detail Presentation**: Smooth vertical opacity gradient fade into theme background, flowing typography, official content ratings, resolution/codec badges, genre pills, horizontal cast carousel, and full support for both Dark and Light themes.
+- **TV Episodes with Played Tracking**: 16:9 episode thumbnails with watched checkmark badges, in-progress resume progress bars, and 1-click watched/unwatched toggles.
 - **Right-Click Context Menus**: Play, mark as watched/unwatched, and toggle favorites directly from cards.
 
 ### :tv: Video Playback Engine (mpv)
