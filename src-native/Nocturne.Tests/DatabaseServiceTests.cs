@@ -115,4 +115,48 @@ public class DatabaseServiceTests : IDisposable
         var cpAfterReset = _db.GetSyncCheckpoint("srvX", "lib_movies");
         Assert.Null(cpAfterReset);
     }
+
+    [Fact]
+    public void SaveAndGetMediaStreamPreference_PersistsAndRestoresTracks()
+    {
+        _db.SaveMediaStreamPreference("series:show_123", audioTrackId: 2, audioLang: "jpn", subtitleTrackId: 1, subtitleLang: "eng");
+
+        var pref = _db.GetMediaStreamPreference("series:show_123");
+        Assert.NotNull(pref);
+        Assert.Equal(2, pref.Value.AudioTrackId);
+        Assert.Equal("jpn", pref.Value.AudioLanguage);
+        Assert.Equal(1, pref.Value.SubtitleTrackId);
+        Assert.Equal("eng", pref.Value.SubtitleLanguage);
+
+        // Update with subtitles off
+        _db.SaveMediaStreamPreference("series:show_123", audioTrackId: null, audioLang: null, subtitleTrackId: 0, subtitleLang: "off");
+        var updated = _db.GetMediaStreamPreference("series:show_123");
+        Assert.NotNull(updated);
+        Assert.Equal(2, updated.Value.AudioTrackId); // Preserved
+        Assert.Equal(0, updated.Value.SubtitleTrackId); // Updated to off
+        Assert.Equal("off", updated.Value.SubtitleLanguage);
+    }
+
+    [Fact]
+    public void UpdatePlaybackProgress_UpdatesContinueWatchingAndCachedItems()
+    {
+        var item = new EmbyItem
+        {
+            Id = "ep_456",
+            Name = "Episode 456",
+            ServerId = "srv_1",
+            UserData = new UserItemData { PlaybackPositionTicks = 0, Played = false }
+        };
+
+        _db.SaveContinueWatchingCache(new List<EmbyItem> { item });
+
+        // Update progress to 15 seconds (150,000,000 ticks)
+        _db.UpdatePlaybackProgress("ep_456", "srv_1", 150_000_000);
+
+        var restored = _db.GetCachedContinueWatching();
+        Assert.Single(restored);
+        Assert.NotNull(restored[0].UserData);
+        Assert.Equal(150_000_000, restored[0].UserData!.PlaybackPositionTicks);
+        Assert.False(restored[0].UserData!.Played);
+    }
 }

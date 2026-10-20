@@ -42,7 +42,9 @@ public class IntroDbService
     private List<IntroSegment> _currentSegments = new();
     private double _lastPosition = 0;
 
+    public IReadOnlyList<IntroSegment> CurrentSegments => _currentSegments;
     public event Action<SkipPromptEvent?>? PromptChanged;
+    public event Action? SegmentsLoaded;
 
     public IntroDbService(SettingsService settings)
     {
@@ -70,6 +72,7 @@ public class IntroDbService
                 EndSec = s.EndSec,
                 HasTriggered = false
             }).ToList();
+            SegmentsLoaded?.Invoke();
             return;
         }
 
@@ -91,6 +94,7 @@ public class IntroDbService
                         HasTriggered = false
                     }).ToList();
                     NocturneLogger.Info("TheIntroDB", $"Loaded {_currentSegments.Count} skip segments for {imdbId} S{seasonNumber}E{episodeNumber}");
+                    SegmentsLoaded?.Invoke();
                 }
             }
         }
@@ -174,5 +178,6 @@ public class IntroDbService
     {
         _currentSegments.Clear();
         PromptChanged?.Invoke(null);
+        SegmentsLoaded?.Invoke();
     }
 }

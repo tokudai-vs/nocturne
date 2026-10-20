@@ -81,11 +81,13 @@
                                        HorizontalAlignment="Center" VerticalAlignment="Center" Margin="2,0,0,0" />
                     </Border>
 
-                    <!-- Resumable Progress Bar at the Bottom (Inset from edges so border remains crisp) -->
-                    <ProgressBar x:Name="ProgressBar" Height="4" VerticalAlignment="Bottom"
-                                 Margin="8,0,8,6"
-                                 Foreground="{DynamicResource NocturneAmberBrush}"
-                                 Background="#50000000" BorderThickness="0" />
+                    <!-- Slim Sleek Watched Progress Bar across bottom edge (Netflix / Emby style) -->
+                    <Grid x:Name="ProgressTrack" Height="3.5" VerticalAlignment="Bottom" Background="#80000000" Visibility="Collapsed">
+                        <ProgressBar x:Name="ProgressBar" Height="3.5" VerticalAlignment="Stretch" HorizontalAlignment="Stretch"
+                                     Minimum="0" Maximum="100"
+                                     Foreground="{DynamicResource NocturneAmberBrush}"
+                                     Background="Transparent" BorderThickness="0" />
+                    </Grid>
                 </Grid>
             </Border>
 

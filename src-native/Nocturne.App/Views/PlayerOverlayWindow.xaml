@@ -9,11 +9,27 @@
         BorderBrush="Transparent"
         ShowInTaskbar="False"
         Topmost="False"
+        FocusVisualStyle="{x:Null}"
         Focusable="True">
 
     <Window.Resources>
+        <!-- Suppress WPF default dotted focus outline box on all controls in player -->
+        <Style TargetType="Button">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Focusable" Value="False" />
+        </Style>
+        <Style TargetType="Slider">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Focusable" Value="False" />
+        </Style>
+        <Style TargetType="Thumb">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Focusable" Value="False" />
+        </Style>
+
         <!-- Custom High-Contrast Video Player Timeline Slider Style (Translucent Groove, Amber Progress) -->
         <Style x:Key="PlayerSliderStyle" TargetType="Slider">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Height" Value="32" />
             <Setter Property="IsMoveToPointEnabled" Value="True" />
@@ -87,6 +103,7 @@
 
         <!-- Custom Volume Slider Style (Filled Amber Track, Smooth Seeking) -->
         <Style x:Key="PlayerVolumeSliderStyle" TargetType="Slider">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Height" Value="24" />
             <Setter Property="IsMoveToPointEnabled" Value="True" />
@@ -152,6 +169,7 @@
 
         <!-- Player Circular Action Button Style -->
         <Style x:Key="PlayerControlButtonStyle" TargetType="Button">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Width" Value="38" />
             <Setter Property="Height" Value="38" />
             <Setter Property="Background" Value="Transparent" />
@@ -413,17 +431,23 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <Slider x:Name="TimelineSlider" Grid.Column="0"
-                            Style="{StaticResource PlayerSliderStyle}"
-                            Minimum="0"
-                            Maximum="{Binding TotalDurationSeconds}"
-                            Value="{Binding CurrentPlaybackSeconds, Mode=TwoWay}"
-                            PreviewMouseDown="OnSliderMouseDown"
-                            PreviewMouseUp="OnSliderMouseUp"
-                            MouseMove="OnTimelineSliderMouseMove"
-                            MouseLeave="OnTimelineSliderMouseLeave"
-                            VerticalAlignment="Center"
-                            Cursor="Hand" />
+                    <Grid Grid.Column="0" VerticalAlignment="Center">
+                        <!-- Canvas for rendering media chapter markers & TheIntroDB segments as distinct chapter blocks -->
+                        <Canvas x:Name="ChapterMarksCanvas" Height="6" VerticalAlignment="Center" Margin="0" IsHitTestVisible="False" />
+
+                        <Slider x:Name="TimelineSlider"
+                                Style="{StaticResource PlayerSliderStyle}"
+                                Minimum="0"
+                                Maximum="{Binding TotalDurationSeconds}"
+                                Value="{Binding CurrentPlaybackSeconds, Mode=TwoWay}"
+                                PreviewMouseDown="OnSliderMouseDown"
+                                PreviewMouseUp="OnSliderMouseUp"
+                                MouseMove="OnTimelineSliderMouseMove"
+                                MouseLeave="OnTimelineSliderMouseLeave"
+                                SizeChanged="OnTimelineSliderSizeChanged"
+                                VerticalAlignment="Center"
+                                Cursor="Hand" />
+                    </Grid>
 
                     <TextBlock Grid.Column="1" Text="{Binding TimeString}" FontSize="13" FontWeight="SemiBold"
                                Foreground="#E0E0E0" Margin="14,0,0,0" VerticalAlignment="Center" />

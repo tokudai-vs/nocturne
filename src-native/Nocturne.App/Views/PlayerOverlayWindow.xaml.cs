@@ -13,6 +13,7 @@ using WpfButton = System.Windows.Controls.Button;
 using WpfTextBlock = System.Windows.Controls.TextBlock;
 using Nocturne.App.ViewModels;
 using Nocturne.Core.Models;
+using Nocturne.Core.Services;
 using Nocturne.Core.Utils;
 
 namespace Nocturne.App.Views;
@@ -66,6 +67,11 @@ public partial class PlayerOverlayWindow : Window
 
         KeyDown += OnWindowKeyDown;
 
+        _viewModel.ChaptersUpdated += () =>
+        {
+            Dispatcher.Invoke(() => RenderChapterMarkers());
+        };
+
         _viewModel.PropertyChanged += (s, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.Volume))
@@ -82,6 +88,7 @@ public partial class PlayerOverlayWindow : Window
             else if (e.PropertyName == nameof(MainViewModel.TotalDurationSeconds))
             {
                 TimelineSlider.Maximum = Math.Max(1, _viewModel.TotalDurationSeconds);
+                RenderChapterMarkers();
             }
         };
     }
@@ -171,6 +178,7 @@ public partial class PlayerOverlayWindow : Window
         {
             TimelineSlider.Value = _viewModel.CurrentPlaybackSeconds;
         }
+        RenderChapterMarkers();
 
         if (_viewModel.IsPlayerActive && !IsVisible)
         {
@@ -215,6 +223,8 @@ public partial class PlayerOverlayWindow : Window
     {
         TopControlsBar.Opacity = 1;
         BottomControlsBar.Opacity = 1;
+        TopControlsBar.IsHitTestVisible = true;
+        BottomControlsBar.IsHitTestVisible = true;
         Mouse.OverrideCursor = null;
     }
 
@@ -224,6 +234,9 @@ public partial class PlayerOverlayWindow : Window
         TrackSelectorFlyout.Visibility = Visibility.Collapsed;
         TopControlsBar.Opacity = 0;
         BottomControlsBar.Opacity = 0;
+        TopControlsBar.IsHitTestVisible = false;
+        BottomControlsBar.IsHitTestVisible = false;
+        Keyboard.ClearFocus();
         Mouse.OverrideCursor = Cursors.None;
     }
 
@@ -628,6 +641,80 @@ public partial class PlayerOverlayWindow : Window
         }
     }
 
+    private void OnTimelineSliderSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        RenderChapterMarkers();
+    }
+
+    private void RenderChapterMarkers()
+    {
+        if (ChapterMarksCanvas == null || TimelineSlider == null) return;
+        ChapterMarksCanvas.Children.Clear();
+
+        double totalSec = _viewModel.TotalDurationSeconds;
+        double sliderWidth = TimelineSlider.ActualWidth;
+        if (totalSec <= 0 || sliderWidth <= 10) return;
+
+        // 1. Render TheIntroDB segments as distinct colored chapter blocks
+        var introDb = _viewModel.IntroDb;
+        if (introDb != null)
+        {
+            var segments = introDb.CurrentSegments;
+            foreach (var seg in segments)
+            {
+                if (seg.EndSec <= seg.StartSec || seg.StartSec >= totalSec) continue;
+
+                double leftRatio = Math.Clamp(seg.StartSec / totalSec, 0.0, 1.0);
+                double rightRatio = Math.Clamp(seg.EndSec / totalSec, 0.0, 1.0);
+                double left = leftRatio * sliderWidth;
+                double segWidth = Math.Max(3.0, (rightRatio - leftRatio) * sliderWidth);
+
+                Color segColor = seg.Type switch
+                {
+                    "recap" => Color.FromArgb(0xDD, 0x4F, 0xC3, 0xF7), // Light Blue
+                    "outro" => Color.FromArgb(0xDD, 0xAB, 0x47, 0xBC), // Purple
+                    _ => Color.FromArgb(0xEE, 0xE5, 0xA0, 0x0D)        // Glowing Amber for Intro
+                };
+
+                var segBorder = new Border
+                {
+                    Width = segWidth,
+                    Height = 6,
+                    Background = new SolidColorBrush(segColor),
+                    CornerRadius = new CornerRadius(1.5),
+                    ToolTip = $"{char.ToUpper(seg.Type[0]) + seg.Type.Substring(1)} ({TimeSpan.FromSeconds(seg.StartSec):mm\\:ss} - {TimeSpan.FromSeconds(seg.EndSec):mm\\:ss})"
+                };
+                Canvas.SetLeft(segBorder, left);
+                Canvas.SetTop(segBorder, 0);
+                ChapterMarksCanvas.Children.Add(segBorder);
+            }
+        }
+
+        // 2. Render item chapters (Emby ChapterInfo) as distinct divider ticks
+        var chapters = _viewModel.CurrentItem?.Chapters;
+        if (chapters != null && chapters.Count > 1)
+        {
+            for (int i = 0; i < chapters.Count; i++)
+            {
+                var ch = chapters[i];
+                double chSec = (double)ch.StartPositionTicks / 10_000_000.0;
+                if (chSec <= 0 || chSec >= totalSec) continue;
+
+                double x = (chSec / totalSec) * sliderWidth;
+                var tick = new Border
+                {
+                    Width = 2,
+                    Height = 6,
+                    Background = new SolidColorBrush(Color.FromArgb(0xE0, 0x11, 0x11, 0x16)),
+                    CornerRadius = new CornerRadius(1)
+                };
+                Canvas.SetLeft(tick, Math.Max(0, x - 1));
+                Canvas.SetTop(tick, 0);
+                ChapterMarksCanvas.Children.Add(tick);
+            }
+        }
+    }
+
     private void UpdateThumbnailPopup(double targetSeconds, double mouseX)
     {
         if (TimelineThumbnailPopup == null) return;
@@ -641,10 +728,29 @@ public partial class PlayerOverlayWindow : Window
         TimelineThumbnailPopup.Margin = new Thickness(left, 0, 0, 94);
         TimelineThumbnailPopup.Visibility = Visibility.Visible;
 
-        // Find chapter
+        // Find chapter or intro segment
         var item = _viewModel.CurrentItem;
         string? imageUrl = null;
-        if (item?.Chapters != null && item.Chapters.Count > 0)
+
+        var introDb = _viewModel.IntroDb;
+        IntroSegment? matchedIntro = null;
+        if (introDb != null)
+        {
+            matchedIntro = introDb.CurrentSegments.FirstOrDefault(s => targetSeconds >= s.StartSec && targetSeconds < s.EndSec);
+        }
+
+        if (matchedIntro != null)
+        {
+            var label = matchedIntro.Type switch
+            {
+                "recap" => "Recap",
+                "outro" => "Credits / Next Episode",
+                _ => "Intro"
+            };
+            ThumbnailChapterText.Text = label;
+            ThumbnailChapterText.Visibility = Visibility.Visible;
+        }
+        else if (item?.Chapters != null && item.Chapters.Count > 0)
         {
             ChapterInfo? matchedChapter = null;
             int matchedIdx = -1;

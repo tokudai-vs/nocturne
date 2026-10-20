@@ -55,6 +55,8 @@ public class MainViewModel : BaseViewModel
     public AnalyticsViewModel AnalyticsVM { get; }
     public OnboardingViewModel OnboardingVM { get; }
 
+    public IntroDbService IntroDb => _introDb;
+    public event Action? ChaptersUpdated;
     public event Func<EmbyItem, long, Task>? RequestEmbeddedPlayback;
 
     public MainViewModel(
@@ -157,6 +159,11 @@ public class MainViewModel : BaseViewModel
                     IsSkipPromptVisible = false;
                 }
             });
+        };
+
+        _introDb.SegmentsLoaded += () =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() => ChaptersUpdated?.Invoke());
         };
 
         // MPV position & EOF handlers
@@ -517,11 +524,25 @@ public class MainViewModel : BaseViewModel
         await _mpv.CycleAudio();
     }
 
+    public string GetMediaKey(EmbyItem item)
+    {
+        if (item.Type == "Episode" && !string.IsNullOrEmpty(item.SeriesId))
+            return $"series:{item.SeriesId}";
+        return $"item:{item.Id}";
+    }
+
     public async Task SetSubtitleTrackAsync(int trackId)
     {
         _currentSubtitleTrackId = trackId;
         OnPropertyChanged(nameof(CurrentSubtitleTrackId));
         await _mpv.SetSubtitleTrack(trackId);
+
+        if (_currentPlayingItem != null)
+        {
+            var key = GetMediaKey(_currentPlayingItem);
+            var stream = trackId > 0 ? AvailableSubtitleStreams.ElementAtOrDefault(trackId - 1) : null;
+            _db.SaveMediaStreamPreference(key, null, null, trackId, stream?.Language ?? (trackId == 0 ? "off" : null));
+        }
     }
 
     public async Task SetAudioTrackAsync(int trackId)
@@ -529,6 +550,13 @@ public class MainViewModel : BaseViewModel
         _currentAudioTrackId = trackId;
         OnPropertyChanged(nameof(CurrentAudioTrackId));
         await _mpv.SetAudioTrack(trackId);
+
+        if (_currentPlayingItem != null)
+        {
+            var key = GetMediaKey(_currentPlayingItem);
+            var stream = AvailableAudioStreams.ElementAtOrDefault(trackId - 1);
+            _db.SaveMediaStreamPreference(key, trackId, stream?.Language, null, null);
+        }
     }
 
     public void NavigateToHome()
@@ -641,6 +669,11 @@ public class MainViewModel : BaseViewModel
 
     public async Task StartPlaybackAsync(EmbyItem item, long startTicks = 0)
     {
+        if (startTicks <= 0 && item.UserData != null && item.UserData.PlaybackPositionTicks > 0)
+        {
+            startTicks = item.UserData.PlaybackPositionTicks;
+        }
+
         _currentPlayingItem = item;
         _nextEpisodeItem = null;
         _prevEpisodeItem = null;
@@ -758,6 +791,57 @@ public class MainViewModel : BaseViewModel
             subBorder: _settings.Current.SubtitleBorder,
             subBg: _settings.Current.SubtitleBackground);
 
+        // Restore user track preferences for series / movie
+        var mediaKey = GetMediaKey(item);
+        var pref = _db.GetMediaStreamPreference(mediaKey);
+        if (pref != null)
+        {
+            // Apply audio track preference
+            var audioStreams = AvailableAudioStreams;
+            int matchedAudio = -1;
+            if (!string.IsNullOrEmpty(pref.Value.AudioLanguage))
+            {
+                matchedAudio = audioStreams.FindIndex(s => string.Equals(s.Language, pref.Value.AudioLanguage, StringComparison.OrdinalIgnoreCase));
+            }
+            if (matchedAudio < 0 && pref.Value.AudioTrackId.HasValue && pref.Value.AudioTrackId.Value > 0 && pref.Value.AudioTrackId.Value <= audioStreams.Count)
+            {
+                matchedAudio = pref.Value.AudioTrackId.Value - 1;
+            }
+            if (matchedAudio >= 0)
+            {
+                _currentAudioTrackId = matchedAudio + 1;
+                OnPropertyChanged(nameof(CurrentAudioTrackId));
+                _ = _mpv.SetAudioTrack(_currentAudioTrackId.Value);
+            }
+
+            // Apply subtitle track preference
+            var subStreams = AvailableSubtitleStreams;
+            if (pref.Value.SubtitleTrackId == 0 || pref.Value.SubtitleLanguage == "off")
+            {
+                _currentSubtitleTrackId = 0;
+                OnPropertyChanged(nameof(CurrentSubtitleTrackId));
+                _ = _mpv.SetSubtitleTrack(0);
+            }
+            else
+            {
+                int matchedSub = -1;
+                if (!string.IsNullOrEmpty(pref.Value.SubtitleLanguage))
+                {
+                    matchedSub = subStreams.FindIndex(s => string.Equals(s.Language, pref.Value.SubtitleLanguage, StringComparison.OrdinalIgnoreCase));
+                }
+                if (matchedSub < 0 && pref.Value.SubtitleTrackId.HasValue && pref.Value.SubtitleTrackId.Value > 0 && pref.Value.SubtitleTrackId.Value <= subStreams.Count)
+                {
+                    matchedSub = pref.Value.SubtitleTrackId.Value - 1;
+                }
+                if (matchedSub >= 0)
+                {
+                    _currentSubtitleTrackId = matchedSub + 1;
+                    OnPropertyChanged(nameof(CurrentSubtitleTrackId));
+                    _ = _mpv.SetSubtitleTrack(_currentSubtitleTrackId.Value);
+                }
+            }
+        }
+
         // Fetch full chapters if not already populated for thumbnail preview scrub
         if (item.Chapters == null || item.Chapters.Count == 0)
         {
@@ -769,10 +853,15 @@ public class MainViewModel : BaseViewModel
                     if (fullItem?.Chapters != null && fullItem.Chapters.Count > 0)
                     {
                         item.Chapters = fullItem.Chapters;
+                        Application.Current?.Dispatcher?.Invoke(() => ChaptersUpdated?.Invoke());
                     }
                 }
                 catch { }
             });
+        }
+        else
+        {
+            Application.Current?.Dispatcher?.Invoke(() => ChaptersUpdated?.Invoke());
         }
 
         await client.ReportPlaybackStartAsync(item.Id, mediaSourceId, startTicks);
@@ -781,8 +870,40 @@ public class MainViewModel : BaseViewModel
 
         if (item.Type == "Episode")
         {
-            var imdbId = item.SeriesImdbId ?? item.ImdbId ?? DetailVM.Item?.ImdbId ?? string.Empty;
-            _ = _introDb.LoadSegmentsForEpisodeAsync(imdbId, item.ParentIndexNumber ?? 1, item.IndexNumber ?? 1);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var imdbId = item.SeriesImdbId ?? string.Empty;
+                    if (string.IsNullOrEmpty(imdbId) && !string.IsNullOrEmpty(item.SeriesId))
+                    {
+                        var cachedSeries = _db.GetCachedItem(item.SeriesId, item.ServerId ?? _settings.Current.ActiveServerId);
+                        imdbId = cachedSeries?.ImdbId ?? string.Empty;
+                        if (string.IsNullOrEmpty(imdbId))
+                        {
+                            var seriesItem = await client.GetItemAsync(item.SeriesId);
+                            imdbId = seriesItem?.ImdbId ?? string.Empty;
+                        }
+                    }
+                    if (string.IsNullOrEmpty(imdbId))
+                    {
+                        imdbId = item.ImdbId;
+                    }
+                    if (string.IsNullOrEmpty(imdbId))
+                    {
+                        imdbId = DetailVM.Item?.ImdbId ?? string.Empty;
+                    }
+
+                    if (!string.IsNullOrEmpty(imdbId))
+                    {
+                        await _introDb.LoadSegmentsForEpisodeAsync(imdbId, item.ParentIndexNumber ?? 1, item.IndexNumber ?? 1);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    NocturneLogger.Warn("MainViewModel", $"Failed to resolve Series IMDb ID: {ex.Message}");
+                }
+            });
         }
         else
         {
@@ -881,6 +1002,15 @@ public class MainViewModel : BaseViewModel
                 item.UserData.Played = true;
                 item.UserData.PlaybackPositionTicks = 0;
             }
+            _db.RemoveFromContinueWatchingCache(item.Id);
+            _db.ClearResumeProgress(item.Id);
+        }
+        else if (_lastPlaybackSeconds > 5)
+        {
+            item.UserData ??= new UserItemData();
+            item.UserData.PlaybackPositionTicks = positionTicks;
+            item.UserData.Played = false;
+            _db.UpdatePlaybackProgress(item.Id, item.ServerId ?? string.Empty, positionTicks);
         }
 
         try

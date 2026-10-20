@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
@@ -16,7 +17,9 @@ public class MpvController : IDisposable
     private bool _isReady;
     private int _reqId;
     private CancellationTokenSource? _readCts;
+    private CancellationTokenSource? _pollCts;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
 
     public event Action? PlaybackStarted;
     public event Action? PlaybackEnded;
@@ -185,6 +188,7 @@ public class MpvController : IDisposable
         {
             $"--wid={(long)hwnd}",
             $"--input-ipc-server=\\\\.\\pipe\\{_pipeName}",
+            "--idle=yes",
             "--osc=no",
             "--really-quiet",
             "--keep-open=yes",
@@ -201,6 +205,12 @@ public class MpvController : IDisposable
             "--sub-visibility=yes",
             $"--sub-border-size={borderSize.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
         };
+
+        if (startPositionTicks > 0)
+        {
+            var startSec = (double)startPositionTicks / 10_000_000.0;
+            args.Add($"--start={startSec.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}");
+        }
 
         if (!string.IsNullOrEmpty(subFont))
             args.Add($"--sub-font=\"{subFont}\"");
@@ -252,19 +262,23 @@ public class MpvController : IDisposable
             if (startPositionTicks > 0)
             {
                 var startSeconds = (double)startPositionTicks / 10_000_000.0;
-                await SendCommandAsync(new object[] { "set_property", "start", startSeconds });
+                await SendCommandAsync(new object[] { "set_property", "start", startSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture) });
             }
             else
             {
-                await SendCommandAsync(new object[] { "set_property", "start", 0 });
+                await SendCommandAsync(new object[] { "set_property", "start", "none" });
             }
 
             await SendCommandAsync(new object[] { "set_property", "force-media-title", title });
             await SendCommandAsync(new object[] { "loadfile", url, "replace" });
 
             IsPlaying = true;
+            try { _pollCts?.Cancel(); } catch { }
+            _pollCts = new CancellationTokenSource();
+            _ = Task.Run(() => PositionPollLoopAsync(_pollCts.Token));
+
             PlaybackStarted?.Invoke();
-            NocturneLogger.Info("MpvController", $"Embedded playback started: {title} ({url}) in HWND {hwnd}");
+            NocturneLogger.Info("MpvController", $"Embedded playback started: {title} ({url}) in HWND {hwnd} at tick {startPositionTicks}");
         }
         catch (Exception ex)
         {
@@ -283,11 +297,11 @@ public class MpvController : IDisposable
         if (startPositionTicks > 0)
         {
             var startSeconds = (double)startPositionTicks / 10_000_000.0;
-            await SendCommandAsync(new object[] { "set_property", "start", startSeconds });
+            await SendCommandAsync(new object[] { "set_property", "start", startSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture) });
         }
         else
         {
-            await SendCommandAsync(new object[] { "set_property", "start", 0 });
+            await SendCommandAsync(new object[] { "set_property", "start", "none" });
         }
 
         await SendCommandAsync(new object[] { "set_property", "force-media-title", title });
@@ -297,8 +311,12 @@ public class MpvController : IDisposable
         await SendCommandAsync(new object[] { "loadfile", url, "replace" });
 
         IsPlaying = true;
+        try { _pollCts?.Cancel(); } catch { }
+        _pollCts = new CancellationTokenSource();
+        _ = Task.Run(() => PositionPollLoopAsync(_pollCts.Token));
+
         PlaybackStarted?.Invoke();
-        NocturneLogger.Info("MpvController", $"Playback started: {title} ({url})");
+        NocturneLogger.Info("MpvController", $"Playback started: {title} ({url}) at tick {startPositionTicks}");
     }
 
     public async Task PauseAsync()
@@ -326,6 +344,15 @@ public class MpvController : IDisposable
     public async Task StopAsync(bool notifyEnded = true)
     {
         var wasPlaying = IsPlaying;
+        try { _pollCts?.Cancel(); } catch { }
+        _pollCts = null;
+
+        foreach (var kv in _pendingRequests)
+        {
+            kv.Value.TrySetCanceled();
+        }
+        _pendingRequests.Clear();
+
         if (_writer != null && _isReady)
         {
             try
@@ -562,6 +589,22 @@ public class MpvController : IDisposable
                         PlaybackEnded?.Invoke();
                     }
                 }
+                if (root.TryGetProperty("request_id", out var reqIdProp))
+                {
+                    var reqId = reqIdProp.GetInt32();
+                    if (_pendingRequests.TryRemove(reqId, out var tcs))
+                    {
+                        var isSuccess = root.TryGetProperty("error", out var err) && err.GetString() == "success";
+                        if (isSuccess && root.TryGetProperty("data", out var data))
+                        {
+                            tcs.TrySetResult(data.Clone());
+                        }
+                        else
+                        {
+                            tcs.TrySetResult(default);
+                        }
+                    }
+                }
                 else if (root.TryGetProperty("error", out var errProp))
                 {
                     var err = errProp.GetString();
@@ -585,6 +628,139 @@ public class MpvController : IDisposable
         }
     }
 
+    public async Task<T?> GetPropertyAsync<T>(string name, int timeoutMs = 1500)
+    {
+        if (_writer == null || !_isReady) return default;
+        var reqId = Interlocked.Increment(ref _reqId);
+        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingRequests[reqId] = tcs;
+
+        var req = new
+        {
+            command = new object[] { "get_property", name },
+            request_id = reqId
+        };
+        var json = JsonSerializer.Serialize(req);
+
+        try
+        {
+            if (!await _writeLock.WaitAsync(timeoutMs))
+            {
+                _pendingRequests.TryRemove(reqId, out _);
+                return default;
+            }
+        }
+        catch
+        {
+            _pendingRequests.TryRemove(reqId, out _);
+            return default;
+        }
+
+        try
+        {
+            if (_writer != null && _isReady)
+            {
+                await _writer.WriteLineAsync(json);
+            }
+            else
+            {
+                _pendingRequests.TryRemove(reqId, out _);
+                return default;
+            }
+        }
+        catch (Exception ex)
+        {
+            _pendingRequests.TryRemove(reqId, out _);
+            NocturneLogger.Warn("MpvController", $"GetProperty '{name}' send error: {ex.Message}");
+            return default;
+        }
+        finally
+        {
+            try { _writeLock.Release(); } catch { }
+        }
+
+        using var cts = new CancellationTokenSource(timeoutMs);
+        using (cts.Token.Register(() => tcs.TrySetCanceled()))
+        {
+            try
+            {
+                var element = await tcs.Task;
+                if (element.ValueKind == JsonValueKind.Undefined || element.ValueKind == JsonValueKind.Null)
+                {
+                    return default;
+                }
+
+                if (typeof(T) == typeof(double) || typeof(T) == typeof(double?))
+                {
+                    if (element.ValueKind == JsonValueKind.Number)
+                    {
+                        return (T)(object)element.GetDouble();
+                    }
+                }
+                else if (typeof(T) == typeof(int) || typeof(T) == typeof(int?))
+                {
+                    if (element.ValueKind == JsonValueKind.Number)
+                    {
+                        return (T)(object)element.GetInt32();
+                    }
+                }
+                else if (typeof(T) == typeof(bool) || typeof(T) == typeof(bool?))
+                {
+                    if (element.ValueKind == JsonValueKind.True) return (T)(object)true;
+                    if (element.ValueKind == JsonValueKind.False) return (T)(object)false;
+                }
+                else if (typeof(T) == typeof(string))
+                {
+                    return (T)(object)(element.GetString() ?? string.Empty);
+                }
+
+                return JsonSerializer.Deserialize<T>(element.GetRawText());
+            }
+            catch
+            {
+                return default;
+            }
+            finally
+            {
+                _pendingRequests.TryRemove(reqId, out _);
+            }
+        }
+    }
+
+    private async Task PositionPollLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && IsPlaying)
+        {
+            try
+            {
+                await Task.Delay(250, ct);
+                if (!IsPlaying || ct.IsCancellationRequested) break;
+
+                var pos = await GetPropertyAsync<double?>("time-pos", 400);
+                if (pos.HasValue && pos.Value >= 0)
+                {
+                    CurrentPositionSeconds = pos.Value;
+                    PositionChanged?.Invoke(pos.Value);
+                }
+
+                if (DurationSeconds <= 0)
+                {
+                    var dur = await GetPropertyAsync<double?>("duration", 400);
+                    if (dur.HasValue && dur.Value > 0)
+                    {
+                        DurationSeconds = dur.Value;
+                        DurationChanged?.Invoke(dur.Value);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("MpvController", $"Position poll error: {ex.Message}");
+            }
+        }
+    }
+
     private static string FindMpvExecutable()
     {
         var baseDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -599,7 +775,11 @@ public class MpvController : IDisposable
 
     public void Dispose()
     {
+        try { _pollCts?.Cancel(); } catch { }
+        _pollCts = null;
         try { _readCts?.Cancel(); } catch { }
+        foreach (var kv in _pendingRequests) kv.Value.TrySetCanceled();
+        _pendingRequests.Clear();
         try { _writer?.Dispose(); } catch { }
         _writer = null;
         try { _reader?.Dispose(); } catch { }

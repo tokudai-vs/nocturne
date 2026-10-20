@@ -34,6 +34,7 @@
 
     <!-- Amber Accent Primary Button Style -->
     <Style x:Key="AmberPrimaryButton" TargetType="Button">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
         <Setter Property="Foreground" Value="#111111" />
         <Setter Property="FontWeight" Value="SemiBold" />

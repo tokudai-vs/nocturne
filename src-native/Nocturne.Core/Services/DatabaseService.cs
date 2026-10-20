@@ -150,6 +150,15 @@ public class DatabaseService : IDisposable
                     updated_at INTEGER NOT NULL,
                     PRIMARY KEY (id, server_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS media_stream_preferences (
+                    media_key TEXT PRIMARY KEY,
+                    audio_track_id INTEGER,
+                    audio_language TEXT,
+                    subtitle_track_id INTEGER,
+                    subtitle_language TEXT,
+                    updated_at INTEGER NOT NULL
+                );
             ";
             cmd.ExecuteNonQuery();
 
@@ -1541,6 +1550,79 @@ public class DatabaseService : IDisposable
         }
     }
 
+    public void UpdatePlaybackProgress(string itemId, string serverId, long positionTicks)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                // 1. Update continue_watching_cache
+                using (var cmd = _connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT json_data FROM continue_watching_cache WHERE id = $id;";
+                    cmd.Parameters.AddWithValue("$id", itemId);
+                    var existing = cmd.ExecuteScalar() as string;
+                    if (!string.IsNullOrEmpty(existing))
+                    {
+                        var it = JsonSerializer.Deserialize<EmbyItem>(existing);
+                        if (it != null)
+                        {
+                            it.UserData ??= new UserItemData();
+                            it.UserData.PlaybackPositionTicks = positionTicks;
+                            it.UserData.Played = false;
+                            it.UserData.LastPlayedDate = DateTime.UtcNow;
+
+                            using var upCmd = _connection.CreateCommand();
+                            upCmd.CommandText = "UPDATE continue_watching_cache SET json_data = $json, updated_at = $ts WHERE id = $id;";
+                            upCmd.Parameters.AddWithValue("$json", JsonSerializer.Serialize(it));
+                            upCmd.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                            upCmd.Parameters.AddWithValue("$id", itemId);
+                            upCmd.ExecuteNonQuery();
+                        }
+                    }
+                }
+
+                // 2. Update cached_items
+                using (var cmd2 = _connection.CreateCommand())
+                {
+                    cmd2.CommandText = "SELECT json_data, server_id FROM cached_items WHERE id = $id;";
+                    cmd2.Parameters.AddWithValue("$id", itemId);
+                    using var reader = cmd2.ExecuteReader();
+                    var list = new List<(string sid, string json)>();
+                    while (reader.Read())
+                    {
+                        list.Add((reader.GetString(1), reader.GetString(0)));
+                    }
+                    reader.Close();
+
+                    foreach (var (sid, json) in list)
+                    {
+                        var it = JsonSerializer.Deserialize<EmbyItem>(json);
+                        if (it != null)
+                        {
+                            it.UserData ??= new UserItemData();
+                            it.UserData.PlaybackPositionTicks = positionTicks;
+                            it.UserData.Played = false;
+                            it.UserData.LastPlayedDate = DateTime.UtcNow;
+
+                            using var upCmd = _connection.CreateCommand();
+                            upCmd.CommandText = "UPDATE cached_items SET json_data = $json WHERE id = $id AND server_id = $sid;";
+                            upCmd.Parameters.AddWithValue("$json", JsonSerializer.Serialize(it));
+                            upCmd.Parameters.AddWithValue("$id", itemId);
+                            upCmd.Parameters.AddWithValue("$sid", sid);
+                            upCmd.ExecuteNonQuery();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("DatabaseService", $"UpdatePlaybackProgress failed for {itemId}: {ex.Message}");
+            }
+        }
+    }
+
     public SyncCheckpoint? GetSyncCheckpoint(string serverId, string libraryId)
     {
         lock (_dbLock)
@@ -1679,6 +1761,68 @@ public class DatabaseService : IDisposable
             }
         }
         return items;
+    }
+
+    public void SaveMediaStreamPreference(string mediaKey, int? audioTrackId, string? audioLang, int? subtitleTrackId, string? subtitleLang)
+    {
+        if (string.IsNullOrWhiteSpace(mediaKey)) return;
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    INSERT INTO media_stream_preferences (media_key, audio_track_id, audio_language, subtitle_track_id, subtitle_language, updated_at)
+                    VALUES ($key, $aid, $alang, $sid, $slang, $updated)
+                    ON CONFLICT(media_key) DO UPDATE SET
+                        audio_track_id = COALESCE($aid, audio_track_id),
+                        audio_language = COALESCE($alang, audio_language),
+                        subtitle_track_id = COALESCE($sid, subtitle_track_id),
+                        subtitle_language = COALESCE($slang, subtitle_language),
+                        updated_at = $updated;";
+                cmd.Parameters.AddWithValue("$key", mediaKey);
+                cmd.Parameters.AddWithValue("$aid", (object?)audioTrackId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$alang", (object?)audioLang ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$sid", (object?)subtitleTrackId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$slang", (object?)subtitleLang ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("DatabaseService", $"SaveMediaStreamPreference failed for {mediaKey}: {ex.Message}");
+            }
+        }
+    }
+
+    public (int? AudioTrackId, string? AudioLanguage, int? SubtitleTrackId, string? SubtitleLanguage)? GetMediaStreamPreference(string mediaKey)
+    {
+        if (string.IsNullOrWhiteSpace(mediaKey)) return null;
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "SELECT audio_track_id, audio_language, subtitle_track_id, subtitle_language FROM media_stream_preferences WHERE media_key = $key;";
+                cmd.Parameters.AddWithValue("$key", mediaKey);
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    int? aid = reader.IsDBNull(0) ? null : reader.GetInt32(0);
+                    string? alang = reader.IsDBNull(1) ? null : reader.GetString(1);
+                    int? sid = reader.IsDBNull(2) ? null : reader.GetInt32(2);
+                    string? slang = reader.IsDBNull(3) ? null : reader.GetString(3);
+                    return (aid, alang, sid, slang);
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("DatabaseService", $"GetMediaStreamPreference failed for {mediaKey}: {ex.Message}");
+            }
+        }
+        return null;
     }
 
     public void Dispose()

@@ -78,9 +78,17 @@ public partial class ContinueWatchingCard : UserControl
                 EpisodeNameText.Text = item.ProductionYear > 0 ? $"{item.ProductionYear}" : item.OfficialRating ?? string.Empty;
             }
 
-            // Progress bar
-            ProgressBar.Value = item.ProgressPercentage;
-            ProgressBar.Visibility = item.ProgressPercentage > 0 ? Visibility.Visible : Visibility.Collapsed;
+            // Slim progress bar showing watched percentage
+            var pct = item.ProgressPercentage;
+            if (pct > 0)
+            {
+                ProgressBar.Value = pct;
+                ProgressTrack.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                ProgressTrack.Visibility = Visibility.Collapsed;
+            }
 
             // Load 16:9 Landscape Artwork (Episode Primary thumbnail or Backdrop)
             var emby = (Application.Current as App)?.Services.GetService<EmbyClient>();
