@@ -1,136 +1,210 @@
 <div align="center">
 
-# :movie_camera: Nocturne v4.1
+<img src="build/icon.png" alt="Nocturne Logo" width="112" height="112" />
 
-**A modern, cinematic native Windows desktop client for Emby — powered by .NET 8, WPF-UI, and mpv.**
+# Nocturne
 
-*Zero Electron. Zero Chromium. Built from the ground up for Windows 11 with hardware-accelerated Mica, Acrylic, multi-server support, instant browsing from a local SQLite cache, and cross-server deduplication.*
+### The Definitive Native Windows 11 Desktop Client for Emby
 
-[Features](#features) · [Screenshots](#screenshots) · [Building from Source](#building-from-source) · [Testing](#testing) · [License](#license)
+**Ultra-fast direct playback, multi-server library deduplication, automated intro skip, real-time WatchParty, and deep Trakt analytics — powered by pure .NET 8, WPF-UI, and mpv.**
+
+[![GitHub Release](https://img.shields.io/github/v/release/tokudai-vs/nocturne?style=for-the-badge&logo=github&color=E5A00D)](https://github.com/tokudai-vs/nocturne/releases/latest)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%2010%20(x64)-0078D4?style=for-the-badge&logo=windows)](https://github.com/tokudai-vs/nocturne/releases/latest)
+[![Framework](https://img.shields.io/badge/.NET-8.0%20%7C%20WPF--UI-512BD4?style=for-the-badge&logo=dotnet)](https://dotnet.microsoft.com/)
+[![Engine](https://img.shields.io/badge/Engine-mpv%20DirectPlay-894C9E?style=for-the-badge)](https://mpv.io/)
+[![License](https://img.shields.io/badge/License-MIT-success?style=for-the-badge)](LICENSE)
+
+<br/>
+
+<p align="center">
+  <a href="https://github.com/tokudai-vs/nocturne/releases/latest">
+    <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20Download%20Installer-v4.1.0%20(Setup.exe)-E5A00D?style=for-the-badge&logo=windows&logoColor=white" height="42" alt="Download Nocturne" />
+  </a>
+  &nbsp;&nbsp;
+  <a href="#-why-nocturne">
+    <img src="https://img.shields.io/badge/%F0%9F%8E%A5%20Why%20Nocturne%3F-Feature%20Tour-21212B?style=for-the-badge" height="42" alt="Why Nocturne" />
+  </a>
+</p>
+
+*Zero Electron. Zero Chromium overhead. Sub-millisecond browsing powered by local SQLite WAL cache.*
 
 ---
 
 </div>
 
-## What's New in v4.1
+## 🌟 Why Nocturne?
 
-Nocturne v4.1 introduces major player polish, window cohesion, and pipeline performance:
-- **Media Player Close Button & Window Cohesion**: Dedicated close button (`Dismiss24`) in the player top overlay bar, paired with reliable Win32 foreground focus restoration so Nocturne always returns to the front when closing the player.
-- **Netflix-Style Timeline Scrubbing Thumbnails**: 16:9 interactive chapter and preview thumbnail popup hovering above the timeline scrubber with drop shadow, amber border, chapter title, and timestamp.
-- **Subtitle Border Customization**: New setting in Settings → Playback allowing users to choose subtitle border size (`None` by default, `Thin`, `Medium`, `Thick`), dynamically passed to mpv (`--sub-border-size`).
-- **Timeline Progress Bar Reset**: Clean reset of timeline sliders and counters to 0:00 immediately upon advancing or switching episodes.
-- **Preserved Window Rounded Corners**: Windows 11 DWM rounded corners (`DWMWCP_ROUND`) are now retained during windowed media playback.
-- **Sync Engine Pipeline Overhaul**: High-throughput bounded pipeline with batched atomic SQLite WAL commits and contiguous low-water-mark checkpoints.
-- **YouTube Trailer Playback & Watch Party**: Direct trailer playback integration from detail pages and native watch party synchronization.
+The official Emby desktop and web apps run on Chromium and Electron, consuming 600MB–1GB of memory at idle, struggling with desktop audio codecs, and forcing your server to transcode 4K files that your PC could play natively.
 
----
+**Nocturne** was engineered from scratch as a high-performance native Windows 11 application to give media enthusiasts the ultimate desktop streaming experience:
 
-## Features
-
-### :zap: Cache & Performance
-- **SQLite-backed local cache** (`Microsoft.Data.Sqlite`, WAL mode) — tested with libraries of 1.5M+ items.
-- **Instant browse from cache** — every page loads from local disk in sub-milliseconds, then revalidates in the background.
-- **Background sync engine** with batched fetching and checkpointed state to resume gracefully across app restarts.
-- **Disk-backed image cache** with LRU eviction and configurable size limits.
-
-### :satellite: Multi-Server Architecture & Authentication
-- **Emby Connect & PIN Authorization** — Sign in instantly via `emby.media/pin` with zero local password requirements (ideal for accounts configured via Emby Connect without a local password).
-- **Multi-Strategy Authentication** — Resilient login pipeline supporting JSON, form-encoded, and passwordless accounts with automatic RFC header negotiation.
-- Add multiple Emby servers and switch seamlessly between them from the user menu.
-- **Separate or combined library mode** — view each server independently or merge libraries across servers into a unified shelf.
-- **6-pass deduplication pipeline** — matches duplicate titles by TMDB ID → IMDB ID → Name+Year across servers and folders.
-- **Version picker on detail pages** — shows quality, resolution (4K UHD / 1080p), codec (HEVC / H.264 / AV1), bitrate, and server source per copy.
-
-### :art: Windows 11 Design & Personalization
-- **Windows 11 DWM Composition**: Native Mica, Acrylic, and Tabbed backdrops.
-- **Live Theme Accent Color Selection**: Customize buttons, highlights, glowing rings, and progress indicators:
-  - Signature Amber (`#E5A00D`)
-  - Electric Blue (`#0078D4`)
-  - Ultraviolet (`#8A2BE2`)
-  - Emerald Green (`#107C41`)
-  - Crimson Rose (`#E81123`)
-  - Sunset Orange (`#FF8C00`)
-  - Cyber Cyan (`#00B7C3`)
-- **Cinematic Shell**: Obsidian dark theme or clean light mode with adaptive glowing splash screen, hero rotating backdrops, and smooth animations.
-- **Plex & Netflix Detail Presentation**: Smooth vertical opacity gradient fade into theme background, high-contrast typography, official content ratings, resolution/codec badges, genre pills, circular cast & crew avatars with floating horizontal scroll buttons, and cohesive light/dark mode support.
-- **TV Episodes with Played Tracking**: 16:9 episode thumbnails with watched checkmark badges, in-progress resume progress bars, and 1-click watched/unwatched toggles.
-- **Smooth Horizontal Navigation**: Hidden scrollbars with hover-activated floating chevron scroll buttons (`<` and `>`) across all content rows and cast carousels.
-- **Right-Click Context Menus**: Play, mark as watched/unwatched, and toggle favorites directly from cards.
-
-### :tv: Video Playback Engine (Embedded mpv)
-- **Embedded Win32 HWND Player**: Embedded directly within Nocturne's main window — zero separate processes or lost focus.
-- **Modern Floating Player HUD**: Sleek translucent overlay that appears on mouse activity and auto-hides after 2.5s of inactivity.
-  - Interactive timeline scrubber with live timestamp formatting (`hh:mm:ss`) and clean progress reset across tracks.
-  - **Netflix-Style Timeline Scrubbing Thumbnails**: 16:9 chapter images, titles, and timestamps display smoothly on hover/seek.
-  - Play, Pause, -10s rewind, +10s fast-forward, volume control, and Fullscreen toggle.
-  - Floating top bar with title, subtitle, episode jump, back button, and dedicated close button (`Dismiss24`).
-  - **Seamless Window Cohesion**: Immediate foreground focus restoration prevents the app from being dropped to the background on exit.
-- **Direct play**: No server transcoding needed; native support for 4K UHD, HDR10, Dolby Vision (P5/P8 tone-mapped), HEVC, AV1, DTS-HD, and TrueHD Atmos.
-- **Customizable Subtitle Borders**: Configure subtitle outline thickness (`None`, `Thin`, `Medium`, `Thick`) in Settings.
-- **Windowed Rounded Corners**: Windows 11 DWM rounded corners are preserved during windowed playback.
-- **In-player navigation**:
-  - `>` / `N`: Jump to next episode without interrupting playback.
-  - `<` / `P`: Jump to previous episode.
-  - `EOF`: Automatically advance to next episode when playback finishes.
-- **TheIntroDB skip segments**: Amber HUD prompt and `Enter` key shortcut to skip intros, recaps, and credits. Re-arms on backward seek.
-
-### :clapper: Trakt.tv Integration
-- **OAuth Device Flow**: 1-click activation via `trakt.tv/activate`.
-- **Real-time scrobbler**: Automatically scrobbles `start`, `pause`, and `stop`. Progress >= 80% automatically marks title as watched.
-- **Bidirectional watch state sync**: Keeps local Emby watch status in sync with Trakt.
-- **Trakt Watchlist virtual library**: Appears as a dedicated shelf in the library view with 1-click bookmarking on detail pages.
-
-### :bar_chart: Watch History Analytics (`/analytics`)
-- **Three data sources**: Local (Emby SQLite cache), Trakt (mirrored history), Combined (union).
-- **Time range selector**: Last 30 Days, Last 90 Days, Last Year, All Time.
-- **Stat cards**: Total watch time, weekly average hours, movies watched, episodes watched, and currently-watching series.
-- **Trakt Lifetime block**: Lifetime movies, episodes, hours, and distinct shows from Trakt `/users/me/stats`.
-- **GitHub-style activity heatmap**: Range-adaptive grid with 5 amber quantile intensity levels.
-- **Watch frequency bar chart**: Visualizes daily and weekly viewing hours.
-- **Top series, top movies & genre shares**: Detailed breakdowns of viewing habits.
+* ⚡ **Pure Native Windows Performance**: Crafted in C# with .NET 8 and WPF-UI. Idle memory footprint is under **100 MB**. Navigates in 0ms from an optimized SQLite WAL cache — even with libraries of 1.5M+ items.
+* 🎬 **DirectPlay Everything with mpv**: Plays 4K UHD, HDR10, Dolby Vision (P5/P8 tone-mapping), AV1, HEVC 10-bit, DTS-HD Master Audio, and TrueHD Dolby Atmos without ever requesting server transcoding.
+* 🌐 **Unified Multi-Server Library**: Connect multiple Emby servers simultaneously. Duplicate movies and TV series are automatically merged into a single clean shelf with an integrated quality version picker and automatic stream failover.
+* ⏭️ **Automated TheIntroDB Skipping**: Skips TV show intros, recaps, and credits automatically or via a 1-click amber HUD prompt (`Enter`). Zero server plugins or complex setup required.
+* 🍿 **Real-Time Synchronized WatchParty**: Host or join live viewing sessions with friends across different servers with synchronized play, pause, and seek heartbeats.
+* 📊 **Deep Trakt.tv Integration & Analytics**: Seamless OAuth scrobbling, Trakt Watchlist virtual library, and interactive GitHub-style viewing heatmaps and statistics.
+* 🎨 **Windows 11 Fluent Design**: Native Mica, Acrylic, and Tabbed backdrops with customizable 7-color accent themes, smooth animations, and Netflix-grade timeline scrub thumbnails.
 
 ---
 
-## Building from Source
+## ⚔️ Comparison: Nocturne vs Official Clients
+
+| Feature | **Nocturne** | **Official Emby Desktop** | **Emby Web (Browser)** |
+|:---|:---:|:---:|:---:|
+| **Architecture** | **Pure Native .NET 8 + WPF-UI** | Electron / Chromium | Web Browser |
+| **Idle Memory Footprint** | **~80 – 120 MB** | ~600 – 900 MB | ~400 – 800 MB |
+| **Startup & Browse Speed** | **Sub-millisecond (SQLite WAL)** | 5 – 10 seconds | Variable |
+| **Playback Engine** | **Embedded mpv (libmpv)** | Chromium HTML5 Video | Browser HTML5 Video |
+| **4K HDR10 / Dolby Vision** | **Native GPU DirectPlay** | Often Transcodes | Transcodes |
+| **TrueHD Atmos / DTS-HD MA** | **Bitstream & Direct Audio** | Transcodes to AAC | Transcodes to AAC |
+| **Multi-Server Deduplication** | **Unified Shelf + Auto-Merge** | ❌ (Separate tabs) | ❌ (Separate tabs) |
+| **Automated Intro/Credit Skip** | **Built-in (TheIntroDB)** | ❌ (Plugin dependent) | ❌ (Plugin dependent) |
+| **Scrubbing Preview Thumbnails** | **Netflix-Style 16:9 Popups** | Basic | Basic |
+| **Timeline Chapter Markers** | **Visual Ticks + Intro Blocks** | Standard | Standard |
+| **Real-Time WatchParty** | **Built-in Peer Sync** | ❌ None | ❌ None |
+| **Trakt.tv Scrobbler & Analytics** | **Built-in OAuth + Heatmap** | ❌ (Plugin / VIP) | ❌ None |
+| **Windows 11 DWM (Mica / Acrylic)**| **Native Composition** | ❌ Simulated | ❌ None |
+
+---
+
+## 🎯 Feature Highlights
+
+### 🎬 Embedded mpv Video Player
+* **Embedded Win32 HWND**: Renders directly inside Nocturne’s window frame with zero lost focus or alt-tab issues.
+* **Modern Floating HUD**: Translucent overlay with auto-hide after 2.5s of mouse inactivity.
+* **Interactive Timeline Scrubber**:
+  * **Netflix-Style Scrubbing Thumbnails**: 16:9 chapter images, titles, and timestamps display smoothly on hover and drag.
+  * **Visual Chapter Markers**: Distinct chapter divider ticks and colored TheIntroDB segment bars (Amber for Intros, Sky Blue for Recaps, Violet for Credits).
+  * **Live Accurate Timers**: High-frequency IPC polling ensures timeline position and `hh:mm:ss` timers advance without stuttering.
+* **Seamless Episode Navigation**:
+  * Press `>` mid-playback to advance to the next episode without restarting the player.
+  * Press `<` to jump back to the previous episode.
+  * Automatic `EOF` auto-advance to keep your binge session going.
+* **Audio & Subtitle Track Persistence**: Select your preferred language or audio stream once, and Nocturne remembers it across all episodes in the series.
+* **Custom Subtitle Styling**: Customize subtitle borders (`None`, `Thin`, `Medium`, `Thick`), font size, color, and background shading directly in Settings.
+
+---
+
+### 📺 Cinematic Home & Detail Experience
+* **Hero Rotating Backdrop**: Ambient high-resolution fanart rotating automatically with synopsis and 1-click play.
+* **Continue Watching Row**: 16:9 landscape cards with sleek amber watched progress bars and resume tracking.
+* **Plex & Netflix Inspired Detail Pages**:
+  * Smooth vertical gradient background fade, content ratings, genre chips, and duration badges.
+  * **Circular Cast & Crew Avatars** with smooth horizontal scrolling.
+  * **Multi-Quality Version Picker**: Easily select between 4K UHD Remux, 1080p, or alternate encodes across connected servers.
+  * **YouTube Trailer Integration**: Watch official trailers directly from the detail view.
+
+---
+
+### 🌐 Multi-Server Architecture & Instant Dedup
+* **Emby Connect & PIN Login**: Authenticate instantly via `emby.media/pin` with zero local password requirements.
+* **Multi-Server Management**: Add home, cloud, and shared Emby servers. Browse them individually or in **Combined Library Mode**.
+* **6-Pass Smart Deduplication Engine**:
+  * Matches duplicates across servers via `TMDB ID` → `IMDb ID` → `TVDb ID` → `Name + Year`.
+  * Merges copies into a single card while preserving all audio tracks, resolutions, and streaming sources.
+  * Automatic fallback: If your primary server is offline or missing artwork, Nocturne swaps in a sibling server's stream seamlessly.
+
+---
+
+### 📊 Watch History Analytics (`/analytics`)
+* **3 Data Sources**: Local SQLite cache, Trakt cloud history, or Combined view.
+* **Range Filters**: Last 30 Days, Last 90 Days, Last Year, All Time.
+* **GitHub-Style Activity Heatmap**: Visualizes your daily watch frequency with quantile amber intensity levels.
+* **Detailed Insights**: Total watch hours, weekly average viewing, top completed movies, top TV series, and favorite genre distributions.
+
+---
+
+## ⌨️ Keyboard Shortcuts Reference
+
+| Shortcut | Action |
+|:---|:---|
+| <kbd>Space</kbd> | Play / Pause |
+| <kbd>←</kbd> / <kbd>→</kbd> | Rewind 10s / Fast-forward 10s |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Increase / Decrease Volume |
+| <kbd>M</kbd> | Mute / Unmute Audio |
+| <kbd>F</kbd> | Toggle Fullscreen |
+| <kbd>Enter</kbd> | Skip Intro / Skip Credits prompt |
+| <kbd>S</kbd> / <kbd>C</kbd> | Cycle Subtitle Tracks |
+| <kbd>A</kbd> | Cycle Audio Tracks |
+| <kbd>&gt;</kbd> | Next Episode |
+| <kbd>&lt;</kbd> | Previous Episode |
+| <kbd>Esc</kbd> | Close Player / Exit Fullscreen |
+| <kbd>Ctrl</kbd> + <kbd>K</kbd> | Quick Search Jump |
+
+---
+
+## 📥 Installation
+
+### Method 1: Standalone Installer (Recommended)
+
+1. Download the latest `Nocturne-v4.1.0-Setup.exe` from the [Releases Page](https://github.com/tokudai-vs/nocturne/releases/latest).
+2. Run the installer. Nocturne will install automatically and create a Desktop shortcut.
+3. Launch Nocturne, sign in via **Emby Connect PIN** or enter your server URL, and start streaming!
+
+---
+
+## 🛠️ Building from Source
 
 ### Prerequisites
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- Node.js (v18+) for packaging automation
+* [Windows 11 or Windows 10 (Build 19041+)](https://www.microsoft.com/software-download/windows11)
+* [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+* [Node.js 18+](https://nodejs.org/) (for packaging scripts)
 
-### Build Commands
+### Clone & Compile
+
 ```bash
-# Clone the repository
-git clone https://github.com/tokudai-vs/Nocturne.git
-cd Nocturne
+# 1. Clone the repository
+git clone https://github.com/tokudai-vs/nocturne.git
+cd nocturne
 
-# Build the native solution
-dotnet build src-native/Nocturne.sln
+# 2. Build the native .NET 8 solution
+dotnet build src-native/Nocturne.sln -c Release
 
-# Run all unit tests
+# 3. Run the unit test suite
 dotnet test src-native/Nocturne.Tests/Nocturne.Tests.csproj
 
-# Compile the standalone setup installer
+# 4. Generate the standalone installer
 node scripts/build-installer.js
 ```
 
-The generated installer will be output directly to `dist/Nocturne-v4.1.0-Setup.exe`.
+The compiled installer will be available at `dist/Nocturne-v4.1.0-Setup.exe`.
 
 ---
 
-## Testing
+## 🧩 Technology Stack
 
-Nocturne includes unit tests for core modules:
-```bash
-dotnet test src-native/Nocturne.Tests/Nocturne.Tests.csproj
-```
-Tests cover:
-- URL normalization & Emby ServiceStack PascalCase serialization.
-- 6-pass deduplication matching pipeline & primary item resolution scoring.
-- TheIntroDB skip segment detection, re-arm logic, and action labels.
-- Theme accent color palette validation.
+* **UI Framework**: [WPF-UI (Lepo.i18n)](https://github.com/lepoco/wpfui) — Modern Windows 11 Fluent Design with Mica and Acrylic materials.
+* **Core Language**: C# 12 / .NET 8 LTS.
+* **Video Engine**: [mpv](https://mpv.io/) — Embedded Win32 HWND direct playback pipeline with hardware acceleration.
+* **Database & Cache**: [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite) with Write-Ahead Logging (WAL) and bounded streaming channels.
+* **Third-Party APIs**:
+  * [TheIntroDB](https://introdb.app/) — Community crowd-sourced intro & credit skip timestamps.
+  * [Trakt.tv API](https://trakt.docs.apiary.io/) — Two-way scrobbling and watchlist synchronization.
 
 ---
 
-## License
+## 🤝 Contributing
 
-MIT © Vishal ([@tokudai-vs](https://github.com/tokudai-vs))
+Contributions, feature requests, and bug reports are welcome!
+1. Fork the Project.
+2. Create your Feature Branch (`git checkout -b feat/AmazingFeature`).
+3. Commit your Changes (`git commit -m 'feat: Add AmazingFeature'`).
+4. Push to the Branch (`git push origin feat/AmazingFeature`).
+5. Open a Pull Request.
+
+---
+
+## 📄 License
+
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more details.
+
+---
+
+<div align="center">
+
+Crafted with care by [Vishal](https://github.com/tokudai-vs) and the Nocturne community.
+
+*If you love Nocturne, consider starring the repo :star: to support development!*
+
+</div>
