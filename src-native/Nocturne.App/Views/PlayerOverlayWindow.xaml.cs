@@ -151,10 +151,15 @@ public partial class PlayerOverlayWindow : Window
         var dpiX = source.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
         var dpiY = source.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
 
-        Left = pt.X / dpiX;
-        Top = pt.Y / dpiY;
-        Width = _parentWindow.ActualWidth;
-        Height = _parentWindow.ActualHeight;
+        double newLeft = pt.X / dpiX;
+        double newTop = pt.Y / dpiY;
+        double newWidth = _parentWindow.ActualWidth;
+        double newHeight = _parentWindow.ActualHeight;
+
+        if (Math.Abs(Left - newLeft) > 0.5) Left = newLeft;
+        if (Math.Abs(Top - newTop) > 0.5) Top = newTop;
+        if (Math.Abs(Width - newWidth) > 0.5) Width = newWidth;
+        if (Math.Abs(Height - newHeight) > 0.5) Height = newHeight;
 
         EnsureOwner();
         UpdateFullscreenIcon();

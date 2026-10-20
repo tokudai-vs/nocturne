@@ -18,6 +18,7 @@ public partial class MainWindow : FluentWindow
     private readonly MainViewModel _viewModel;
     private PlayerOverlayWindow? _playerOverlay;
     private bool _isFullscreen = false;
+    private bool _isTransitioningFullscreen = false;
     private WindowState _previousState = WindowState.Normal;
     private WindowStyle _previousStyle = WindowStyle.SingleBorderWindow;
     private ResizeMode _previousResize = ResizeMode.CanResize;
@@ -39,6 +40,13 @@ public partial class MainWindow : FluentWindow
 
     [DllImport("user32.dll")]
     private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_FRAMECHANGED = 0x0020;
 
     private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
 
@@ -106,6 +114,21 @@ public partial class MainWindow : FluentWindow
     {
         if (!_isFullscreen)
         {
+            EnterFullscreen();
+        }
+        else
+        {
+            ExitFullscreen();
+        }
+    }
+
+    public void EnterFullscreen()
+    {
+        if (_isFullscreen) return;
+
+        _isTransitioningFullscreen = true;
+        try
+        {
             _previousState = WindowState;
             _previousStyle = WindowStyle;
             _previousResize = ResizeMode;
@@ -114,40 +137,49 @@ public partial class MainWindow : FluentWindow
             _previousWidth = Width;
             _previousHeight = Height;
 
+            var interop = new WindowInteropHelper(this);
+            var hMonitor = MonitorFromWindow(interop.Handle, MONITOR_DEFAULTTONEAREST);
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+            if (!GetMonitorInfo(hMonitor, ref mi))
+            {
+                WindowState = WindowState.Maximized;
+                _isFullscreen = true;
+                ApplyBorderlessDwm(true);
+                return;
+            }
+
+            var source = PresentationSource.FromVisual(this);
+            double dpiX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+            double dpiY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+
+            double targetLeft = mi.rcMonitor.Left / dpiX;
+            double targetTop = mi.rcMonitor.Top / dpiY;
+            double targetWidth = (mi.rcMonitor.Right - mi.rcMonitor.Left) / dpiX;
+            double targetHeight = (mi.rcMonitor.Bottom - mi.rcMonitor.Top) / dpiY;
+
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
             BorderThickness = new Thickness(0);
             BorderBrush = System.Windows.Media.Brushes.Transparent;
-            Background = System.Windows.Media.Brushes.Black;
-            WindowBackdropType = WindowBackdropType.None;
 
-            var interop = new WindowInteropHelper(this);
-            var hMonitor = MonitorFromWindow(interop.Handle, MONITOR_DEFAULTTONEAREST);
-            var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
-            if (GetMonitorInfo(hMonitor, ref mi))
-            {
-                WindowState = WindowState.Normal;
-                var source = PresentationSource.FromVisual(this);
-                double dpiX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-                double dpiY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+            int monW = mi.rcMonitor.Right - mi.rcMonitor.Left;
+            int monH = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
 
-                Left = mi.rcMonitor.Left / dpiX;
-                Top = mi.rcMonitor.Top / dpiY;
-                Width = (mi.rcMonitor.Right - mi.rcMonitor.Left) / dpiX;
-                Height = (mi.rcMonitor.Bottom - mi.rcMonitor.Top) / dpiY;
-                Topmost = true;
-            }
-            else
-            {
-                WindowState = WindowState.Maximized;
-            }
+            SetWindowPos(interop.Handle, IntPtr.Zero, mi.rcMonitor.Left, mi.rcMonitor.Top, monW, monH,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+
+            WindowState = WindowState.Normal;
+            Left = targetLeft;
+            Top = targetTop;
+            Width = targetWidth;
+            Height = targetHeight;
 
             _isFullscreen = true;
             ApplyBorderlessDwm(true);
         }
-        else
+        finally
         {
-            ExitFullscreen();
+            _isTransitioningFullscreen = false;
         }
 
         _playerOverlay?.SyncWithParent();
@@ -155,18 +187,43 @@ public partial class MainWindow : FluentWindow
 
     public void ExitFullscreen()
     {
-        if (_isFullscreen)
+        if (!_isFullscreen) return;
+
+        _isTransitioningFullscreen = true;
+        try
         {
             Topmost = false;
-            WindowStyle = _previousStyle;
-            ResizeMode = _previousResize;
-            Left = _previousLeft;
-            Top = _previousTop;
-            Width = _previousWidth;
-            Height = _previousHeight;
-            WindowState = _previousState;
             _isFullscreen = false;
             Mouse.OverrideCursor = null;
+
+            WindowStyle = _previousStyle;
+            ResizeMode = _previousResize;
+
+            if (_previousState == WindowState.Maximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+            else
+            {
+                var interop = new WindowInteropHelper(this);
+                var source = PresentationSource.FromVisual(this);
+                double dpiX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+                double dpiY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+
+                int targetX = (int)(_previousLeft * dpiX);
+                int targetY = (int)(_previousTop * dpiY);
+                int targetW = (int)(_previousWidth * dpiX);
+                int targetH = (int)(_previousHeight * dpiY);
+
+                SetWindowPos(interop.Handle, IntPtr.Zero, targetX, targetY, targetW, targetH,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+
+                WindowState = WindowState.Normal;
+                Left = _previousLeft;
+                Top = _previousTop;
+                Width = _previousWidth;
+                Height = _previousHeight;
+            }
 
             if (_viewModel.IsPlayerActive)
             {
@@ -180,10 +237,13 @@ public partial class MainWindow : FluentWindow
                 WindowBackdropType = _viewModel.BackdropType;
                 ApplyBorderlessDwm(false);
             }
-
-            _playerOverlay?.SyncWithParent();
-            RestoreForeground();
         }
+        finally
+        {
+            _isTransitioningFullscreen = false;
+        }
+
+        _playerOverlay?.SyncWithParent();
     }
 
     public void RestoreForeground()
@@ -268,6 +328,18 @@ public partial class MainWindow : FluentWindow
             {
                 Mouse.OverrideCursor = null;
             }
+            else if (_isFullscreen)
+            {
+                _playerOverlay?.SyncWithParent();
+            }
+        };
+
+        Deactivated += (s, e) =>
+        {
+            if (_isFullscreen)
+            {
+                Topmost = false;
+            }
         };
 
         _viewModel.PropertyChanged += (s, e) =>
@@ -297,8 +369,8 @@ public partial class MainWindow : FluentWindow
             }
         };
 
-        LocationChanged += (s, e) => { if (_viewModel.IsPlayerActive) _playerOverlay?.SyncWithParent(); };
-        SizeChanged += (s, e) => { if (_viewModel.IsPlayerActive) _playerOverlay?.SyncWithParent(); };
+        LocationChanged += (s, e) => { if (_viewModel.IsPlayerActive && !_isTransitioningFullscreen) _playerOverlay?.SyncWithParent(); };
+        SizeChanged += (s, e) => { if (_viewModel.IsPlayerActive && !_isTransitioningFullscreen) _playerOverlay?.SyncWithParent(); };
         StateChanged += OnWindowStateChanged;
         Closing += (s, e) =>
         {
@@ -458,7 +530,7 @@ public partial class MainWindow : FluentWindow
 
     private void OnWindowStateChanged(object? sender, EventArgs e)
     {
-        if (_viewModel.IsPlayerActive) _playerOverlay?.SyncWithParent();
+        if (_viewModel.IsPlayerActive && !_isTransitioningFullscreen) _playerOverlay?.SyncWithParent();
         if (MaxIcon != null)
         {
             MaxIcon.Symbol = WindowState == WindowState.Maximized
