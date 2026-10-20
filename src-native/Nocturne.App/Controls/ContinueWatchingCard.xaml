@@ -86,7 +86,16 @@
                         <ProgressBar x:Name="ProgressBar" Height="3.5" VerticalAlignment="Stretch" HorizontalAlignment="Stretch"
                                      Minimum="0" Maximum="100"
                                      Foreground="{DynamicResource NocturneAmberBrush}"
-                                     Background="Transparent" BorderThickness="0" />
+                                     Background="Transparent" BorderThickness="0">
+                            <ProgressBar.Template>
+                                <ControlTemplate TargetType="ProgressBar">
+                                    <Grid x:Name="TemplateRoot" Height="3.5">
+                                        <Border x:Name="PART_Track" Background="{TemplateBinding Background}" />
+                                        <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" />
+                                    </Grid>
+                                </ControlTemplate>
+                            </ProgressBar.Template>
+                        </ProgressBar>
                     </Grid>
                 </Grid>
             </Border>

@@ -38,8 +38,24 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Slider">
                         <Grid VerticalAlignment="Center" Height="32">
-                            <!-- Background Groove (Translucent high-contrast white groove) -->
-                            <Border Height="4" CornerRadius="2" Background="#40FFFFFF" VerticalAlignment="Center" Margin="0" IsHitTestVisible="False" />
+                            <!-- Clean, Bulletproof Active & Groove Track via ProgressBar -->
+                            <ProgressBar Height="4" VerticalAlignment="Center"
+                                         Minimum="{TemplateBinding Minimum}"
+                                         Maximum="{TemplateBinding Maximum}"
+                                         Value="{TemplateBinding Value}"
+                                         Foreground="{DynamicResource NocturneAmberBrush}"
+                                         Background="#40FFFFFF"
+                                         BorderThickness="0"
+                                         IsHitTestVisible="False">
+                                <ProgressBar.Template>
+                                    <ControlTemplate TargetType="ProgressBar">
+                                        <Grid x:Name="TemplateRoot" Height="4">
+                                            <Border x:Name="PART_Track" Background="{TemplateBinding Background}" CornerRadius="2" />
+                                            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" CornerRadius="2" />
+                                        </Grid>
+                                    </ControlTemplate>
+                                </ProgressBar.Template>
+                            </ProgressBar>
 
                             <Track x:Name="PART_Track">
                                 <Track.DecreaseRepeatButton>
@@ -47,7 +63,7 @@
                                                   Command="{x:Static Slider.DecreaseLarge}">
                                         <RepeatButton.Template>
                                             <ControlTemplate TargetType="RepeatButton">
-                                                <Border Background="{DynamicResource NocturneAmberBrush}" Height="4" CornerRadius="2" Margin="0" />
+                                                <Border Background="Transparent" />
                                             </ControlTemplate>
                                         </RepeatButton.Template>
                                     </RepeatButton>
@@ -89,7 +105,7 @@
                                                   Command="{x:Static Slider.IncreaseLarge}">
                                         <RepeatButton.Template>
                                             <ControlTemplate TargetType="RepeatButton">
-                                                <Border Background="#40FFFFFF" Height="4" CornerRadius="2" Margin="0" />
+                                                <Border Background="Transparent" />
                                             </ControlTemplate>
                                         </RepeatButton.Template>
                                     </RepeatButton>
@@ -112,8 +128,24 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Slider">
                         <Grid VerticalAlignment="Center" Height="24">
-                            <!-- Background Groove -->
-                            <Border Height="4" CornerRadius="2" Background="#40FFFFFF" VerticalAlignment="Center" Margin="0" IsHitTestVisible="False" />
+                            <!-- Clean, Bulletproof Active & Groove Track via ProgressBar -->
+                            <ProgressBar Height="4" VerticalAlignment="Center"
+                                         Minimum="{TemplateBinding Minimum}"
+                                         Maximum="{TemplateBinding Maximum}"
+                                         Value="{TemplateBinding Value}"
+                                         Foreground="{DynamicResource NocturneAmberBrush}"
+                                         Background="#40FFFFFF"
+                                         BorderThickness="0"
+                                         IsHitTestVisible="False">
+                                <ProgressBar.Template>
+                                    <ControlTemplate TargetType="ProgressBar">
+                                        <Grid x:Name="TemplateRoot" Height="4">
+                                            <Border x:Name="PART_Track" Background="{TemplateBinding Background}" CornerRadius="2" />
+                                            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" CornerRadius="2" />
+                                        </Grid>
+                                    </ControlTemplate>
+                                </ProgressBar.Template>
+                            </ProgressBar>
 
                             <Track x:Name="PART_Track">
                                 <Track.DecreaseRepeatButton>
@@ -121,7 +153,7 @@
                                                   Command="{x:Static Slider.DecreaseLarge}">
                                         <RepeatButton.Template>
                                             <ControlTemplate TargetType="RepeatButton">
-                                                <Border Background="{DynamicResource NocturneAmberBrush}" Height="4" CornerRadius="2" Margin="0" />
+                                                <Border Background="Transparent" />
                                             </ControlTemplate>
                                         </RepeatButton.Template>
                                     </RepeatButton>
@@ -144,6 +176,12 @@
                                                         <Setter TargetName="ThumbVisual" Property="CornerRadius" Value="7" />
                                                         <Setter TargetName="ThumbVisual" Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
                                                     </Trigger>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter TargetName="ThumbVisual" Property="Width" Value="14" />
+                                                        <Setter TargetName="ThumbVisual" Property="Height" Value="14" />
+                                                        <Setter TargetName="ThumbVisual" Property="CornerRadius" Value="7" />
+                                                        <Setter TargetName="ThumbVisual" Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
+                                                    </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </Thumb.Template>
@@ -155,7 +193,7 @@
                                                   Command="{x:Static Slider.IncreaseLarge}">
                                         <RepeatButton.Template>
                                             <ControlTemplate TargetType="RepeatButton">
-                                                <Border Background="#40FFFFFF" Height="4" CornerRadius="2" Margin="0" />
+                                                <Border Background="Transparent" />
                                             </ControlTemplate>
                                         </RepeatButton.Template>
                                     </RepeatButton>

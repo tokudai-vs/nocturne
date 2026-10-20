@@ -158,6 +158,20 @@ public class ThemeColorService
                     Application.Current.Resources["AccentFillColorTertiaryBrush"] = mutedBrush;
                     Application.Current.Resources["AccentTextFillColorPrimaryBrush"] = brush;
 
+                    // Wpf.Ui ToggleSwitch & Accent Component Overrides
+                    Application.Current.Resources["ToggleSwitchFillOn"] = brush;
+                    Application.Current.Resources["ToggleSwitchFillOnPointerOver"] = hoverBrush;
+                    Application.Current.Resources["ToggleSwitchFillOnPressed"] = mutedBrush;
+                    Application.Current.Resources["ToggleSwitchStrokeOn"] = brush;
+                    Application.Current.Resources["ToggleSwitchStrokeOnPointerOver"] = hoverBrush;
+                    Application.Current.Resources["ToggleSwitchStrokeOnPressed"] = mutedBrush;
+                    Application.Current.Resources["ToggleSwitchKnobFillOn"] = new SolidColorBrush(Colors.White);
+
+                    // Additional Wpf.Ui Accent Control Overrides
+                    Application.Current.Resources["ControlStrongFillColorDefaultBrush"] = brush;
+                    Application.Current.Resources["ControlStrongFillColorSecondaryBrush"] = hoverBrush;
+                    Application.Current.Resources["ControlStrongFillColorTertiaryBrush"] = mutedBrush;
+
                     try
                     {
                         if (isSystem)
@@ -168,6 +182,14 @@ public class ThemeColorService
                         {
                             ApplicationAccentColorManager.Apply(color);
                         }
+
+                        // Re-apply ToggleSwitch after Wpf.Ui manager to ensure Wpf.Ui theme overrides don't revert them
+                        Application.Current.Resources["ToggleSwitchFillOn"] = brush;
+                        Application.Current.Resources["ToggleSwitchFillOnPointerOver"] = hoverBrush;
+                        Application.Current.Resources["ToggleSwitchFillOnPressed"] = mutedBrush;
+                        Application.Current.Resources["ToggleSwitchStrokeOn"] = brush;
+                        Application.Current.Resources["ToggleSwitchStrokeOnPointerOver"] = hoverBrush;
+                        Application.Current.Resources["ToggleSwitchStrokeOnPressed"] = mutedBrush;
                     }
                     catch { }
                 });

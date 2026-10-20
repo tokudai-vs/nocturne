@@ -49,6 +49,19 @@
                 </Setter>
             </Style>
 
+            <!-- Global ToggleSwitch Style Ensuring Nocturne Accent Color is Always Used -->
+            <Style TargetType="{x:Type ui:ToggleSwitch}" BasedOn="{StaticResource {x:Type ui:ToggleSwitch}}">
+                <Style.Resources>
+                    <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="{DynamicResource NocturneAmberColor}" />
+                    <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="{DynamicResource NocturneAmberHoverColor}" />
+                    <SolidColorBrush x:Key="ToggleSwitchFillOnPressed" Color="{DynamicResource NocturneAmberMutedColor}" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOn" Color="{DynamicResource NocturneAmberColor}" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPointerOver" Color="{DynamicResource NocturneAmberHoverColor}" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPressed" Color="{DynamicResource NocturneAmberMutedColor}" />
+                    <SolidColorBrush x:Key="ToggleSwitchKnobFillOn" Color="#FFFFFF" />
+                </Style.Resources>
+            </Style>
+
             <!-- Globally Invisible ScrollBars (Zero width/height track, mouse wheel scrolling fully preserved) -->
             <Style TargetType="ScrollBar">
                 <Setter Property="Width" Value="0" />

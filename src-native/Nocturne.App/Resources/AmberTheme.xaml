@@ -16,6 +16,15 @@
         <GradientStop Color="#00000000" Offset="1.0" />
     </RadialGradientBrush>
 
+    <!-- Wpf.Ui ToggleSwitch & Accent Component Brushes -->
+    <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="{StaticResource NocturneAmberColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="{StaticResource NocturneAmberHoverColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchFillOnPressed" Color="{StaticResource NocturneAmberMutedColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOn" Color="{StaticResource NocturneAmberColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPointerOver" Color="{StaticResource NocturneAmberHoverColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPressed" Color="{StaticResource NocturneAmberMutedColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOn" Color="#FFFFFF" />
+
     <!-- Glass & Border Brushes -->
     <SolidColorBrush x:Key="GlassBorderDarkBrush" Color="#1FFFFFFF" />
     <SolidColorBrush x:Key="GlassBorderLightBrush" Color="#14000000" />
