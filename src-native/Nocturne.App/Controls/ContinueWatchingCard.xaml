@@ -1,0 +1,116 @@
+<UserControl x:Class="Nocturne.App.Controls.ContinueWatchingCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             Width="270" Margin="8,8" ClipToBounds="False">
+
+    <!-- Right-Click Context Menu -->
+    <UserControl.ContextMenu>
+        <ContextMenu>
+            <MenuItem Header="Play" Click="OnContextMenuPlayClick">
+                <MenuItem.Icon>
+                    <ui:SymbolIcon Symbol="Play16" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator />
+            <MenuItem Header="Toggle Played" Click="OnContextMenuTogglePlayedClick">
+                <MenuItem.Icon>
+                    <ui:SymbolIcon Symbol="Checkmark16" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Toggle Favorite" Click="OnContextMenuToggleFavoriteClick">
+                <MenuItem.Icon>
+                    <ui:SymbolIcon Symbol="Heart16" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator />
+            <MenuItem Header="Remove from Continue Watching" Click="OnContextMenuRemoveFromContinueClick">
+                <MenuItem.Icon>
+                    <ui:SymbolIcon Symbol="Dismiss16" Foreground="#FF5555" />
+                </MenuItem.Icon>
+            </MenuItem>
+        </ContextMenu>
+    </UserControl.ContextMenu>
+
+    <Grid ClipToBounds="False">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="152" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 16:9 Landscape Card Image Box (Clicking Directly Plays Media) -->
+        <Grid Grid.Row="0" x:Name="ArtBox"
+              Cursor="Hand" MouseLeftButtonUp="OnArtClick"
+              MouseEnter="OnArtMouseEnter" MouseLeave="OnArtMouseLeave"
+              RenderTransformOrigin="0.5,0.5" ClipToBounds="False">
+            <Grid.RenderTransform>
+                <ScaleTransform x:Name="ArtScaleTransform" ScaleX="1" ScaleY="1" />
+            </Grid.RenderTransform>
+
+            <!-- Card Background and Content with Rounded Mask -->
+            <Border CornerRadius="8" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+                <Grid>
+                    <Grid.OpacityMask>
+                        <VisualBrush>
+                            <VisualBrush.Visual>
+                                <Border Width="270" Height="152" CornerRadius="8" Background="White" />
+                            </VisualBrush.Visual>
+                        </VisualBrush>
+                    </Grid.OpacityMask>
+
+                    <!-- Fallback Placeholder Icon -->
+                    <ui:SymbolIcon Symbol="MoviesAndTv24" FontSize="42"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+                    <!-- Landscape Artwork Image -->
+                    <Image x:Name="ArtImage" Stretch="UniformToFill" />
+
+                    <!-- Subtle Hover Dimming Scrim -->
+                    <Border x:Name="HoverScrim" Background="#60000000" Opacity="0" IsHitTestVisible="False" />
+
+                    <!-- Centered Hover Play Button Circle -->
+                    <Border x:Name="HoverPlayButton" Width="48" Height="48" CornerRadius="24"
+                            Background="#D5101014" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1.5"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Opacity="0" IsHitTestVisible="False">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="12" Direction="0" ShadowDepth="0" Color="#000000" Opacity="0.75" />
+                        </Border.Effect>
+                        <ui:SymbolIcon Symbol="Play24" FontSize="22" Foreground="{DynamicResource NocturneAmberBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="2,0,0,0" />
+                    </Border>
+
+                    <!-- Resumable Progress Bar at the Bottom (Inset from edges so border remains crisp) -->
+                    <ProgressBar x:Name="ProgressBar" Height="4" VerticalAlignment="Bottom"
+                                 Margin="8,0,8,6"
+                                 Foreground="{DynamicResource NocturneAmberBrush}"
+                                 Background="#50000000" BorderThickness="0" />
+                </Grid>
+            </Border>
+
+            <!-- Overlay Border (Always rendered ON TOP of image and progress bar, never cut off!) -->
+            <Border x:Name="ArtBorder" CornerRadius="8"
+                    BorderThickness="1"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    IsHitTestVisible="False" Panel.ZIndex="10" />
+        </Grid>
+
+        <!-- Metadata Info Below Card (Show Name and Season/Episode all individually clickable) -->
+        <StackPanel Grid.Row="1" Margin="2,8,2,0">
+            <!-- Line 1: Show / Movie Name in Bold (Clickable -> Navigates to Show) -->
+            <TextBlock x:Name="ShowNameText" FontWeight="Bold" FontSize="13"
+                       TextTrimming="CharacterEllipsis" Cursor="Hand"
+                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                       MouseLeftButtonUp="OnShowNameClick"
+                       MouseEnter="OnShowNameMouseEnter" MouseLeave="OnShowNameMouseLeave" />
+
+            <!-- Line 2: Season & Episode Name (Clickable -> Navigates to Episode) -->
+            <TextBlock x:Name="EpisodeNameText" FontSize="12" Margin="0,2,0,0"
+                       TextTrimming="CharacterEllipsis" Cursor="Hand"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       MouseLeftButtonUp="OnEpisodeNameClick"
+                       MouseEnter="OnEpisodeNameMouseEnter" MouseLeave="OnEpisodeNameMouseLeave" />
+        </StackPanel>
+    </Grid>
+</UserControl>

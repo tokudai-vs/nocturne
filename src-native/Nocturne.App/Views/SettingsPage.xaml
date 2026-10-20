@@ -3,660 +3,979 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Margin="36,28,36,48" MaxWidth="800" HorizontalAlignment="Left">
+    <ScrollViewer VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="28,54,28,48" MaxWidth="880" HorizontalAlignment="Center">
 
+            <!-- Page Title -->
             <TextBlock Text="Settings" FontSize="28" FontWeight="Bold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,28" />
+                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,20" HorizontalAlignment="Center" />
 
-            <!-- ── SECTION 1: SERVERS & MULTI-SERVER MANAGEMENT ── -->
-            <TextBlock Text="Emby Media Servers" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
-
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16" Margin="0,0,0,28">
-                <StackPanel>
-                    <TextBlock Text="Connected Servers" FontWeight="SemiBold" Margin="0,0,0,10" />
-
-                    <!-- Saved Servers List -->
-                    <ItemsControl ItemsSource="{Binding Servers}" Margin="0,0,0,16">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Margin="0,4" Padding="14,10" CornerRadius="8"
-                                        Background="#18FFFFFF" BorderBrush="#20FFFFFF" BorderThickness="1">
-                                    <DockPanel>
-                                        <Button DockPanel.Dock="Right" Padding="8,4" Margin="6,0,0,0"
-                                                Click="OnRemoveServerClick" Tag="{Binding Id}">
-                                            <ui:SymbolIcon Symbol="Delete16" FontSize="14" Foreground="#FF6B6B" />
-                                        </Button>
-
-                                        <Button DockPanel.Dock="Right" Padding="12,5" Margin="6,0,0,0"
-                                                Click="OnSwitchServerClick" Tag="{Binding Id}">
-                                            <TextBlock Text="Set Active" FontSize="12" />
-                                        </Button>
-
-                                         <StackPanel VerticalAlignment="Center">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" Margin="0,0,8,0" />
-                                                <Border Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="6,1" VerticalAlignment="Center"
-                                                        Visibility="{Binding Id, Converter={StaticResource NullToVisibility}}">
-                                                    <TextBlock Text="Connected" FontSize="10" Foreground="{DynamicResource NocturneAmberBrush}" FontWeight="SemiBold" />
-                                                </Border>
-                                            </StackPanel>
-                                            <TextBlock Text="{Binding Url}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
-                                        </StackPanel>
-                                    </DockPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <Separator Margin="0,8,0,16" />
-
-                    <!-- Add New Server Header -->
-                    <TextBlock Text="Add Another Server" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,12" />
-
-                    <!-- Emby Connect Feature Panel -->
-                    <Border Background="#14FFFFFF" BorderBrush="{DynamicResource NocturneAmberMutedBrush}" BorderThickness="1"
-                            CornerRadius="8" Padding="16" Margin="0,0,0,16">
-                        <StackPanel>
-                            <!-- Prompt: Button to start Emby Connect -->
-                            <StackPanel Visibility="{Binding IsEmbyConnectActive, Converter={StaticResource InvertBoolToVisibility}}">
-                                <DockPanel>
-                                    <Button DockPanel.Dock="Right" Style="{StaticResource AmberPrimaryButton}"
-                                            Click="OnStartEmbyConnectClick" VerticalAlignment="Center">
-                                        <StackPanel Orientation="Horizontal">
-                                            <ui:SymbolIcon Symbol="Cloud24" FontSize="16" Margin="0,0,8,0" />
-                                            <TextBlock Text="Link via Emby Connect" FontWeight="SemiBold" />
-                                        </StackPanel>
-                                    </Button>
-                                    <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
-                                        <TextBlock Text="Emby Connect (Recommended)" FontWeight="SemiBold" FontSize="14" />
-                                        <TextBlock Text="Link all your Emby servers instantly using a simple 5-digit PIN code at emby.media/pin."
-                                                   FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
-                                    </StackPanel>
-                                </DockPanel>
-                            </StackPanel>
-
-                            <!-- Active Emby Connect Flow: Step 1 PIN Code Screen -->
-                            <StackPanel Visibility="{Binding IsConnectPinActive, Converter={StaticResource BoolToVisibility}}">
-                                <TextBlock Text="Emby Connect Authorization" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,6" />
-                                <TextBlock Text="Visit emby.media/pin on any browser and enter the PIN code below:"
-                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,12" />
-
-                                <Border Background="{DynamicResource NocturneAmberTintBrush}" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="2"
-                                        CornerRadius="8" Padding="24,10" HorizontalAlignment="Left" Margin="0,0,0,12">
-                                    <TextBlock Text="{Binding ConnectPin}" FontSize="28" FontWeight="Bold"
-                                               Foreground="{DynamicResource NocturneAmberBrush}" />
-                                </Border>
-
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                                    <Button Style="{StaticResource AmberPrimaryButton}" Click="OnOpenPinBrowserClick" Margin="0,0,10,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <ui:SymbolIcon Symbol="Open24" FontSize="15" Margin="0,0,8,0" />
-                                            <TextBlock Text="Open emby.media/pin in Browser" FontWeight="SemiBold" />
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Content="Cancel" Click="OnCancelEmbyConnectClick" />
-                                </StackPanel>
-
-                                <StackPanel Orientation="Horizontal">
-                                    <ui:ProgressRing Width="14" Height="14" Margin="0,0,8,0"
-                                                     Visibility="{Binding IsPollingConnectPin, Converter={StaticResource BoolToVisibility}}" />
-                                    <TextBlock Text="{Binding ConnectStatusMessage}" FontSize="12"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                </StackPanel>
-                            </StackPanel>
-
-                            <!-- Active Emby Connect Flow: Step 2 Discovered Servers List -->
-                            <StackPanel Visibility="{Binding IsConnectServersListActive, Converter={StaticResource BoolToVisibility}}">
-                                <DockPanel Margin="0,0,0,12">
-                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                        <Button Style="{StaticResource AmberPrimaryButton}" Click="OnAddAllConnectServersClick"
-                                                IsEnabled="{Binding IsAddingAllServers, Converter={StaticResource InverseBool}}" Margin="0,0,8,0">
-                                            <StackPanel Orientation="Horizontal">
-                                                <ui:ProgressRing Width="14" Height="14" Margin="0,0,8,0"
-                                                                 Visibility="{Binding IsAddingAllServers, Converter={StaticResource BoolToVisibility}}" />
-                                                <ui:SymbolIcon Symbol="AddSquare24" FontSize="16" Margin="0,0,6,0"
-                                                               Visibility="{Binding IsAddingAllServers, Converter={StaticResource InvertBoolToVisibility}}" />
-                                                <TextBlock Text="+ Add All Servers" FontWeight="SemiBold" />
-                                            </StackPanel>
-                                        </Button>
-                                        <Button Content="Done" Click="OnDoneConnectServersClick" />
-                                    </StackPanel>
-
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="Discovered Servers" FontWeight="SemiBold" FontSize="15" />
-                                        <TextBlock Text="{Binding ConnectStatusMessage}" FontSize="12"
-                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
-                                    </StackPanel>
-                                </DockPanel>
-
-                                <ItemsControl ItemsSource="{Binding DiscoveredServers}" Margin="0,0,0,8">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Margin="0,4" Padding="12,10" CornerRadius="6"
-                                                    Background="#1AFFFFFF" BorderBrush="#25FFFFFF" BorderThickness="1">
-                                                <DockPanel>
-                                                    <!-- Right action: Added badge or Add button -->
-                                                    <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" Margin="8,0,0,0">
-                                                        <Border Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="8,3"
-                                                                Visibility="{Binding IsAdded, Converter={StaticResource BoolToVisibility}}">
-                                                            <StackPanel Orientation="Horizontal">
-                                                                <ui:SymbolIcon Symbol="Checkmark16" FontSize="12" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,4,0" />
-                                                                <TextBlock Text="Added" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberBrush}" />
-                                                            </StackPanel>
-                                                        </Border>
-
-                                                        <Button Padding="12,5" Click="OnAddSingleConnectServerClick" Tag="{Binding}"
-                                                                Visibility="{Binding IsAdded, Converter={StaticResource InvertBoolToVisibility}}"
-                                                                IsEnabled="{Binding IsAdding, Converter={StaticResource InverseBool}}">
-                                                            <StackPanel Orientation="Horizontal">
-                                                                <ui:ProgressRing Width="12" Height="12" Margin="0,0,6,0"
-                                                                                 Visibility="{Binding IsAdding, Converter={StaticResource BoolToVisibility}}" />
-                                                                <TextBlock Text="+ Add Server" FontSize="12" FontWeight="SemiBold" />
-                                                            </StackPanel>
-                                                        </Button>
-                                                    </StackPanel>
-
-                                                    <ui:SymbolIcon Symbol="Server24" FontSize="18" Foreground="{DynamicResource NocturneAmberBrush}"
-                                                                   Margin="0,0,10,0" VerticalAlignment="Center" />
-
-                                                    <StackPanel VerticalAlignment="Center">
-                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" />
-                                                        <TextBlock Text="{Binding Url}" FontSize="11"
-                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
-                                                    </StackPanel>
-                                                </DockPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </StackPanel>
-
-                            <!-- Error Message banner for Emby Connect -->
-                            <Border Background="#33FF4444" BorderBrush="#80FF4444" BorderThickness="1"
-                                    CornerRadius="6" Padding="10,6" Margin="0,10,0,0"
-                                    Visibility="{Binding ConnectErrorMessage, Converter={StaticResource NullToVisibility}}">
-                                <TextBlock Text="{Binding ConnectErrorMessage}" Foreground="#FF6B6B" FontSize="12" TextWrapping="Wrap" />
-                            </Border>
+            <!-- ── MODERN CATEGORIZED TABS NAVIGATION ── -->
+            <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1"
+                    CornerRadius="10" Padding="4" Margin="0,0,0,24" HorizontalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                    <!-- Servers & Sync -->
+                    <Button Click="OnCategoryClick" Tag="servers" Margin="2,0" Padding="14,8">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsServersCategory}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Server24" FontSize="15" Margin="0,0,6,0"
+                                           Foreground="{Binding IsServersCategory, Converter={StaticResource BoolToBrushConverter}}" />
+                            <TextBlock Text="Servers &amp; Sync" FontWeight="SemiBold" FontSize="13"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
                         </StackPanel>
-                    </Border>
+                    </Button>
 
-                    <!-- Manual Direct Server URL Section -->
-                    <TextBlock Text="Or Add Manually via Direct URL" FontWeight="SemiBold" FontSize="13"
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,8" />
-                    <ui:TextBox PlaceholderText="Server URL (e.g. http://192.168.1.100:8096)"
-                                Text="{Binding NewServerUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8" />
+                    <!-- Libraries & Merging -->
+                    <Button Click="OnCategoryClick" Tag="libraries" Margin="2,0" Padding="14,8">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsLibrariesCategory}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Folder24" FontSize="15" Margin="0,0,6,0"
+                                           Foreground="{Binding IsLibrariesCategory, Converter={StaticResource BoolToBrushConverter}}" />
+                            <TextBlock Text="Libraries &amp; Merging" FontWeight="SemiBold" FontSize="13"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                        </StackPanel>
+                    </Button>
 
-                    <Grid Margin="0,0,0,12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="12" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <ui:TextBox Grid.Column="0" PlaceholderText="Username"
-                                    Text="{Binding NewUsername, UpdateSourceTrigger=PropertyChanged}" />
-                        <ui:PasswordBox Grid.Column="2" x:Name="NewServerPasswordInput" PlaceholderText="Password" />
-                    </Grid>
+                    <!-- Playback & Audio -->
+                    <Button Click="OnCategoryClick" Tag="playback" Margin="2,0" Padding="14,8">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPlaybackCategory}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Play24" FontSize="15" Margin="0,0,6,0"
+                                           Foreground="{Binding IsPlaybackCategory, Converter={StaticResource BoolToBrushConverter}}" />
+                            <TextBlock Text="Playback &amp; Audio" FontWeight="SemiBold" FontSize="13"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                        </StackPanel>
+                    </Button>
 
-                    <Border Background="#33FF4444" BorderBrush="#80FF4444" BorderThickness="1"
-                            CornerRadius="6" Padding="10,6" Margin="0,0,0,12"
-                            Visibility="{Binding ServerAddError, Converter={StaticResource NullToVisibility}}">
-                        <TextBlock Text="{Binding ServerAddError}" Foreground="#FF6B6B" FontSize="12" />
-                    </Border>
+                    <!-- Appearance -->
+                    <Button Click="OnCategoryClick" Tag="appearance" Margin="2,0" Padding="14,8">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAppearanceCategory}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="DarkTheme24" FontSize="15" Margin="0,0,6,0"
+                                           Foreground="{Binding IsAppearanceCategory, Converter={StaticResource BoolToBrushConverter}}" />
+                            <TextBlock Text="Appearance" FontWeight="SemiBold" FontSize="13"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                        </StackPanel>
+                    </Button>
 
-                    <Button Style="{StaticResource AmberPrimaryButton}" Click="OnAddServerClick"
-                            HorizontalAlignment="Left" IsEnabled="{Binding IsAddingServer, Converter={StaticResource InverseBool}}">
-                        <StackPanel Orientation="Horizontal">
-                            <ui:ProgressRing Width="14" Height="14" Margin="0,0,8,0"
-                                             Visibility="{Binding IsAddingServer, Converter={StaticResource BoolToVisibility}}" />
-                            <TextBlock Text="Connect &amp; Add Server" FontWeight="SemiBold" />
+                    <!-- Integrations -->
+                    <Button Click="OnCategoryClick" Tag="integrations" Margin="2,0" Padding="14,8">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsIntegrationsCategory}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="ShareAndroid24" FontSize="15" Margin="0,0,6,0"
+                                           Foreground="{Binding IsIntegrationsCategory, Converter={StaticResource BoolToBrushConverter}}" />
+                            <TextBlock Text="Integrations" FontWeight="SemiBold" FontSize="13"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- About -->
+                    <Button Click="OnCategoryClick" Tag="about" Margin="2,0" Padding="14,8">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAboutCategory}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Info24" FontSize="15" Margin="0,0,6,0"
+                                           Foreground="{Binding IsAboutCategory, Converter={StaticResource BoolToBrushConverter}}" />
+                            <TextBlock Text="About" FontWeight="SemiBold" FontSize="13"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
             </Border>
 
-            <!-- ── SECTION 2: LIBRARY MODE & COMBINED VIRTUAL LIBRARIES ── -->
-            <TextBlock Text="Libraries &amp; Combined Virtual Library Mode" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <!-- ── CATEGORY 1: SERVERS & SYNC ── -->
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <StackPanel Visibility="{Binding IsServersCategory, Converter={StaticResource BoolToVisibility}}">
+                <!-- Section 1: Emby Media Servers -->
+                <TextBlock Text="Emby Media Servers" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
 
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16" Margin="0,0,0,28">
-                <StackPanel>
-                    <DockPanel Margin="0,0,0,12">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Library Display Mode" FontWeight="SemiBold" />
-                            <TextBlock Text="Combine libraries across multiple servers into Unified rows or browse separately"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding LibraryMode, Mode=TwoWay}">
-                            <ComboBoxItem Content="Separate (Per-Server)" Tag="separate" />
-                            <ComboBoxItem Content="Combined (Unified Virtual)" Tag="combined" />
-                        </ComboBox>
-                    </DockPanel>
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <TextBlock Text="Connected Servers" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,10" />
 
-                    <Separator Margin="0,8" />
+                        <!-- Saved Servers List -->
+                        <ItemsControl ItemsSource="{Binding Servers}" Margin="0,0,0,16">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,4" Padding="14,10" CornerRadius="8"
+                                            Background="#18FFFFFF" BorderBrush="#20FFFFFF" BorderThickness="1">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Padding="8,4" Margin="6,0,0,0"
+                                                    Click="OnRemoveServerClick" Tag="{Binding Id}">
+                                                <ui:SymbolIcon Symbol="Delete16" FontSize="14" Foreground="#FF6B6B" />
+                                            </Button>
 
-                    <DockPanel Margin="0,4,0,14">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Show Unmapped Libraries" FontWeight="SemiBold" />
-                            <TextBlock Text="Display standalone libraries that haven't been assigned to a combined group"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ui:ToggleSwitch IsChecked="{Binding ShowUnmappedLibraries, Mode=TwoWay}" HorizontalAlignment="Right" />
-                    </DockPanel>
+                                            <!-- Set Active Button (Hidden in Combined Mode since all servers are unified) -->
+                                            <Button DockPanel.Dock="Right" Padding="12,5" Margin="6,0,0,0"
+                                                    Click="OnSwitchServerClick" Tag="{Binding Id}"
+                                                    Visibility="{Binding DataContext.IsSeparateMode, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolToVisibility}}">
+                                                <TextBlock Text="Set Active" FontSize="12" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                            </Button>
 
-                    <!-- Combined Virtual Groups List -->
-                    <TextBlock Text="Combined Library Groups" FontWeight="SemiBold" Margin="0,8,0,8" />
+                                            <StackPanel VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,8,0" />
+                                                    <Border Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="6,1" VerticalAlignment="Center"
+                                                            Visibility="{Binding Id, Converter={StaticResource NullToVisibility}}">
+                                                        <TextBlock Text="Connected" FontSize="10" Foreground="{DynamicResource NocturneAmberBrush}" FontWeight="SemiBold" />
+                                                    </Border>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Url}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
-                    <ItemsControl ItemsSource="{Binding CombinedGroups}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Margin="0,3" Padding="12,8" CornerRadius="6" Background="#18FFFFFF">
+                        <Separator Margin="0,8,0,16" />
+
+                        <!-- Add New Server Header -->
+                        <TextBlock Text="Add Another Server" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,12" />
+
+                        <!-- Emby Connect Feature Panel -->
+                        <Border Background="#14FFFFFF" BorderBrush="{DynamicResource NocturneAmberMutedBrush}" BorderThickness="1"
+                                CornerRadius="8" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <!-- Prompt: Button to start Emby Connect -->
+                                <StackPanel Visibility="{Binding IsEmbyConnectActive, Converter={StaticResource InvertBoolToVisibility}}">
                                     <DockPanel>
-                                        <Button DockPanel.Dock="Right" Padding="6,3" Margin="8,0,0,0"
-                                                Click="OnRemoveCombinedGroupClick" Tag="{Binding Name}">
-                                            <ui:SymbolIcon Symbol="Delete16" FontSize="12" Foreground="#FF6B6B" />
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource AmberPrimaryButton}"
+                                                Click="OnStartEmbyConnectClick" VerticalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon Symbol="Cloud24" FontSize="16" Margin="0,0,8,0" />
+                                                <TextBlock Text="Link via Emby Connect" FontWeight="SemiBold" />
+                                            </StackPanel>
                                         </Button>
-                                        <ui:SymbolIcon Symbol="Folder24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,10,0" VerticalAlignment="Center" />
-                                        <StackPanel VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                            <TextBlock Text="Unified Cross-Server Library" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="Emby Connect" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                            <TextBlock Text="Link all your Emby servers instantly using a simple 5-digit PIN code at emby.media/pin."
+                                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" Margin="0,2,0,0" />
                                         </StackPanel>
                                     </DockPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                                </StackPanel>
 
-                    <!-- Add Group -->
-                    <Grid Margin="0,12,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="10" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ui:TextBox Grid.Column="0" PlaceholderText="New group name (e.g. Movies, TV Shows, Anime)"
-                                    Text="{Binding NewGroupName, UpdateSourceTrigger=PropertyChanged}" />
-                        <Button Grid.Column="2" Content="Add Group" Click="OnAddCombinedGroupClick" />
-                    </Grid>
-                </StackPanel>
-            </Border>
+                                <!-- Active Emby Connect Flow: Step 1 PIN Code Screen -->
+                                <StackPanel Visibility="{Binding IsConnectPinActive, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="Emby Connect Authorization" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,6" />
+                                    <TextBlock Text="Visit emby.media/pin on any browser and enter the PIN code below:"
+                                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,12" />
 
-            <!-- ── SECTION 3: MULTI-SERVER DEDUPLICATION ENGINE ── -->
-            <TextBlock Text="Deduplication Engine" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+                                    <Border Background="{DynamicResource NocturneAmberTintBrush}" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="2"
+                                            CornerRadius="8" Padding="24,10" HorizontalAlignment="Left" Margin="0,0,0,12">
+                                        <TextBlock Text="{Binding ConnectPin}" FontSize="28" FontWeight="Bold"
+                                                   Foreground="{DynamicResource NocturneAmberBrush}" />
+                                    </Border>
 
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16" Margin="0,0,0,28">
-                <StackPanel>
-                    <DockPanel Margin="0,0,0,12">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Enable Multi-Server Deduplication" FontWeight="SemiBold" />
-                            <TextBlock Text="Automatically merge matching movies and episodes across servers into single cards"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ui:ToggleSwitch IsChecked="{Binding DedupEnabled, Mode=TwoWay}" HorizontalAlignment="Right" />
-                    </DockPanel>
-
-                    <Separator Margin="0,6,0,12" />
-
-                    <!-- Dedup Statistics -->
-                    <Grid Margin="0,0,0,16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="16" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <Border Grid.Column="0" Background="#14FFFFFF" CornerRadius="6" Padding="12,10">
-                            <StackPanel>
-                                <TextBlock Text="Total Cached Items" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                <TextBlock Text="{Binding CachedItemsCount}" FontSize="18" FontWeight="Bold" Margin="0,2,0,0" />
-                            </StackPanel>
-                        </Border>
-
-                        <Border Grid.Column="2" Background="#14FFFFFF" CornerRadius="6" Padding="12,10">
-                            <StackPanel>
-                                <TextBlock Text="Duplicate Groups Merged" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                <TextBlock Text="{Binding DedupGroupsCount}" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,2,0,0" />
-                            </StackPanel>
-                        </Border>
-                    </Grid>
-
-                    <Button Content="Rebuild Dedup Index" Click="OnRebuildDedupClick" HorizontalAlignment="Left"
-                            IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
-                </StackPanel>
-            </Border>
-
-            <!-- ── SECTION 4: PLAYBACK & SKIP SEGMENTS ── -->
-            <TextBlock Text="Playback &amp; TheIntroDB Skip Segments" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
-
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16" Margin="0,0,0,28">
-                <StackPanel>
-                    <DockPanel Margin="0,0,0,12">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Preferred Stream Quality" FontWeight="SemiBold" />
-                            <TextBlock Text="Direct stream with maximum bitrate or request lower resolution"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding PreferredQuality, Mode=TwoWay}">
-                            <ComboBoxItem Content="4K / Highest Bitrate" Tag="highest" />
-                            <ComboBoxItem Content="HD / Lower Bitrate" Tag="lowest" />
-                        </ComboBox>
-                    </DockPanel>
-
-                    <Separator Margin="0,6" />
-
-                    <DockPanel Margin="0,4,0,12">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Auto-Play Next Episode" FontWeight="SemiBold" />
-                            <TextBlock Text="Automatically advance to the next episode when current playback finishes"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ui:ToggleSwitch IsChecked="{Binding AutoPlayNextEpisode, Mode=TwoWay}" HorizontalAlignment="Right" />
-                    </DockPanel>
-
-                    <Separator Margin="0,6" />
-
-                    <!-- Skip Intro Mode -->
-                    <DockPanel Margin="0,4,0,10">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Skip Intro Mode" FontWeight="SemiBold" />
-                            <TextBlock Text="Segment timestamps powered by TheIntroDB"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding SkipIntroMode, Mode=TwoWay}">
-                            <ComboBoxItem Content="Show Prompt Button" Tag="button" />
-                            <ComboBoxItem Content="Auto-Skip Immediately" Tag="auto" />
-                            <ComboBoxItem Content="Off" Tag="off" />
-                        </ComboBox>
-                    </DockPanel>
-
-                    <!-- Skip Recap Mode -->
-                    <DockPanel Margin="0,4,0,10">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Skip Recap Mode" FontWeight="SemiBold" />
-                            <TextBlock Text="Automatically skip recap sequences before the episode begins"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding SkipRecapMode, Mode=TwoWay}">
-                            <ComboBoxItem Content="Auto-Skip Immediately" Tag="auto" />
-                            <ComboBoxItem Content="Show Prompt Button" Tag="button" />
-                            <ComboBoxItem Content="Off" Tag="off" />
-                        </ComboBox>
-                    </DockPanel>
-
-                    <!-- Skip Credits Mode -->
-                    <DockPanel Margin="0,4,0,0">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Skip Credits Mode" FontWeight="SemiBold" />
-                            <TextBlock Text="Jump past end credits to next episode or return to detail"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding SkipCreditsMode, Mode=TwoWay}">
-                            <ComboBoxItem Content="Show Prompt Button" Tag="button" />
-                            <ComboBoxItem Content="Auto-Skip to Next" Tag="auto" />
-                            <ComboBoxItem Content="Off" Tag="off" />
-                        </ComboBox>
-                    </DockPanel>
-                </StackPanel>
-            </Border>
-
-            <!-- ── SECTION 5: SUBTITLES & AUDIO ── -->
-            <TextBlock Text="Subtitles &amp; Audio" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
-
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16" Margin="0,0,0,28">
-                <StackPanel>
-                    <DockPanel Margin="0,0,0,12">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Subtitle Font" FontWeight="SemiBold" />
-                            <TextBlock Text="Typography rendered natively by libass / mpv"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValue="{Binding SubtitleFont, Mode=TwoWay}">
-                            <ComboBoxItem Content="Segoe UI Variable Text" />
-                            <ComboBoxItem Content="Segoe UI" />
-                            <ComboBoxItem Content="Arial" />
-                            <ComboBoxItem Content="Roboto" />
-                            <ComboBoxItem Content="Consolas" />
-                        </ComboBox>
-                    </DockPanel>
-
-                    <Separator Margin="0,6" />
-
-                    <!-- Subtitle Size -->
-                    <DockPanel Margin="0,4,0,12">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Subtitle Font Size" FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding SubtitleSize, StringFormat='Font size: {0} pt'}"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <Slider HorizontalAlignment="Right" Width="180" Minimum="28" Maximum="72"
-                                Value="{Binding SubtitleSize, Mode=TwoWay}" />
-                    </DockPanel>
-
-                    <Separator Margin="0,6" />
-
-                    <!-- Subtitle Color -->
-                    <DockPanel Margin="0,4,0,12">
-                        <TextBlock Text="Subtitle Text Color" FontWeight="SemiBold" VerticalAlignment="Center" />
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding SubtitleColor, Mode=TwoWay}">
-                            <ComboBoxItem Content="White (#FFFFFF)" Tag="#FFFFFF" />
-                            <ComboBoxItem Content="Yellow (#FFFF00)" Tag="#FFFF00" />
-                            <ComboBoxItem Content="Cyan (#00FFFF)" Tag="#00FFFF" />
-                            <ComboBoxItem Content="Amber (#E5A00D)" Tag="#E5A00D" />
-                        </ComboBox>
-                    </DockPanel>
-
-                    <Separator Margin="0,6" />
-
-                    <!-- Subtitle Background -->
-                    <DockPanel Margin="0,4,0,12">
-                        <TextBlock Text="Subtitle Background" FontWeight="SemiBold" VerticalAlignment="Center" />
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding SubtitleBackground, Mode=TwoWay}">
-                            <ComboBoxItem Content="None" Tag="none" />
-                            <ComboBoxItem Content="Semi-Transparent Black" Tag="semi" />
-                            <ComboBoxItem Content="Opaque Black" Tag="opaque" />
-                        </ComboBox>
-                    </DockPanel>
-
-                    <Separator Margin="0,6" />
-
-                    <!-- Default Languages -->
-                    <DockPanel Margin="0,4,0,0">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Preferred Audio Language" FontWeight="SemiBold" />
-                            <TextBlock Text="Three-letter ISO language code (e.g. eng, jpn, spa)"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ui:TextBox HorizontalAlignment="Right" Width="100" Text="{Binding DefaultAudioLanguage, Mode=TwoWay}" />
-                    </DockPanel>
-                </StackPanel>
-            </Border>
-
-            <!-- ── SECTION 6: APPEARANCE & WINDOWS 11 DWM MATERIALS ── -->
-            <TextBlock Text="Appearance &amp; Windows Materials" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
-
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16" Margin="0,0,0,28">
-                <StackPanel>
-                    <DockPanel Margin="0,0,0,12">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="App Theme" FontWeight="SemiBold" />
-                            <TextBlock Text="Follow Windows 11 system theme or enforce Obsidian Dark / Alabaster Light"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding SelectedTheme, Mode=TwoWay}">
-                            <ComboBoxItem Content="System Default (Auto)" Tag="auto" />
-                            <ComboBoxItem Content="Dark (Obsidian)" Tag="dark" />
-                            <ComboBoxItem Content="Light (Alabaster)" Tag="light" />
-                        </ComboBox>
-                    </DockPanel>
-
-                    <Separator Margin="0,8" />
-
-                    <DockPanel Margin="0,4,0,0">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Window Backdrop Material" FontWeight="SemiBold" />
-                            <TextBlock Text="Hardware-accelerated Windows 11 Desktop Window Manager (DWM) composition"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  SelectedValuePath="Tag"
-                                  SelectedValue="{Binding SelectedBackdrop, Mode=TwoWay}">
-                            <ComboBoxItem Content="Mica (Windows 11)" Tag="Mica" />
-                            <ComboBoxItem Content="Acrylic (Glass Blur)" Tag="Acrylic" />
-                            <ComboBoxItem Content="Mica Alt (Tabbed)" Tag="Tabbed" />
-                            <ComboBoxItem Content="Solid (No Blur)" Tag="None" />
-                        </ComboBox>
-                    </DockPanel>
-
-                    <Separator Margin="0,8" />
-
-                    <!-- Theme Accent Color Selector -->
-                    <DockPanel Margin="0,4,0,0">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Theme Accent Color" FontWeight="SemiBold" />
-                            <TextBlock Text="Personalize buttons, highlights, glowing rings, and progress indicators"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <ComboBox HorizontalAlignment="Right" MinWidth="160"
-                                  ItemsSource="{Binding ThemeColors}"
-                                  SelectedValuePath="HexColor"
-                                  SelectedValue="{Binding SelectedAccentColor, Mode=TwoWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border Width="14" Height="14" CornerRadius="7" Background="{Binding PreviewBrush}" Margin="0,0,8,0" VerticalAlignment="Center" />
-                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                        <Button Style="{StaticResource AmberPrimaryButton}" Click="OnOpenPinBrowserClick" Margin="0,0,10,0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon Symbol="Open24" FontSize="15" Margin="0,0,8,0" />
+                                                <TextBlock Text="Open emby.media/pin in Browser" FontWeight="SemiBold" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Content="Cancel" Click="OnCancelEmbyConnectClick" />
                                     </StackPanel>
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                    </DockPanel>
-                </StackPanel>
-            </Border>
 
-            <!-- ── SECTION 7: TRAKT.TV SCROBBLING ── -->
-            <TextBlock Text="Trakt.tv Scrobbling &amp; Sync" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <ProgressBar IsIndeterminate="True" Width="100" Height="4" Margin="0,0,10,0"
+                                                     Foreground="{DynamicResource NocturneAmberBrush}" />
+                                        <TextBlock Text="{Binding ConnectStatusMessage}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
 
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16" Margin="0,0,0,28">
-                <StackPanel>
-                    <DockPanel Margin="0,0,0,12">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Trakt Connection" FontWeight="SemiBold" />
-                            <TextBlock Text="Real-time scrobbling, watched history sync, and personal ratings"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <Button DockPanel.Dock="Right" Content="Connect Trakt" Click="OnConnectTraktClick"
-                                Visibility="{Binding IsTraktConnected, Converter={StaticResource InvertBoolToVisibility}}" />
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
-                                    Visibility="{Binding IsTraktConnected, Converter={StaticResource BoolToVisibility}}">
-                            <Border Background="#332EA043" CornerRadius="4" Padding="8,4" Margin="0,0,8,0">
-                                <TextBlock Text="Connected" Foreground="#2EA043" FontWeight="SemiBold" FontSize="12" />
-                            </Border>
-                            <Button Content="Disconnect" Click="OnDisconnectTraktClick" Padding="8,4" />
-                        </StackPanel>
-                    </DockPanel>
+                                <!-- Active Emby Connect Flow: Step 2 Discovered Servers List -->
+                                <StackPanel Visibility="{Binding IsConnectServersListActive, Converter={StaticResource BoolToVisibility}}">
+                                    <DockPanel Margin="0,0,0,12">
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource AmberPrimaryButton}"
+                                                Click="OnAddAllConnectServersClick"
+                                                IsEnabled="{Binding IsAddingAllServers, Converter={StaticResource InverseBool}}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon Symbol="AddCircle24" FontSize="15" Margin="0,0,6,0" />
+                                                <TextBlock Text="Add All Servers" FontWeight="SemiBold" />
+                                            </StackPanel>
+                                        </Button>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Text="Servers Found On Your Emby Account" FontWeight="SemiBold" FontSize="15" />
+                                            <TextBlock Text="Click Add Server or Add All to link them to Nocturne:"
+                                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                    </DockPanel>
 
-                    <!-- Trakt Code Display -->
-                    <StackPanel Margin="0,10,0,14" Visibility="{Binding TraktAuthCode, Converter={StaticResource NullToVisibility}}">
-                        <TextBlock Text="Visit trakt.tv/activate and enter code:" FontSize="13" Foreground="{DynamicResource NocturneAmberBrush}" />
-                        <TextBlock Text="{Binding TraktAuthCode}" FontSize="28" FontWeight="Bold" Margin="0,4,0,0" Foreground="White" />
+                                    <ItemsControl ItemsSource="{Binding DiscoveredServers}" Margin="0,0,0,12">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Margin="0,4" Padding="14,10" CornerRadius="6" Background="#20FFFFFF">
+                                                    <DockPanel>
+                                                        <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" Margin="10,0,0,0">
+                                                            <Border Visibility="{Binding IsAlreadyAdded, Converter={StaticResource BoolToVisibility}}"
+                                                                    Background="#302EA043" CornerRadius="4" Padding="8,4">
+                                                                <TextBlock Text="Connected" Foreground="#2EA043" FontWeight="SemiBold" FontSize="12" />
+                                                            </Border>
+
+                                                            <Button Visibility="{Binding IsAlreadyAdded, Converter={StaticResource InvertBoolToVisibility}}"
+                                                                    Style="{StaticResource AmberPrimaryButton}" Content="Add Server"
+                                                                    Click="OnAddDiscoveredServerClick" Tag="{Binding}"
+                                                                    IsEnabled="{Binding IsAdding, Converter={StaticResource InverseBool}}" Padding="12,5" />
+                                                        </StackPanel>
+
+                                                        <StackPanel VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" />
+                                                            <TextBlock Text="{Binding Url}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                                            <TextBlock Text="{Binding ErrorMessage}" FontSize="11" Foreground="#FF6B6B" Margin="0,2,0,0"
+                                                                       Visibility="{Binding ErrorMessage, Converter={StaticResource NullToVisibility}}" />
+                                                        </StackPanel>
+                                                    </DockPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <Button Content="Done" Click="OnCancelEmbyConnectClick" HorizontalAlignment="Left" Padding="16,6" />
+                                </StackPanel>
+
+                                <!-- Error Message if Any -->
+                                <TextBlock Text="{Binding ConnectErrorMessage}" FontSize="12" Foreground="#FF6B6B" Margin="0,8,0,0"
+                                           Visibility="{Binding ConnectErrorMessage, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Manual Server Entry (Expandable Dropdown like Trakt setup) -->
+                        <Expander Header="Manual Server Setup (Advanced)" Margin="0,0,0,4" IsExpanded="False">
+                            <StackPanel Margin="0,12,0,4">
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Server URL" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                    <ui:TextBox Grid.Column="1" Text="{Binding NewServerUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                PlaceholderText="http://192.168.1.100:8096 or https://myemby.example.com" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Username" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                    <ui:TextBox Grid.Column="1" Text="{Binding NewUsername, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                PlaceholderText="Emby username" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Password" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                    <PasswordBox Grid.Column="1" x:Name="NewServerPasswordInput" Height="34" />
+                                </Grid>
+
+                                <TextBlock Text="{Binding ServerAddError}" Foreground="#FF6B6B" FontSize="12" Margin="0,0,0,10"
+                                           Visibility="{Binding ServerAddError, Converter={StaticResource NullToVisibility}}" />
+
+                                <Button Style="{StaticResource AmberPrimaryButton}" Click="OnAddServerClick"
+                                        IsEnabled="{Binding IsAddingServer, Converter={StaticResource InverseBool}}"
+                                        HorizontalAlignment="Left" Padding="16,8">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="AddCircle24" FontSize="16" Margin="0,0,8,0" />
+                                        <TextBlock Text="Connect &amp; Add Server" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Expander>
                     </StackPanel>
+                </Border>
 
-                    <Separator Margin="0,6" />
+                <!-- Section 8: Cache & Synchronization -->
+                <TextBlock Text="Cache &amp; Local SQLite Database" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
 
-                    <DockPanel Margin="0,4,0,8">
-                        <TextBlock Text="Auto-Scrobble Playback to Trakt" VerticalAlignment="Center" FontWeight="SemiBold" />
-                        <ui:ToggleSwitch IsChecked="{Binding TraktAutoScrobble, Mode=TwoWay}" HorizontalAlignment="Right" />
-                    </DockPanel>
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,24,0">
+                                <TextBlock Text="Local Database &amp; Disk Cache Size" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                <TextBlock Text="{Binding DatabaseSizeText, StringFormat='SQLite WAL + image thumbnails: {0}'}"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="Clear Cache" Click="OnClearCacheClick" Margin="0,0,10,0"
+                                        IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
+                                <Button Style="{StaticResource AmberPrimaryButton}" Content="Sync Now" Click="OnSyncNowClick"
+                                        IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
+                            </StackPanel>
+                        </Grid>
 
-                    <DockPanel Margin="0,4,0,8">
-                        <TextBlock Text="Sync Watched State with Trakt" VerticalAlignment="Center" FontWeight="SemiBold" />
-                        <ui:ToggleSwitch IsChecked="{Binding TraktSyncWatchedState, Mode=TwoWay}" HorizontalAlignment="Right" />
-                    </DockPanel>
+                        <!-- Cache Cleared Success Feedback -->
+                        <Border Background="#1AFFB020" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1"
+                                CornerRadius="6" Padding="12,8" Margin="0,0,0,14"
+                                Visibility="{Binding CacheStatusMessage, Converter={StaticResource NullToVisibility}}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="Checkmark24" FontSize="14" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                                <TextBlock Text="{Binding CacheStatusMessage}" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource NocturneAmberBrush}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
 
-                    <DockPanel Margin="0,4,0,0">
-                        <TextBlock Text="Show Trakt Watchlist in Navigation" VerticalAlignment="Center" FontWeight="SemiBold" />
-                        <ui:ToggleSwitch IsChecked="{Binding TraktShowWatchlistInSidebar, Mode=TwoWay}" HorizontalAlignment="Right" />
-                    </DockPanel>
-                </StackPanel>
-            </Border>
+                        <!-- Live Sync Progress Section -->
+                        <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}" CornerRadius="8" Padding="14,12"
+                                Margin="0,0,0,14"
+                                Visibility="{Binding IsSyncing, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel>
+                                <DockPanel Margin="0,0,0,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <ui:SymbolIcon Symbol="ArrowSync24" FontSize="14" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,6,0" />
+                                        <TextBlock Text="{Binding SyncDetailedStatus}" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding SyncProgressPercent, StringFormat='{}{0:F0}%'}" FontSize="12" FontWeight="Bold"
+                                               HorizontalAlignment="Right" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                </DockPanel>
+                                <ProgressBar Height="8" Minimum="0" Maximum="100"
+                                             Value="{Binding SyncProgressPercent}"
+                                             IsIndeterminate="{Binding IsSyncIndeterminate}"
+                                             Foreground="{DynamicResource NocturneAmberBrush}" />
+                            </StackPanel>
+                        </Border>
 
-            <!-- ── SECTION 8: CACHE & SYNCHRONIZATION ── -->
-            <TextBlock Text="Cache &amp; Local SQLite Database" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+                        <!-- Idle / Last Status message (hidden during active sync) -->
+                        <DockPanel Visibility="{Binding IsSyncing, Converter={StaticResource InvertBoolToVisibility}}">
+                            <TextBlock Text="Status:" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,6,0" />
+                            <TextBlock Text="{Binding SyncStatusText}" FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                        </DockPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
 
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16" Margin="0,0,0,28">
-                <StackPanel>
-                    <DockPanel Margin="0,0,0,14">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Local Database Size" FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding DatabaseSizeText, StringFormat='SQLite WAL storage: {0}'}"
-                                       FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button Content="Clear Cache" Click="OnClearCacheClick" Margin="0,0,8,0" />
-                            <Button Style="{StaticResource AmberPrimaryButton}" Content="Sync Now" Click="OnSyncNowClick"
-                                    IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
-                        </StackPanel>
-                    </DockPanel>
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <!-- ── CATEGORY 2: LIBRARIES & MERGING ── -->
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <StackPanel Visibility="{Binding IsLibrariesCategory, Converter={StaticResource BoolToVisibility}}">
+                <!-- Section 2: Library Mode & Combined Virtual Libraries -->
+                <TextBlock Text="Libraries &amp; Combined Virtual Library Mode" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
 
-                    <TextBlock Text="{Binding SyncStatusText}" FontSize="12"
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                </StackPanel>
-            </Border>
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Library Display Mode" FontWeight="SemiBold" />
+                                <TextBlock Text="Combine libraries across multiple servers into Unified rows or browse separately"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding LibraryMode, Mode=TwoWay}">
+                                <ComboBoxItem Content="Separate (Per-Server)" Tag="separate" />
+                                <ComboBoxItem Content="Combined (Unified Virtual)" Tag="combined" />
+                            </ComboBox>
+                        </DockPanel>
 
-            <!-- ── SECTION 9: ABOUT NOCTURNE ── -->
-            <TextBlock Text="About Nocturne" FontSize="16" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+                        <Separator Margin="0,8" />
 
-            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                    CornerRadius="10" Padding="20,16">
-                <StackPanel>
-                    <TextBlock Text="Nocturne v4.0.0 (Native Windows Edition)" FontWeight="Bold" FontSize="15"
-                               Foreground="{DynamicResource NocturneAmberBrush}" />
-                    <TextBlock Text="Pure .NET 8 WPF-UI client with zero Chromium, zero web engine overhead, and hardware-accelerated libmpv rendering. All rights reserved."
-                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,6,0,0" TextWrapping="Wrap" LineHeight="18" />
-                </StackPanel>
-            </Border>
+                        <DockPanel Margin="0,4,0,14">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Show Unmapped Libraries" FontWeight="SemiBold" />
+                                <TextBlock Text="Display standalone libraries that haven't been assigned to a combined group"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ui:ToggleSwitch IsChecked="{Binding ShowUnmappedLibraries, Mode=TwoWay}" HorizontalAlignment="Right" />
+                        </DockPanel>
+
+                        <!-- Combined Virtual Groups List -->
+                        <TextBlock Text="Combined Library Groups" FontWeight="SemiBold" Margin="0,8,0,8" />
+
+                        <ItemsControl ItemsSource="{Binding CombinedGroups}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,3" Padding="12,8" CornerRadius="6" Background="#18FFFFFF">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Padding="6,3" Margin="8,0,0,0"
+                                                    Click="OnRemoveCombinedGroupClick" Tag="{Binding Name}">
+                                                <ui:SymbolIcon Symbol="Delete16" FontSize="12" Foreground="#FF6B6B" />
+                                            </Button>
+                                            <ui:SymbolIcon Symbol="Folder24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,10,0" VerticalAlignment="Center" />
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                <TextBlock Text="Unified Cross-Server Library" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- Add Group -->
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="10" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ui:TextBox Grid.Column="0" PlaceholderText="New group name (e.g. Movies, TV Shows, Anime)"
+                                        Text="{Binding NewGroupName, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button Grid.Column="2" Content="Add Group" Click="OnAddCombinedGroupClick" />
+                        </Grid>
+
+                        <Button Content="Auto-Map All Server Libraries" Click="OnAutoMapCombinedClick" Margin="0,10,0,0" HorizontalAlignment="Left"
+                                IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Section 3: Deduplication Engine -->
+                <TextBlock Text="Deduplication Engine" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Enable Multi-Server Deduplication" FontWeight="SemiBold" />
+                                <TextBlock Text="Automatically merge matching movies and episodes across servers into single cards"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ui:ToggleSwitch IsChecked="{Binding DedupEnabled, Mode=TwoWay}" HorizontalAlignment="Right" />
+                        </DockPanel>
+
+                        <Separator Margin="0,6,0,12" />
+
+                        <!-- Dedup Statistics -->
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0" Background="#14FFFFFF" CornerRadius="6" Padding="12,10">
+                                <StackPanel>
+                                    <TextBlock Text="Total Cached Items" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding CachedItemsCount}" FontSize="18" FontWeight="Bold" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border Grid.Column="2" Background="#14FFFFFF" CornerRadius="6" Padding="12,10">
+                                <StackPanel>
+                                    <TextBlock Text="Duplicate Groups Merged" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding DedupGroupsCount}" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <Button Content="Rebuild Dedup Index" Click="OnRebuildDedupClick" HorizontalAlignment="Left"
+                                IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <!-- ── CATEGORY 3: PLAYBACK & AUDIO ── -->
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <StackPanel Visibility="{Binding IsPlaybackCategory, Converter={StaticResource BoolToVisibility}}">
+                <!-- Section 4: Playback & Skip Segments -->
+                <TextBlock Text="Playback &amp; TheIntroDB Skip Segments" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Preferred Stream Quality" FontWeight="SemiBold" />
+                                <TextBlock Text="Direct stream with maximum bitrate or request lower resolution"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding PreferredQuality, Mode=TwoWay}">
+                                <ComboBoxItem Content="4K / Highest Bitrate" Tag="highest" />
+                                <ComboBoxItem Content="HD / Lower Bitrate" Tag="lowest" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <Separator Margin="0,6" />
+
+                        <DockPanel Margin="0,4,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Auto-Play Next Episode" FontWeight="SemiBold" />
+                                <TextBlock Text="Automatically advance to the next episode when current playback finishes"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ui:ToggleSwitch IsChecked="{Binding AutoPlayNextEpisode, Mode=TwoWay}" HorizontalAlignment="Right" />
+                        </DockPanel>
+
+                        <Separator Margin="0,6" />
+
+                        <!-- Skip Intro Mode -->
+                        <DockPanel Margin="0,4,0,10">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Skip Intro Mode" FontWeight="SemiBold" />
+                                <TextBlock Text="Segment timestamps powered by TheIntroDB"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding SkipIntroMode, Mode=TwoWay}">
+                                <ComboBoxItem Content="Show Prompt Button" Tag="button" />
+                                <ComboBoxItem Content="Auto-Skip Immediately" Tag="auto" />
+                                <ComboBoxItem Content="Off" Tag="off" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <!-- Skip Recap Mode -->
+                        <DockPanel Margin="0,4,0,10">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Skip Recap Mode" FontWeight="SemiBold" />
+                                <TextBlock Text="Automatically skip recap sequences before the episode begins"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding SkipRecapMode, Mode=TwoWay}">
+                                <ComboBoxItem Content="Auto-Skip Immediately" Tag="auto" />
+                                <ComboBoxItem Content="Show Prompt Button" Tag="button" />
+                                <ComboBoxItem Content="Off" Tag="off" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <!-- Skip Credits Mode -->
+                        <DockPanel Margin="0,4,0,0">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Skip Credits Mode" FontWeight="SemiBold" />
+                                <TextBlock Text="Jump past end credits to next episode or return to detail"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding SkipCreditsMode, Mode=TwoWay}">
+                                <ComboBoxItem Content="Show Prompt Button" Tag="button" />
+                                <ComboBoxItem Content="Auto-Skip to Next" Tag="auto" />
+                                <ComboBoxItem Content="Off" Tag="off" />
+                            </ComboBox>
+                        </DockPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Section 5: Subtitles & Audio -->
+                <TextBlock Text="Subtitles &amp; Audio" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Subtitle Font" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                <TextBlock Text="Typography rendered natively by libass / mpv"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Content"
+                                      SelectedValue="{Binding SubtitleFont, Mode=TwoWay}">
+                                <ComboBoxItem Content="Segoe UI Variable Text" />
+                                <ComboBoxItem Content="Segoe UI" />
+                                <ComboBoxItem Content="Arial" />
+                                <ComboBoxItem Content="Roboto" />
+                                <ComboBoxItem Content="Consolas" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <Separator Margin="0,6" />
+
+                        <!-- Subtitle Size -->
+                        <DockPanel Margin="0,4,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Subtitle Font Size" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding SubtitleSize, StringFormat='Font size: {0} pt'}"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <Slider HorizontalAlignment="Right" Width="180" Minimum="28" Maximum="72"
+                                    Value="{Binding SubtitleSize, Mode=TwoWay}" />
+                        </DockPanel>
+
+                        <Separator Margin="0,6" />
+
+                        <!-- Subtitle Color -->
+                        <DockPanel Margin="0,4,0,12">
+                            <TextBlock Text="Subtitle Text Color" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding SubtitleColor, Mode=TwoWay}">
+                                <ComboBoxItem Content="White (#FFFFFF)" Tag="#FFFFFF" />
+                                <ComboBoxItem Content="Yellow (#FFFF00)" Tag="#FFFF00" />
+                                <ComboBoxItem Content="Cyan (#00FFFF)" Tag="#00FFFF" />
+                                <ComboBoxItem Content="Amber (#E5A00D)" Tag="#E5A00D" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <Separator Margin="0,6" />
+
+                        <!-- Subtitle Background -->
+                        <DockPanel Margin="0,4,0,12">
+                            <TextBlock Text="Subtitle Background" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding SubtitleBackground, Mode=TwoWay}">
+                                <ComboBoxItem Content="None" Tag="none" />
+                                <ComboBoxItem Content="Semi-Transparent Black" Tag="semi" />
+                                <ComboBoxItem Content="Opaque Black" Tag="opaque" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <Separator Margin="0,6" />
+
+                        <!-- Subtitle Border -->
+                        <DockPanel Margin="0,4,0,12">
+                            <TextBlock Text="Subtitle Border" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding SubtitleBorder, Mode=TwoWay}">
+                                <ComboBoxItem Content="None" Tag="none" />
+                                <ComboBoxItem Content="Thin (1.5 px)" Tag="thin" />
+                                <ComboBoxItem Content="Medium (3.0 px)" Tag="medium" />
+                                <ComboBoxItem Content="Thick (4.5 px)" Tag="thick" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <Separator Margin="0,6" />
+
+                        <!-- Default Languages -->
+                        <DockPanel Margin="0,4,0,0">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Preferred Audio Language" FontWeight="SemiBold" />
+                                <TextBlock Text="Three-letter ISO language code (e.g. eng, jpn, spa)"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ui:TextBox HorizontalAlignment="Right" Width="100" Text="{Binding DefaultAudioLanguage, Mode=TwoWay}" />
+                        </DockPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <!-- ── CATEGORY 4: APPEARANCE ── -->
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <StackPanel Visibility="{Binding IsAppearanceCategory, Converter={StaticResource BoolToVisibility}}">
+                <!-- Section 6: Appearance & Windows 11 DWM Materials -->
+                <TextBlock Text="Appearance &amp; Windows Materials" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="App Theme" FontWeight="SemiBold" />
+                                <TextBlock Text="Follow Windows 11 system theme or enforce Obsidian Dark / Alabaster Light"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding SelectedTheme, Mode=TwoWay}">
+                                <ComboBoxItem Content="System Default (Auto)" Tag="auto" />
+                                <ComboBoxItem Content="Dark (Obsidian)" Tag="dark" />
+                                <ComboBoxItem Content="Light (Alabaster)" Tag="light" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <Separator Margin="0,8" />
+
+                        <DockPanel Margin="0,4,0,0">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Window Backdrop Material" FontWeight="SemiBold" />
+                                <TextBlock Text="Hardware-accelerated Windows 11 Desktop Window Manager (DWM) composition"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      SelectedValuePath="Tag"
+                                      SelectedValue="{Binding SelectedBackdrop, Mode=TwoWay}">
+                                <ComboBoxItem Content="Mica (Windows 11)" Tag="Mica" />
+                                <ComboBoxItem Content="Acrylic (Glass Blur)" Tag="Acrylic" />
+                                <ComboBoxItem Content="Mica Alt (Tabbed)" Tag="Tabbed" />
+                                <ComboBoxItem Content="Solid (No Blur)" Tag="None" />
+                            </ComboBox>
+                        </DockPanel>
+
+                        <Separator Margin="0,8" />
+
+                        <!-- Theme Accent Color Selector -->
+                        <DockPanel Margin="0,4,0,0">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Theme Accent Color" FontWeight="SemiBold" />
+                                <TextBlock Text="Personalize buttons, highlights, glowing rings, and progress indicators"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ComboBox HorizontalAlignment="Right" MinWidth="160"
+                                      ItemsSource="{Binding ThemeColors}"
+                                      SelectedValuePath="HexColor"
+                                      SelectedValue="{Binding SelectedAccentColor, Mode=TwoWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Border Width="14" Height="14" CornerRadius="7" Background="{Binding PreviewBrush}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </DockPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <!-- ── CATEGORY 5: INTEGRATIONS ── -->
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <StackPanel Visibility="{Binding IsIntegrationsCategory, Converter={StaticResource BoolToVisibility}}">
+                <!-- Section 7: Trakt.tv Scrobbling -->
+                <TextBlock Text="Trakt.tv Scrobbling &amp; Sync" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Trakt Connection" FontWeight="SemiBold" />
+                                <TextBlock Text="Real-time scrobbling, watched history sync, and personal ratings"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <Button DockPanel.Dock="Right" Content="Connect Trakt" Click="OnConnectTraktClick"
+                                    Visibility="{Binding IsTraktConnected, Converter={StaticResource InvertBoolToVisibility}}" />
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                        Visibility="{Binding IsTraktConnected, Converter={StaticResource BoolToVisibility}}">
+                                <Border Background="#332EA043" CornerRadius="4" Padding="8,4" Margin="0,0,8,0">
+                                    <TextBlock Text="{Binding TraktUsername, StringFormat='Connected (@{0})'}" Foreground="#2EA043" FontWeight="SemiBold" FontSize="12" />
+                                </Border>
+                                <Button Content="Disconnect" Click="OnDisconnectTraktClick" Padding="8,4" />
+                            </StackPanel>
+                        </DockPanel>
+
+                        <!-- Trakt Code Display & Activate Button -->
+                        <Border Margin="0,6,0,14" Padding="14,12" Background="#20E5A00D" BorderBrush="{DynamicResource NocturneAmberBrush}"
+                                BorderThickness="1" CornerRadius="8"
+                                Visibility="{Binding TraktAuthCode, Converter={StaticResource NullToVisibility}}">
+                            <StackPanel>
+                                <TextBlock Text="Device Code Generated! Enter at trakt.tv/activate:" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,8" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding TraktAuthCode}" FontSize="32" FontWeight="Bold" Foreground="#FFFFFF" Margin="0,0,16,0" VerticalAlignment="Center" />
+                                    <Button Content="Copy Code &amp; Open Trakt" Click="OnOpenTraktActivateClick" Style="{StaticResource AmberPrimaryButton}" Padding="14,6" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <TextBlock Text="Waiting for your authorization on Trakt.tv... The app will connect automatically once confirmed."
+                                           FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Status Message -->
+                        <TextBlock Text="{Binding TraktStatusMessage}" FontSize="12" Foreground="{DynamicResource NocturneAmberBrush}"
+                                   Margin="0,0,0,10" Visibility="{Binding TraktStatusMessage, Converter={StaticResource NullToVisibility}}" />
+
+                        <!-- Trakt API Credentials Configuration -->
+                        <Expander Header="Trakt Application Credentials (API Keys &amp; Limit Fix)" Margin="0,0,0,12" IsExpanded="False">
+                            <StackPanel Margin="0,8,0,4">
+                                <TextBlock Text="Trakt requires an OAuth application (Redirect URI: urn:ietf:wg:oauth:2.0:oob)."
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,6" />
+
+                                <!-- Note regarding Trakt 'no more can be added' -->
+                                <Border Background="#20E5A00D" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,0,0,12">
+                                    <StackPanel>
+                                        <TextBlock Text="Seeing 'No more can be added' on Trakt?" FontWeight="Bold" FontSize="12" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,0,4" />
+                                        <TextBlock Text="Trakt free accounts limit users to 1 connected Community App at a time. If Trakt rejects with 'no more can be added', open your Connected Apps and disconnect/revoke old or unused apps (e.g. older media players or test apps). Once freed, connecting succeeds immediately."
+                                                   TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" LineHeight="16" Margin="0,0,0,8" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="Manage Connected Apps (Revoke Old Apps)" Click="OnManageTraktAppsClick" Padding="12,4" Margin="0,0,8,0" />
+                                            <Button Content="Register Trakt App" Click="OnCreateTraktAppClick" Padding="12,4" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="130" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Client ID" VerticalAlignment="Center" FontWeight="SemiBold" />
+                                    <ui:TextBox Grid.Column="1" Text="{Binding TraktClientId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Paste 64-character Client ID from Trakt.tv" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="130" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Client Secret" VerticalAlignment="Center" FontWeight="SemiBold" />
+                                    <ui:TextBox Grid.Column="1" Text="{Binding TraktClientSecret, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Paste 64-character Client Secret from Trakt.tv" />
+                                </Grid>
+                            </StackPanel>
+                        </Expander>
+
+                        <Separator Margin="0,6" />
+
+                        <DockPanel Margin="0,4,0,8">
+                            <TextBlock Text="Auto-Scrobble Playback to Trakt" VerticalAlignment="Center" FontWeight="SemiBold" />
+                            <ui:ToggleSwitch IsChecked="{Binding TraktAutoScrobble, Mode=TwoWay}" HorizontalAlignment="Right" />
+                        </DockPanel>
+
+                        <DockPanel Margin="0,4,0,8">
+                            <TextBlock Text="Sync Watched State with Trakt" VerticalAlignment="Center" FontWeight="SemiBold" />
+                            <ui:ToggleSwitch IsChecked="{Binding TraktSyncWatchedState, Mode=TwoWay}" HorizontalAlignment="Right" />
+                        </DockPanel>
+
+                        <DockPanel Margin="0,4,0,0">
+                            <TextBlock Text="Show Trakt Watchlist in Navigation" VerticalAlignment="Center" FontWeight="SemiBold" />
+                            <ui:ToggleSwitch IsChecked="{Binding TraktShowWatchlistInSidebar, Mode=TwoWay}" HorizontalAlignment="Right" />
+                        </DockPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <!-- ── CATEGORY 6: ABOUT NOCTURNE ── -->
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <StackPanel Visibility="{Binding IsAboutCategory, Converter={StaticResource BoolToVisibility}}">
+                <!-- Section 9: About Nocturne -->
+                <TextBlock Text="About Nocturne" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,16">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,8">
+                            <TextBlock Text="{Binding AppVersion}" FontWeight="Bold" FontSize="16"
+                                       Foreground="{DynamicResource NocturneAmberBrush}" VerticalAlignment="Center" />
+                            <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}" CornerRadius="4" Padding="8,3" HorizontalAlignment="Right">
+                                <TextBlock Text="{Binding RuntimeInfo}" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </Border>
+                        </DockPanel>
+                        <TextBlock Text="Pure .NET 8 WPF-UI native desktop client with zero Chromium or web engine overhead, hardware-accelerated libmpv direct rendering, multi-server library support, smart version grouping, TheIntroDB skip segments, and Trakt.tv scrobbling."
+                                   FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="18" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Diagnostics & Logs -->
+                <TextBlock Text="Diagnostics &amp; Logs" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16">
+                    <StackPanel>
+                        <TextBlock Text="Nocturne writes diagnostic logs and unhandled crash traces to your user application directory. Use the tools below to inspect runtime logs or report issues."
+                                   FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,14" />
+
+                        <DockPanel Margin="0,0,0,14">
+                            <TextBlock Text="Logs Location:" FontWeight="SemiBold" FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <TextBox Text="{Binding LogsDirectoryPath, Mode=OneWay}" IsReadOnly="True" FontSize="12"
+                                     Background="{DynamicResource ControlFillColorDefaultBrush}" />
+                        </DockPanel>
+
+                        <WrapPanel Orientation="Horizontal">
+                            <Button Style="{StaticResource AmberPrimaryButton}" Click="OnOpenLogsFolderClick" Margin="0,0,10,8">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="FolderOpen24" FontSize="15" Margin="0,0,6,0" />
+                                    <TextBlock Text="Open Logs Folder" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource AmberSecondaryButton}" Click="OnOpenMainLogClick" Margin="0,0,10,8">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="DocumentText24" FontSize="15" Margin="0,0,6,0" />
+                                    <TextBlock Text="View Main Log" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource AmberSecondaryButton}" Click="OnOpenCrashLogClick" Margin="0,0,10,8">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="ErrorCircle24" FontSize="15" Margin="0,0,6,0" />
+                                    <TextBlock Text="View Crash Log" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Button>
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
 
         </StackPanel>
     </ScrollViewer>

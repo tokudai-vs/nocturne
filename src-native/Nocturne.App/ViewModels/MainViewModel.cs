@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Media;
 using Wpf.Ui.Controls;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
@@ -14,6 +15,8 @@ public class MainViewModel : BaseViewModel
     private readonly IntroDbService _introDb;
     private readonly TraktService _trakt;
     private readonly DatabaseService _db;
+    private readonly WatchPartyService _watchParty;
+    private readonly SyncEngine _sync;
 
     private BaseViewModel _currentViewModel;
     private WindowBackdropType _backdropType = WindowBackdropType.Mica;
@@ -21,6 +24,8 @@ public class MainViewModel : BaseViewModel
     private bool _isSplashVisible = true;
     private string _splashStatusText = "Initializing Nocturne...";
     private bool _isNavigationVisible = true;
+    private bool _isSyncing;
+    private string _headerSyncStatusText = string.Empty;
 
     // Player State
     private bool _isStartingPlayback;
@@ -59,6 +64,8 @@ public class MainViewModel : BaseViewModel
         IntroDbService introDb,
         TraktService trakt,
         DatabaseService db,
+        WatchPartyService watchParty,
+        SyncEngine sync,
         HomeViewModel homeVM,
         LibraryViewModel libraryVM,
         DetailViewModel detailVM,
@@ -73,6 +80,8 @@ public class MainViewModel : BaseViewModel
         _introDb = introDb;
         _trakt = trakt;
         _db = db;
+        _watchParty = watchParty;
+        _sync = sync;
 
         HomeVM = homeVM;
         LibraryVM = libraryVM;
@@ -93,6 +102,44 @@ public class MainViewModel : BaseViewModel
         // Wire playback requests to embedded player
         HomeVM.PlayRequested += item => _ = StartPlaybackAsync(item, item.UserData?.PlaybackPositionTicks ?? 0);
         DetailVM.PlayRequested += (item, ticks) => _ = StartPlaybackAsync(item, ticks);
+
+        // Sync and Cache refresh handlers
+        _sync.ProgressReported += report =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                if (report.State == SyncState.Done || report.State == SyncState.Idle || report.State == SyncState.Error)
+                {
+                    IsSyncing = false;
+                    SyncProgressPercent = 0;
+                }
+                else
+                {
+                    IsSyncing = true;
+                    SyncProgressPercent = Math.Clamp(report.Percentage, 0, 100);
+                    HeaderSyncStatusText = $"{report.StatusMessage} ({report.Percentage:F0}%)";
+                }
+            });
+        };
+
+        _sync.SyncCompleted += () =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                IsSyncing = false;
+                _ = HomeVM.LoadAsync();
+                _ = LibraryVM.LoadViewsAsync();
+            });
+        };
+
+        SettingsVM.CacheCleared += () =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                _ = HomeVM.LoadAsync();
+                _ = LibraryVM.LoadViewsAsync();
+            });
+        };
 
         // IntroDB skip prompt updates
         _introDb.PromptChanged += prompt =>
@@ -117,6 +164,10 @@ public class MainViewModel : BaseViewModel
         {
             _lastPlaybackSeconds = sec;
             _introDb.OnPositionChanged(sec, _mpv);
+            if (_watchParty.IsActive)
+            {
+                _watchParty.BroadcastHeartbeat(sec, _mpv.IsPlaying && !_mpv.IsPaused);
+            }
             Application.Current?.Dispatcher?.Invoke(() =>
             {
                 CurrentPlaybackSeconds = sec;
@@ -135,6 +186,11 @@ public class MainViewModel : BaseViewModel
 
         _mpv.PauseChanged += paused =>
         {
+            if (_watchParty.IsActive)
+            {
+                if (paused) _watchParty.BroadcastPause(_mpv.CurrentPositionSeconds);
+                else _watchParty.BroadcastPlay(_mpv.CurrentPositionSeconds);
+            }
             Application.Current?.Dispatcher?.Invoke(() =>
             {
                 IsPaused = paused;
@@ -150,22 +206,50 @@ public class MainViewModel : BaseViewModel
             });
         };
 
+        _mpv.SubtitleTrackChanged += trackId =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                _currentSubtitleTrackId = trackId;
+                OnPropertyChanged(nameof(CurrentSubtitleTrackId));
+            });
+        };
+
+        _mpv.AudioTrackChanged += trackId =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                _currentAudioTrackId = trackId;
+                OnPropertyChanged(nameof(CurrentAudioTrackId));
+            });
+        };
+
         _mpv.PlaybackEnded += () =>
         {
             if (_isStartingPlayback) return;
-            Application.Current?.Dispatcher?.Invoke(async () =>
+            var app = Application.Current;
+            if (app == null || app.Dispatcher.HasShutdownStarted) return;
+
+            app.Dispatcher.InvokeAsync(async () =>
             {
-                if (IsPlayerActive && !_isStartingPlayback)
+                try
                 {
-                    if (_settings.Current.AutoPlayNextEpisode && CanGoNextEpisode && _nextEpisodeItem != null)
+                    if (IsPlayerActive && !_isStartingPlayback)
                     {
-                        NocturneLogger.Info("MainViewModel", $"Auto-advancing to next episode: {_nextEpisodeItem.Name}");
-                        await PlayNextEpisodeAsync();
+                        if (_settings.Current.AutoPlayNextEpisode && CanGoNextEpisode && _nextEpisodeItem != null)
+                        {
+                            NocturneLogger.Info("MainViewModel", $"Auto-advancing to next episode: {_nextEpisodeItem.Name}");
+                            await PlayNextEpisodeAsync();
+                        }
+                        else
+                        {
+                            await StopPlaybackAsync(isEof: true);
+                        }
                     }
-                    else
-                    {
-                        await StopPlaybackAsync();
-                    }
+                }
+                catch (Exception ex)
+                {
+                    NocturneLogger.Warn("MainViewModel", $"PlaybackEnded error: {ex.Message}");
                 }
             });
         };
@@ -197,12 +281,44 @@ public class MainViewModel : BaseViewModel
                 IsNavigationVisible = value is not OnboardingViewModel;
                 OnPropertyChanged(nameof(IsHomeActive));
                 OnPropertyChanged(nameof(IsLibraryActive));
+                OnPropertyChanged(nameof(IsDetailActive));
+                OnPropertyChanged(nameof(IsSearchActive));
+                OnPropertyChanged(nameof(IsSettingsActive));
+                OnPropertyChanged(nameof(IsAnalyticsActive));
+                OnPropertyChanged(nameof(IsOnboardingActive));
+                OnPropertyChanged(nameof(IsHeroPage));
+                OnPropertyChanged(nameof(TopBarForeground));
+                OnPropertyChanged(nameof(TopBarSecondaryForeground));
+                OnPropertyChanged(nameof(HomeTabIconBrush));
+                OnPropertyChanged(nameof(LibraryTabIconBrush));
             }
         }
     }
 
     public bool IsHomeActive => CurrentViewModel is HomeViewModel;
     public bool IsLibraryActive => CurrentViewModel is LibraryViewModel;
+    public bool IsDetailActive => CurrentViewModel is DetailViewModel;
+    public bool IsSearchActive => CurrentViewModel is SearchViewModel;
+    public bool IsSettingsActive => CurrentViewModel is SettingsViewModel;
+    public bool IsAnalyticsActive => CurrentViewModel is AnalyticsViewModel;
+    public bool IsOnboardingActive => CurrentViewModel is OnboardingViewModel;
+    public bool IsHeroPage => CurrentViewModel is HomeViewModel || CurrentViewModel is DetailViewModel;
+
+    public Brush TopBarForeground => IsHeroPage
+        ? Brushes.White
+        : (Brush)(Application.Current?.TryFindResource("TextFillColorPrimaryBrush") ?? Brushes.Black);
+
+    public Brush TopBarSecondaryForeground => IsHeroPage
+        ? new SolidColorBrush(Color.FromArgb(0xDC, 0xFF, 0xFF, 0xFF))
+        : (Brush)(Application.Current?.TryFindResource("TextFillColorSecondaryBrush") ?? Brushes.Gray);
+
+    public Brush HomeTabIconBrush => IsHomeActive
+        ? (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange)
+        : TopBarSecondaryForeground;
+
+    public Brush LibraryTabIconBrush => IsLibraryActive
+        ? (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange)
+        : TopBarSecondaryForeground;
 
     public string CurrentUserName
     {
@@ -258,6 +374,27 @@ public class MainViewModel : BaseViewModel
         get => _isNavigationVisible;
         set => SetProperty(ref _isNavigationVisible, value);
     }
+
+    public bool IsSyncing
+    {
+        get => _isSyncing;
+        set => SetProperty(ref _isSyncing, value);
+    }
+
+    public string HeaderSyncStatusText
+    {
+        get => _headerSyncStatusText;
+        set => SetProperty(ref _headerSyncStatusText, value);
+    }
+
+    private double _syncProgressPercent;
+    public double SyncProgressPercent
+    {
+        get => _syncProgressPercent;
+        set => SetProperty(ref _syncProgressPercent, value);
+    }
+
+    public bool IsSwitchServerVisible => _settings.Current.LibraryMode != "combined" && _settings.Current.Servers.Count > 1;
 
     // Player Properties
     public bool IsPlayerActive
@@ -351,6 +488,49 @@ public class MainViewModel : BaseViewModel
     public async Task SeekToAsync(double seconds) => await _mpv.SeekTo(seconds);
     public async Task SeekRelativeAsync(double delta) => await _mpv.SeekRelative(delta);
 
+    public EmbyItem? CurrentPlayingItem => _currentPlayingItem;
+    public EmbyItem? CurrentItem => _currentPlayingItem;
+
+    public List<MediaStreamInfo> AvailableAudioStreams =>
+        _currentPlayingItem?.MediaSources?.FirstOrDefault()?.MediaStreams?
+            .Where(s => s.Type?.Equals("Audio", StringComparison.OrdinalIgnoreCase) == true)
+            .ToList() ?? new();
+
+    public List<MediaStreamInfo> AvailableSubtitleStreams =>
+        _currentPlayingItem?.MediaSources?.FirstOrDefault()?.MediaStreams?
+            .Where(s => s.Type?.Equals("Subtitle", StringComparison.OrdinalIgnoreCase) == true)
+            .ToList() ?? new();
+
+    private int? _currentSubtitleTrackId;
+    private int? _currentAudioTrackId;
+
+    public int? CurrentSubtitleTrackId => _currentSubtitleTrackId;
+    public int? CurrentAudioTrackId => _currentAudioTrackId;
+
+    public async Task CycleSubtitleAsync()
+    {
+        await _mpv.CycleSubtitles();
+    }
+
+    public async Task CycleAudioAsync()
+    {
+        await _mpv.CycleAudio();
+    }
+
+    public async Task SetSubtitleTrackAsync(int trackId)
+    {
+        _currentSubtitleTrackId = trackId;
+        OnPropertyChanged(nameof(CurrentSubtitleTrackId));
+        await _mpv.SetSubtitleTrack(trackId);
+    }
+
+    public async Task SetAudioTrackAsync(int trackId)
+    {
+        _currentAudioTrackId = trackId;
+        OnPropertyChanged(nameof(CurrentAudioTrackId));
+        await _mpv.SetAudioTrack(trackId);
+    }
+
     public void NavigateToHome()
     {
         CurrentViewModel = HomeVM;
@@ -374,7 +554,7 @@ public class MainViewModel : BaseViewModel
 
     public void NavigateToDetail(EmbyItem item)
     {
-        _ = DetailVM.LoadItemAsync(item.Id);
+        _ = DetailVM.LoadItemAsync(item.Id, item.ServerId, item);
         CurrentViewModel = DetailVM;
     }
 
@@ -399,32 +579,50 @@ public class MainViewModel : BaseViewModel
         if (activeServer != null && !string.IsNullOrEmpty(activeServer.AccessToken))
         {
             CurrentUserName = !string.IsNullOrEmpty(activeServer.Username) ? activeServer.Username : "User";
-            CurrentServerName = !string.IsNullOrEmpty(activeServer.Name) ? activeServer.Name : "Emby Server";
+            CurrentServerName = _settings.Current.LibraryMode == "combined"
+                ? $"Combined ({_settings.Current.Servers.Count} servers)"
+                : (!string.IsNullOrEmpty(activeServer.Name) ? activeServer.Name : "Emby Server");
             CurrentUserInitial = CurrentUserName.Length > 0 ? CurrentUserName[0].ToString().ToUpperInvariant() : "U";
 
-            SplashStatusText = $"Connecting to {activeServer.Name}...";
+            SplashStatusText = _settings.Current.LibraryMode == "combined"
+                ? $"Connecting to {_settings.Current.Servers.Count} servers..."
+                : $"Connecting to {activeServer.Name}...";
             _embyClient.Configure(activeServer.Url, activeServer.AccessToken, activeServer.UserId);
-
-            // Pre-load data while splash is displaying
-            var loadHomeTask = HomeVM.LoadAsync();
-            var loadLibTask = LibraryVM.LoadViewsAsync();
-
-            // Give user the slick splash experience (min 1.2s)
-            await Task.Delay(1200);
-            await Task.WhenAll(loadHomeTask, loadLibTask);
 
             IsNavigationVisible = true;
             CurrentViewModel = HomeVM;
+
+            // Kick off background loading immediately (cache renders in 0ms, network fetches in background)
+            _ = HomeVM.LoadAsync();
+            _ = LibraryVM.LoadViewsAsync();
+
+            // Very brief 80ms yield to allow the initial window frame and controls to lay out, then dismiss splash
+            await Task.Delay(80);
+            IsSplashVisible = false;
+
+            if (_settings.Current.SyncOnStartup)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(2500); // Allow home screen to render smoothly first
+                        await _sync.RunFullSyncAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        NocturneLogger.Warn("MainViewModel", $"Background startup sync error: {ex.Message}");
+                    }
+                });
+            }
         }
         else
         {
-            await Task.Delay(800);
             IsNavigationVisible = false;
             OnboardingVM.LoadSavedServers();
             CurrentViewModel = OnboardingVM;
+            IsSplashVisible = false;
         }
-
-        IsSplashVisible = false;
     }
 
     public void Logout()
@@ -446,6 +644,11 @@ public class MainViewModel : BaseViewModel
         _currentPlayingItem = item;
         _nextEpisodeItem = null;
         _prevEpisodeItem = null;
+
+        _lastPlaybackSeconds = (double)startTicks / 10_000_000.0;
+        CurrentPlaybackSeconds = _lastPlaybackSeconds;
+        TotalDurationSeconds = (double)(item.RunTimeTicks ?? 0) / 10_000_000.0;
+        UpdateTimeString();
 
         if (item.Type == "Episode")
         {
@@ -473,7 +676,13 @@ public class MainViewModel : BaseViewModel
                 {
                     try
                     {
-                        var eps = await _embyClient.GetEpisodesAsync(item.SeriesId, item.SeasonId ?? "");
+                        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
+                               ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
+                        var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
+                            ? _embyClient
+                            : EmbyClient.CreateForServer(srv);
+
+                        var eps = await client.GetEpisodesAsync(item.SeriesId, item.SeasonId ?? "");
                         var idx = eps.FindIndex(e => e.Id == item.Id);
                         if (idx >= 0)
                         {
@@ -521,14 +730,54 @@ public class MainViewModel : BaseViewModel
     public async Task ExecuteEmbeddedPlaybackAsync(IntPtr hwnd, EmbyItem item, long startTicks)
     {
         _currentPlayingItem = item;
-        var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
-        var streamUrl = _embyClient.GetStreamUrl(item.Id, mediaSourceId);
+        _currentSubtitleTrackId = null;
+        _currentAudioTrackId = null;
+        OnPropertyChanged(nameof(CurrentSubtitleTrackId));
+        OnPropertyChanged(nameof(CurrentAudioTrackId));
+        OnPropertyChanged(nameof(AvailableSubtitleStreams));
+        OnPropertyChanged(nameof(AvailableAudioStreams));
 
-        NocturneLogger.Info("MainViewModel", $"Starting embedded mpv: {item.Name} ({item.Id}) at tick {startTicks} in HWND {hwnd}");
-        await _mpv.PlayEmbeddedAsync(hwnd, streamUrl, item.Name, startTicks);
-        await _embyClient.ReportPlaybackStartAsync(item.Id, mediaSourceId, startTicks);
+        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
+               ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
+        var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
+            ? _embyClient
+            : EmbyClient.CreateForServer(srv);
+
+        var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
+        var streamUrl = client.GetStreamUrl(item.Id, mediaSourceId, srv?.Url, srv?.AccessToken);
+
+        NocturneLogger.Info("MainViewModel", $"Starting embedded mpv: {item.Name} ({item.Id}) on server '{srv?.Name}' at tick {startTicks} in HWND {hwnd}");
+        await _mpv.PlayEmbeddedAsync(
+            hwnd,
+            streamUrl,
+            item.Name,
+            startTicks,
+            subFont: _settings.Current.SubtitleFont,
+            subSize: _settings.Current.SubtitleSize,
+            subColor: _settings.Current.SubtitleColor,
+            subBorder: _settings.Current.SubtitleBorder,
+            subBg: _settings.Current.SubtitleBackground);
+
+        // Fetch full chapters if not already populated for thumbnail preview scrub
+        if (item.Chapters == null || item.Chapters.Count == 0)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var fullItem = await client.GetItemAsync(item.Id);
+                    if (fullItem?.Chapters != null && fullItem.Chapters.Count > 0)
+                    {
+                        item.Chapters = fullItem.Chapters;
+                    }
+                }
+                catch { }
+            });
+        }
+
+        await client.ReportPlaybackStartAsync(item.Id, mediaSourceId, startTicks);
         await _trakt.ScrobbleStartAsync(item, item.ProgressPercentage);
-        _db.RecordWatchEvent(item.Id, _embyClient.BaseUrl, item.Name, item.Type, (int)((item.RunTimeTicks ?? 0) / 10_000_000), item.SeriesName, item.Genres);
+        _db.RecordWatchEvent(item.Id, srv?.Url ?? client.BaseUrl, item.Name, item.Type, (int)((item.RunTimeTicks ?? 0) / 10_000_000), item.SeriesName, item.Genres);
 
         if (item.Type == "Episode")
         {
@@ -539,6 +788,11 @@ public class MainViewModel : BaseViewModel
         {
             _introDb.Clear();
         }
+
+        if (_watchParty.IsActive)
+        {
+            _watchParty.MarkShowLive();
+        }
     }
 
     public async Task PlayNextEpisodeAsync()
@@ -546,6 +800,11 @@ public class MainViewModel : BaseViewModel
         if (_nextEpisodeItem != null)
         {
             var next = _nextEpisodeItem;
+            CurrentPlaybackSeconds = 0;
+            TotalDurationSeconds = 0;
+            _lastPlaybackSeconds = 0;
+            UpdateTimeString();
+            await FinalizeCurrentPlaybackAsync(isEof: true);
             await StartPlaybackAsync(next, 0);
         }
     }
@@ -555,6 +814,11 @@ public class MainViewModel : BaseViewModel
         if (_prevEpisodeItem != null)
         {
             var prev = _prevEpisodeItem;
+            CurrentPlaybackSeconds = 0;
+            TotalDurationSeconds = 0;
+            _lastPlaybackSeconds = 0;
+            UpdateTimeString();
+            await FinalizeCurrentPlaybackAsync(isEof: false);
             await StartPlaybackAsync(prev, 0);
         }
     }
@@ -564,47 +828,122 @@ public class MainViewModel : BaseViewModel
         if (IsSkipPromptVisible && _skipTargetSeconds > 0)
         {
             _ = _mpv.SeekTo(_skipTargetSeconds);
+            if (_watchParty.IsActive)
+            {
+                _watchParty.BroadcastSeek(_skipTargetSeconds);
+            }
             IsSkipPromptVisible = false;
         }
     }
 
-    public async Task StopPlaybackAsync()
+    private async Task FinalizeCurrentPlaybackAsync(bool isEof)
+    {
+        if (_currentPlayingItem == null) return;
+        var item = _currentPlayingItem;
+        _currentPlayingItem = null;
+
+        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
+               ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
+        var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
+            ? _embyClient
+            : EmbyClient.CreateForServer(srv);
+
+        var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
+        var positionTicks = isEof
+            ? (item.RunTimeTicks ?? (long)(_lastPlaybackSeconds * 10_000_000.0))
+            : (long)(_lastPlaybackSeconds * 10_000_000.0);
+        var progress = isEof ? 100.0 : (item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0
+            ? Math.Clamp((double)positionTicks / item.RunTimeTicks.Value * 100.0, 0, 100)
+            : 0);
+
+        try
+        {
+            await _trakt.ScrobbleStopAsync(item, progress);
+        }
+        catch { }
+
+        try
+        {
+            await client.ReportPlaybackStoppedAsync(item.Id, mediaSourceId, positionTicks);
+        }
+        catch { }
+
+        if (isEof || progress >= 90.0)
+        {
+            try
+            {
+                await client.MarkPlayedAsync(item.Id);
+            }
+            catch { }
+
+            if (item.UserData != null)
+            {
+                item.UserData.Played = true;
+                item.UserData.PlaybackPositionTicks = 0;
+            }
+        }
+
+        try
+        {
+            _db.RecordWatchEvent(item.Id, srv?.Url ?? client.BaseUrl, item.Name, item.Type, (int)_lastPlaybackSeconds, item.SeriesName, item.Genres);
+        }
+        catch { }
+    }
+
+    public async Task StopPlaybackAsync(bool isEof = false)
     {
         if (!IsPlayerActive && !_mpv.IsPlaying) return;
 
+        // Cut off MPV audio and video playback immediately so no audio bleeds into the UI while scrobbling/reporting
+        var stopTask = _mpv.StopAsync();
+
+        if (_watchParty.IsActive)
+        {
+            _watchParty.BroadcastPause(_lastPlaybackSeconds);
+        }
+
         IsPlayerActive = false;
+        CurrentPlaybackSeconds = 0;
+        TotalDurationSeconds = 0;
+        _lastPlaybackSeconds = 0;
+        UpdateTimeString();
         _introDb.Clear();
         IsSkipPromptVisible = false;
 
-        if (_currentPlayingItem != null)
+        await FinalizeCurrentPlaybackAsync(isEof);
+
+        await stopTask;
+    }
+
+    public string? GetChapterImageUrl(int chapterIndex, string? tag = null)
+    {
+        if (_currentPlayingItem == null) return null;
+        var item = _currentPlayingItem;
+        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
+               ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
+        var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
+            ? _embyClient
+            : EmbyClient.CreateForServer(srv);
+
+        return client.BuildChapterImageUrl(item.Id, chapterIndex, tag, 320, srv?.Url, srv?.AccessToken);
+    }
+
+    public string? GetPreviewFallbackImageUrl()
+    {
+        if (_currentPlayingItem == null) return null;
+        var item = _currentPlayingItem;
+        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
+               ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
+        var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
+            ? _embyClient
+            : EmbyClient.CreateForServer(srv);
+
+        var backdropTag = item.BackdropImageTags?.FirstOrDefault();
+        if (!string.IsNullOrEmpty(backdropTag))
         {
-            var item = _currentPlayingItem;
-            _currentPlayingItem = null;
-            var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
-            var positionTicks = (long)(_lastPlaybackSeconds * 10_000_000.0);
-            var progress = item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0
-                ? Math.Clamp((double)positionTicks / item.RunTimeTicks.Value * 100.0, 0, 100)
-                : 0;
-
-            try
-            {
-                await _trakt.ScrobbleStopAsync(item, progress);
-            }
-            catch { }
-
-            try
-            {
-                await _embyClient.ReportPlaybackStoppedAsync(item.Id, mediaSourceId, positionTicks);
-            }
-            catch { }
-
-            try
-            {
-                _db.RecordWatchEvent(item.Id, _embyClient.BaseUrl, item.Name, item.Type, (int)_lastPlaybackSeconds, item.SeriesName, item.Genres);
-            }
-            catch { }
+            return client.BuildImageUrl(item.Id, "Backdrop", 500, backdropTag, srv?.Url, srv?.AccessToken);
         }
-
-        await _mpv.StopAsync();
+        var primaryTag = item.ImageTags?.GetValueOrDefault("Primary");
+        return client.BuildImageUrl(item.Id, "Primary", 500, primaryTag, srv?.Url, srv?.AccessToken);
     }
 }

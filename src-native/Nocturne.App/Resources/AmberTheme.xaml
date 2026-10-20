@@ -17,6 +17,16 @@
     <SolidColorBrush x:Key="CardBackdropDarkBrush" Color="#B31A1A1A" />
     <SolidColorBrush x:Key="CardBackdropLightBrush" Color="#CCFFFFFF" />
 
+    <!-- Theme-Adaptive Horizontal Scroll Edge Gradients (Default Dark, Dynamically Swapped) -->
+    <LinearGradientBrush x:Key="ScrollEdgeLeftBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+        <GradientStop Color="#C0000000" Offset="0.0" />
+        <GradientStop Color="#00000000" Offset="1.0" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="ScrollEdgeRightBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+        <GradientStop Color="#00000000" Offset="0.0" />
+        <GradientStop Color="#C0000000" Offset="1.0" />
+    </LinearGradientBrush>
+
     <!-- Amber Accent Primary Button Style -->
     <Style x:Key="AmberPrimaryButton" TargetType="Button">
         <Setter Property="Background" Value="{DynamicResource NocturneAmberBrush}" />

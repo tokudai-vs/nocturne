@@ -71,7 +71,8 @@ public class EmbyClient
     private readonly string _deviceId;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = null };
 
-    public const string FullItemFields = "Overview,RunTimeTicks,CommunityRating,IndexNumber,ParentIndexNumber,Genres,Studios,MediaSources,Taglines,ImageTags,BackdropImageTags,RemoteTrailers,People,ProviderIds,OfficialRating";
+    public const string FullItemFields = "Overview,RunTimeTicks,CommunityRating,IndexNumber,ParentIndexNumber,Genres,Studios,MediaSources,Taglines,ImageTags,BackdropImageTags,RemoteTrailers,People,ProviderIds,OfficialRating,UserData,DateCreated,SortName,Chapters";
+    public const string FullSyncItemFields = "Overview,Genres,Studios,MediaSources,ProviderIds,DateCreated,UserData,ImageTags,BackdropImageTags,People,SortName,IndexNumber,ParentIndexNumber,RunTimeTicks,CommunityRating";
     public const string LightItemFields = "Overview,RunTimeTicks,CommunityRating,IndexNumber,ParentIndexNumber,ImageTags,BackdropImageTags,ProviderIds";
 
     public EmbyClient()
@@ -148,6 +149,13 @@ public class EmbyClient
     public string UserId => _userId;
     public string Token => _token;
     public bool IsAuthenticated => !string.IsNullOrEmpty(_token);
+
+    public static EmbyClient CreateForServer(ServerConfig server)
+    {
+        var client = new EmbyClient();
+        client.Configure(server.Url, server.AccessToken, server.UserId);
+        return client;
+    }
 
     public void Configure(string url, string token = "", string userId = "")
     {
@@ -436,7 +444,7 @@ public class EmbyClient
         string sortOrder = "Ascending",
         string? fields = null)
     {
-        if (!IsAuthenticated) return new ItemsResult<EmbyItem>();
+        if (!IsAuthenticated) return new ItemsResult<EmbyItem> { IsSuccess = false };
 
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["Recursive"] = "true";
@@ -449,20 +457,39 @@ public class EmbyClient
         if (!string.IsNullOrEmpty(parentId)) query["ParentId"] = parentId;
         if (!string.IsNullOrEmpty(includeItemTypes)) query["IncludeItemTypes"] = includeItemTypes;
 
-        try
+        int maxRetries = 3;
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
-            var resp = await _http.GetAsync(BuildUrl($"/Users/{_userId}/Items?{query}"));
-            if (resp.IsSuccessStatusCode)
+            try
             {
-                var res = await resp.Content.ReadFromJsonAsync<ItemsResult<EmbyItem>>();
-                return res ?? new ItemsResult<EmbyItem>();
+                var resp = await _http.GetAsync(BuildUrl($"/Users/{_userId}/Items?{query}"));
+                if (resp.IsSuccessStatusCode)
+                {
+                    var res = await resp.Content.ReadFromJsonAsync<ItemsResult<EmbyItem>>();
+                    if (res != null)
+                    {
+                        res.IsSuccess = true;
+                        return res;
+                    }
+                    return new ItemsResult<EmbyItem> { IsSuccess = true };
+                }
+                else
+                {
+                    NocturneLogger.Warn("EmbyClient", $"GetItems returned HTTP {(int)resp.StatusCode} for parent '{parentId}' (attempt {attempt}/{maxRetries})");
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("EmbyClient", $"GetItems network error for parent '{parentId}' (attempt {attempt}/{maxRetries}): {ex.Message}");
+            }
+
+            if (attempt < maxRetries)
+            {
+                await Task.Delay(attempt * 1000);
             }
         }
-        catch (Exception ex)
-        {
-            NocturneLogger.Error("EmbyClient", "GetItems failed", ex);
-        }
-        return new ItemsResult<EmbyItem>();
+
+        return new ItemsResult<EmbyItem> { IsSuccess = false };
     }
 
     public async Task<EmbyItem?> GetItemAsync(string itemId)
@@ -483,17 +510,49 @@ public class EmbyClient
         return null;
     }
 
-    public async Task<List<EmbyItem>> GetResumeAsync(int limit = 16)
+    public async Task<List<EmbyItem>> GetLocalTrailersAsync(string itemId)
     {
         if (!IsAuthenticated) return new List<EmbyItem>();
-        var query = $"Recursive=true&SortBy=DatePlayed&SortOrder=Descending&Filters=IsResumable&Limit={limit}&Fields={LightItemFields}";
         try
         {
-            var resp = await _http.GetAsync(BuildUrl($"/Users/{_userId}/Items?{query}"));
+            var resp = await _http.GetAsync(BuildUrl($"/Users/{_userId}/Items/{itemId}/LocalTrailers"));
+            if (resp.IsSuccessStatusCode)
+            {
+                var trailers = await resp.Content.ReadFromJsonAsync<List<EmbyItem>>();
+                if (trailers != null) return trailers;
+            }
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("EmbyClient", $"GetLocalTrailers ({itemId}) failed: {ex.Message}");
+        }
+        return new List<EmbyItem>();
+    }
+
+    public async Task<List<EmbyItem>> GetResumeAsync(int limit = 20)
+    {
+        if (!IsAuthenticated) return new List<EmbyItem>();
+        // Dedicated Emby Continue Watching endpoint: /Users/{userId}/Items/Resume
+        var query = $"Limit={limit}&Recursive=true&Fields={FullItemFields}&MediaTypes=Video";
+        try
+        {
+            var resp = await _http.GetAsync(BuildUrl($"/Users/{_userId}/Items/Resume?{query}"));
             if (resp.IsSuccessStatusCode)
             {
                 var res = await resp.Content.ReadFromJsonAsync<ItemsResult<EmbyItem>>();
-                return res?.Items ?? new List<EmbyItem>();
+                if (res?.Items != null && res.Items.Count > 0)
+                {
+                    return res.Items;
+                }
+            }
+
+            // Fallback for servers with alternate routing: /Items/Resume or query with IsResumable
+            var altQuery = $"Recursive=true&SortBy=DatePlayed&SortOrder=Descending&Filters=IsResumable&Limit={limit}&Fields={FullItemFields}&MediaTypes=Video";
+            var altResp = await _http.GetAsync(BuildUrl($"/Users/{_userId}/Items?{altQuery}"));
+            if (altResp.IsSuccessStatusCode)
+            {
+                var altRes = await altResp.Content.ReadFromJsonAsync<ItemsResult<EmbyItem>>();
+                return altRes?.Items ?? new List<EmbyItem>();
             }
         }
         catch (Exception ex)
@@ -501,6 +560,24 @@ public class EmbyClient
             NocturneLogger.Error("EmbyClient", "GetResume failed", ex);
         }
         return new List<EmbyItem>();
+    }
+
+    public async Task<bool> RemoveFromResumeAsync(string itemId)
+    {
+        if (!IsAuthenticated || string.IsNullOrEmpty(itemId)) return false;
+        try
+        {
+            var resp = await _http.DeleteAsync(BuildUrl($"/Users/{_userId}/PlayingItems/{itemId}"));
+            if (resp.IsSuccessStatusCode) return true;
+
+            var postResp = await _http.PostAsync(BuildUrl($"/Users/{_userId}/PlayingItems/{itemId}/Progress?PositionTicks=0"), null);
+            return postResp.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("EmbyClient", $"RemoveFromResume ({itemId}) failed: {ex.Message}");
+            return false;
+        }
     }
 
     public async Task<List<EmbyItem>> GetNextUpAsync(int limit = 16)
@@ -730,20 +807,40 @@ public class EmbyClient
         }
     }
 
-    public string BuildImageUrl(string itemId, string imageType = "Primary", int? maxWidth = null, string? tag = null)
+    public string BuildImageUrl(string itemId, string imageType = "Primary", int? maxWidth = null, string? tag = null, string? serverUrl = null, string? serverToken = null)
     {
-        if (string.IsNullOrEmpty(_baseUrl)) return string.Empty;
-        var url = BuildUrl($"/Items/{itemId}/Images/{imageType}");
+        var bUrl = !string.IsNullOrEmpty(serverUrl) ? NormalizeServerUrl(serverUrl) : _baseUrl;
+        var tok = !string.IsNullOrEmpty(serverToken) ? serverToken : _token;
+        if (string.IsNullOrEmpty(bUrl)) return string.Empty;
+
+        var url = $"{bUrl}/Items/{itemId}/Images/{imageType}";
         var query = new List<string>();
         if (maxWidth.HasValue) query.Add($"MaxWidth={maxWidth.Value}");
         if (!string.IsNullOrEmpty(tag)) query.Add($"Tag={tag}");
-        if (!string.IsNullOrEmpty(_token)) query.Add($"api_key={_token}");
+        if (!string.IsNullOrEmpty(tok)) query.Add($"api_key={tok}");
 
         return query.Count > 0 ? $"{url}?{string.Join("&", query)}" : url;
     }
 
-    public string GetStreamUrl(string itemId, string mediaSourceId)
+    public string BuildChapterImageUrl(string itemId, int chapterIndex, string? tag = null, int? maxWidth = 320, string? serverUrl = null, string? serverToken = null)
     {
-        return $"{BuildUrl($"/Videos/{itemId}/stream")}?static=true&MediaSourceId={mediaSourceId}&api_key={_token}";
+        var bUrl = !string.IsNullOrEmpty(serverUrl) ? NormalizeServerUrl(serverUrl) : _baseUrl;
+        var tok = !string.IsNullOrEmpty(serverToken) ? serverToken : _token;
+        if (string.IsNullOrEmpty(bUrl)) return string.Empty;
+
+        var url = $"{bUrl}/Items/{itemId}/Images/Chapter/{chapterIndex}";
+        var query = new List<string>();
+        if (maxWidth.HasValue) query.Add($"MaxWidth={maxWidth.Value}");
+        if (!string.IsNullOrEmpty(tag)) query.Add($"Tag={tag}");
+        if (!string.IsNullOrEmpty(tok)) query.Add($"api_key={tok}");
+
+        return query.Count > 0 ? $"{url}?{string.Join("&", query)}" : url;
+    }
+
+    public string GetStreamUrl(string itemId, string mediaSourceId, string? serverUrl = null, string? serverToken = null)
+    {
+        var bUrl = !string.IsNullOrEmpty(serverUrl) ? NormalizeServerUrl(serverUrl) : _baseUrl;
+        var tok = !string.IsNullOrEmpty(serverToken) ? serverToken : _token;
+        return $"{bUrl}/Videos/{itemId}/stream?static=true&MediaSourceId={mediaSourceId}&api_key={tok}";
     }
 }

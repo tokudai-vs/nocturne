@@ -78,6 +78,11 @@ public partial class SettingsPage : UserControl
         }
     }
 
+    private void OnAddDiscoveredServerClick(object sender, RoutedEventArgs e)
+    {
+        OnAddSingleConnectServerClick(sender, e);
+    }
+
     private void OnDoneConnectServersClick(object sender, RoutedEventArgs e)
     {
         ViewModel?.CloseConnectFlow();
@@ -102,6 +107,29 @@ public partial class SettingsPage : UserControl
         {
             await ViewModel.RebuildDedupIndexAsync();
         }
+    }
+
+    private async void OnAutoMapCombinedClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.AutoMapCombinedGroupsAsync();
+        }
+    }
+
+    private void OnCreateTraktAppClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.OpenTraktAppCreationUrl();
+    }
+
+    private void OnManageTraktAppsClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.OpenTraktManageAppsUrl();
+    }
+
+    private void OnOpenTraktActivateClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.OpenTraktActivationUrl();
     }
 
     private async void OnConnectTraktClick(object sender, RoutedEventArgs e)
@@ -132,5 +160,28 @@ public partial class SettingsPage : UserControl
         {
             ViewModel?.ClearCache();
         }
+    }
+
+    private void OnCategoryClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string category } && ViewModel != null)
+        {
+            ViewModel.SelectCategory(category);
+        }
+    }
+
+    private void OnOpenLogsFolderClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.OpenLogsFolder();
+    }
+
+    private void OnOpenMainLogClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.OpenMainLog();
+    }
+
+    private void OnOpenCrashLogClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.OpenCrashLog();
     }
 }

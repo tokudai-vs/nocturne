@@ -31,4 +31,4 @@ execSync(`${makensis} scripts/installer.nsi`, {
   env: { ...process.env, NSISDIR: nsisDir }
 });
 
-console.log('\n[installer] SUCCESS! Installer generated at dist/Nocturne-v4.0.0-Setup.exe');
+console.log('\n[installer] SUCCESS! Installer generated at dist/Nocturne-v4.1.0-Setup.exe');

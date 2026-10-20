@@ -27,6 +27,8 @@ public class MpvController : IDisposable
     public event Action<double>? DurationChanged;
     public event Action<bool>? PauseChanged;
     public event Action<double>? VolumeChanged;
+    public event Action<int>? SubtitleTrackChanged;
+    public event Action<int>? AudioTrackChanged;
 
     public MpvController()
     {
@@ -38,6 +40,8 @@ public class MpvController : IDisposable
     public double CurrentVolume { get; private set; } = 100;
     public double CurrentPositionSeconds { get; private set; }
     public double DurationSeconds { get; private set; }
+    public int CurrentSubtitleTrack { get; private set; }
+    public int CurrentAudioTrack { get; private set; }
 
     public async Task StartIdleAsync()
     {
@@ -141,9 +145,20 @@ public class MpvController : IDisposable
         await SendCommandAsync(new object[] { "observe_property", 3, "eof-reached" });
         await SendCommandAsync(new object[] { "observe_property", 4, "pause" });
         await SendCommandAsync(new object[] { "observe_property", 5, "volume" });
+        await SendCommandAsync(new object[] { "observe_property", 6, "sid" });
+        await SendCommandAsync(new object[] { "observe_property", 7, "aid" });
     }
 
-    public async Task PlayEmbeddedAsync(IntPtr hwnd, string url, string title, long startPositionTicks = 0)
+    public async Task PlayEmbeddedAsync(
+        IntPtr hwnd,
+        string url,
+        string title,
+        long startPositionTicks = 0,
+        string? subFont = null,
+        int? subSize = null,
+        string? subColor = null,
+        string? subBorder = null,
+        string? subBg = null)
     {
         await StopAsync(notifyEnded: false);
 
@@ -157,6 +172,14 @@ public class MpvController : IDisposable
 
         var mpvDir = Path.GetDirectoryName(mpvExe)!;
         var configDir = Path.Combine(mpvDir, "portable_config");
+
+        double borderSize = subBorder?.ToLowerInvariant() switch
+        {
+            "thin" => 1.5,
+            "medium" => 3.0,
+            "thick" => 4.5,
+            _ => 0.0 // "none" by default
+        };
 
         var args = new List<string>
         {
@@ -173,8 +196,23 @@ public class MpvController : IDisposable
             "--load-scripts=no",
             "--osd-level=0",
             "--osd-bar=no",
-            "--border=no"
+            "--border=no",
+            "--sub-auto=all",
+            "--sub-visibility=yes",
+            $"--sub-border-size={borderSize.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
         };
+
+        if (!string.IsNullOrEmpty(subFont))
+            args.Add($"--sub-font=\"{subFont}\"");
+        if (subSize.HasValue && subSize.Value > 0)
+            args.Add($"--sub-font-size={subSize.Value}");
+        if (!string.IsNullOrEmpty(subColor))
+            args.Add($"--sub-color=\"{subColor}\"");
+
+        if (subBg == "semi")
+            args.Add("--sub-back-color=\"#80000000\"");
+        else if (subBg == "opaque")
+            args.Add("--sub-back-color=\"#FF000000\"");
 
         if (Directory.Exists(configDir))
         {
@@ -297,12 +335,12 @@ public class MpvController : IDisposable
             catch { }
         }
 
-        _readCts?.Cancel();
-        _writer?.Dispose();
+        try { _readCts?.Cancel(); } catch { }
+        try { _writer?.Dispose(); } catch { }
         _writer = null;
-        _reader?.Dispose();
+        try { _reader?.Dispose(); } catch { }
         _reader = null;
-        _pipeClient?.Dispose();
+        try { _pipeClient?.Dispose(); } catch { }
         _pipeClient = null;
         _isReady = false;
 
@@ -316,14 +354,14 @@ public class MpvController : IDisposable
                 }
             }
             catch { }
-            _mpvProcess.Dispose();
+            try { _mpvProcess.Dispose(); } catch { }
             _mpvProcess = null;
         }
 
         IsPlaying = false;
         if (notifyEnded && wasPlaying)
         {
-            PlaybackEnded?.Invoke();
+            try { PlaybackEnded?.Invoke(); } catch { }
         }
     }
 
@@ -347,6 +385,57 @@ public class MpvController : IDisposable
         await SendCommandAsync(new object[] { "cycle", "audio" });
     }
 
+    public async Task SetSubtitleTrack(int trackId)
+    {
+        if (trackId <= 0)
+        {
+            await SendCommandAsync(new object[] { "set_property", "sid", "no" });
+            await SendCommandAsync(new object[] { "set_property", "sub-visibility", false });
+            await ShowOsdText("Subtitles: Off");
+        }
+        else
+        {
+            await SendCommandAsync(new object[] { "set_property", "sub-visibility", true });
+            await SendCommandAsync(new object[] { "set_property", "sid", trackId });
+        }
+    }
+
+    public async Task SetSubtitleBorderSizeAsync(double borderSize)
+    {
+        await SendCommandAsync(new object[] { "set_property", "sub-border-size", borderSize });
+    }
+
+    public async Task SetSubtitleStyleAsync(string? font, int? size, string? color, string? border, string? background)
+    {
+        if (!string.IsNullOrEmpty(font))
+            await SendCommandAsync(new object[] { "set_property", "sub-font", font });
+        if (size.HasValue && size.Value > 0)
+            await SendCommandAsync(new object[] { "set_property", "sub-font-size", size.Value });
+        if (!string.IsNullOrEmpty(color))
+            await SendCommandAsync(new object[] { "set_property", "sub-color", color });
+
+        double borderSize = border?.ToLowerInvariant() switch
+        {
+            "thin" => 1.5,
+            "medium" => 3.0,
+            "thick" => 4.5,
+            _ => 0.0
+        };
+        await SendCommandAsync(new object[] { "set_property", "sub-border-size", borderSize });
+
+        if (background == "semi")
+            await SendCommandAsync(new object[] { "set_property", "sub-back-color", "#80000000" });
+        else if (background == "opaque")
+            await SendCommandAsync(new object[] { "set_property", "sub-back-color", "#FF000000" });
+        else
+            await SendCommandAsync(new object[] { "set_property", "sub-back-color", "#00000000" });
+    }
+
+    public async Task SetAudioTrack(int trackId)
+    {
+        await SendCommandAsync(new object[] { "set_property", "aid", trackId });
+    }
+
     public async Task ShowOsdText(string text, int durationMs = 2000)
     {
         await SendCommandAsync(new object[] { "show-text", text, durationMs });
@@ -364,10 +453,18 @@ public class MpvController : IDisposable
             request_id = Interlocked.Increment(ref _reqId)
         };
         var json = JsonSerializer.Serialize(req);
-        await _writeLock.WaitAsync();
         try
         {
-            await _writer.WriteLineAsync(json);
+            if (!await _writeLock.WaitAsync(500)) return;
+        }
+        catch { return; }
+
+        try
+        {
+            if (_writer != null && _isReady)
+            {
+                await _writer.WriteLineAsync(json);
+            }
         }
         catch (Exception ex)
         {
@@ -375,7 +472,7 @@ public class MpvController : IDisposable
         }
         finally
         {
-            _writeLock.Release();
+            try { _writeLock.Release(); } catch { }
         }
     }
 
@@ -434,6 +531,27 @@ public class MpvController : IDisposable
                                 NextEpisodeRequested?.Invoke();
                             }
                         }
+                        else if (name == "sid" && root.TryGetProperty("data", out var sidProp))
+                        {
+                            if (sidProp.ValueKind == JsonValueKind.Number)
+                            {
+                                CurrentSubtitleTrack = sidProp.GetInt32();
+                                SubtitleTrackChanged?.Invoke(CurrentSubtitleTrack);
+                            }
+                            else if (sidProp.ValueKind == JsonValueKind.False || (sidProp.ValueKind == JsonValueKind.String && sidProp.GetString() == "no"))
+                            {
+                                CurrentSubtitleTrack = 0;
+                                SubtitleTrackChanged?.Invoke(0);
+                            }
+                        }
+                        else if (name == "aid" && root.TryGetProperty("data", out var aidProp))
+                        {
+                            if (aidProp.ValueKind == JsonValueKind.Number)
+                            {
+                                CurrentAudioTrack = aidProp.GetInt32();
+                                AudioTrackChanged?.Invoke(CurrentAudioTrack);
+                            }
+                        }
                     }
                     else if (ev == "end-file")
                     {
@@ -444,8 +562,21 @@ public class MpvController : IDisposable
                         PlaybackEnded?.Invoke();
                     }
                 }
+                else if (root.TryGetProperty("error", out var errProp))
+                {
+                    var err = errProp.GetString();
+                    if (!string.IsNullOrEmpty(err) && err != "success")
+                    {
+                        NocturneLogger.Warn("MpvController", $"mpv IPC response: {line}");
+                    }
+                }
             }
             catch (OperationCanceledException) { break; }
+            catch (IOException ex)
+            {
+                NocturneLogger.Info("MpvController", $"Pipe disconnected: {ex.Message}");
+                break;
+            }
             catch (Exception ex)
             {
                 NocturneLogger.Warn("MpvController", $"Read error: {ex.Message}");
@@ -468,14 +599,18 @@ public class MpvController : IDisposable
 
     public void Dispose()
     {
-        _readCts?.Cancel();
-        _writer?.Dispose();
-        _reader?.Dispose();
-        _pipeClient?.Dispose();
+        try { _readCts?.Cancel(); } catch { }
+        try { _writer?.Dispose(); } catch { }
+        _writer = null;
+        try { _reader?.Dispose(); } catch { }
+        _reader = null;
+        try { _pipeClient?.Dispose(); } catch { }
+        _pipeClient = null;
         if (_mpvProcess != null && !_mpvProcess.HasExited)
         {
             try { _mpvProcess.Kill(); } catch { }
-            _mpvProcess.Dispose();
+            try { _mpvProcess.Dispose(); } catch { }
+            _mpvProcess = null;
         }
     }
 }

@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.1.0 — 2026-10-20
+
+### Added
+- **Media Player Close Button**: Standard caption close button (`Dismiss24`) in the top overlay bar of the media player alongside the Back button with red hover styling.
+- **Window Foreground Cohesion**: Automatic foreground focus restoration via Win32 DWM Z-order promotion (`BringWindowToTop`, `SetForegroundWindow`, and top-level focus) ensuring Nocturne instantly returns to the foreground when media playback ends or closes.
+- **Netflix-Style Timeline Scrubbing Thumbnails**: 16:9 interactive chapter and preview thumbnail popup hovering above the timeline scrubber with drop shadow, amber border, chapter title, and timestamp.
+- **Subtitle Border Customization**: New setting in Settings → Playback allowing users to choose subtitle border size (`None` by default, `Thin`, `Medium`, `Thick`), dynamically passed to mpv (`--sub-border-size`).
+- **YouTube Trailer Playback**: Direct trailer playback integration from movie and show detail pages via yt-dlp / mpv.
+- **Watch Party Synchronization**: Native host and guest watch party sync service with WebSocket signaling and automated binary dependency management.
+
+### Changed
+- **Preserved Window Rounded Corners**: Windows 11 DWM rounded corners (`DWMWCP_ROUND`) are now retained during windowed media playback, only switching to `DWMWCP_DONOTROUND` in exclusive full-screen mode.
+- **Timeline Progress Bar Reset**: Scrubbing sliders and playback counters now cleanly reset to 0:00 immediately upon advancing or switching episodes, eliminating stuck visual progress fills.
+- **Sync Engine Pipeline**: Overhauled background metadata sync with bounded channels, batched atomic SQLite WAL commits, and contiguous low-water-mark checkpoints.
+- **Instant Tab Navigation**: Edge-to-edge persistent view tree providing 0ms tab switching between Home, Library, Detail, Search, Settings, and Analytics.
+
 ## Unreleased
 
 Cross-server correctness release. Full root-cause analysis in
@@ -213,7 +229,7 @@ resume-refresh and rebuilds dedup on clean data.
 ### Features
 - Plex-like dark cinematic browsing UI with hero banners, poster grids, and detail pages
 - Full Emby server integration (login, libraries, search, metadata, watch status)
-- Video playback via bundled mpv with full codec support (HEVC, DTS, TrueHD, HDR10, Dolby Vision)
+- Video playback via bundled mpv with full codec support (HEVC, DTS, TrueHD, HDR10, Dolby Vision (P5/P8 tone-mapped))
 - ModernZ on-screen controller with amber-themed seek bar and interactive controls
 - Hot-loaded mpv (idle mode) for instant playback — zero startup delay
 - Smooth fade-to-black transitions between browsing and playback

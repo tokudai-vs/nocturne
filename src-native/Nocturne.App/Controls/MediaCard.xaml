@@ -3,47 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              Cursor="Hand"
+             ClipToBounds="False"
              MouseLeftButtonUp="OnCardClick">
-
-    <UserControl.Resources>
-        <Style x:Key="CardBorderStyle" TargetType="Border">
-            <Setter Property="CornerRadius" Value="8" />
-            <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-            <Setter Property="RenderTransform">
-                <Setter.Value>
-                    <ScaleTransform ScaleX="1" ScaleY="1" />
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
-                    <Trigger.EnterActions>
-                        <BeginStoryboard>
-                            <Storyboard>
-                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)"
-                                                 To="1.05" Duration="0:0:0.18" />
-                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)"
-                                                 To="1.05" Duration="0:0:0.18" />
-                            </Storyboard>
-                        </BeginStoryboard>
-                    </Trigger.EnterActions>
-                    <Trigger.ExitActions>
-                        <BeginStoryboard>
-                            <Storyboard>
-                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)"
-                                                 To="1.0" Duration="0:0:0.18" />
-                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)"
-                                                 To="1.0" Duration="0:0:0.18" />
-                            </Storyboard>
-                        </BeginStoryboard>
-                    </Trigger.ExitActions>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-    </UserControl.Resources>
 
     <!-- Right-Click Context Menu -->
     <UserControl.ContextMenu>
@@ -64,50 +25,93 @@
                     <ui:SymbolIcon Symbol="Heart16" />
                 </MenuItem.Icon>
             </MenuItem>
+            <Separator x:Name="ContinueSeparator" />
+            <MenuItem x:Name="RemoveFromContinueMenuItem" Header="Remove from Continue Watching" Click="OnContextMenuRemoveFromContinueClick">
+                <MenuItem.Icon>
+                    <ui:SymbolIcon Symbol="Dismiss16" Foreground="#FF5555" />
+                </MenuItem.Icon>
+            </MenuItem>
         </ContextMenu>
     </UserControl.ContextMenu>
 
-    <Grid Width="160" Margin="6,8">
+    <Grid Width="160" Margin="6,8" ClipToBounds="False">
         <Grid.RowDefinitions>
             <RowDefinition Height="240" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Poster Box -->
-        <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" ClipToBounds="True">
-            <Grid>
-                <!-- Fallback Icon -->
-                <ui:SymbolIcon Symbol="MoviesAndTv24" FontSize="36"
-                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <Grid Grid.Row="0" x:Name="CardBox"
+              MouseEnter="OnCardMouseEnter" MouseLeave="OnCardMouseLeave"
+              RenderTransformOrigin="0.5,0.5" ClipToBounds="False">
+            <Grid.RenderTransform>
+                <ScaleTransform x:Name="CardScaleTransform" ScaleX="1" ScaleY="1" />
+            </Grid.RenderTransform>
 
-                <!-- Poster Image -->
-                <Image x:Name="PosterImage" Stretch="UniformToFill" />
+            <!-- Card Background and Content with Rounded Mask -->
+            <Border CornerRadius="8" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+                <Grid>
+                    <Grid.OpacityMask>
+                        <VisualBrush>
+                            <VisualBrush.Visual>
+                                <Border Width="160" Height="240" CornerRadius="8" Background="White" />
+                            </VisualBrush.Visual>
+                        </VisualBrush>
+                    </Grid.OpacityMask>
 
-                <!-- Version Count Badge (for deduplicated items) -->
-                <Border x:Name="VersionBadge" HorizontalAlignment="Left" VerticalAlignment="Top"
-                        Margin="6" Padding="6,2" CornerRadius="4" Background="#D9141414"
-                        BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1"
-                        Visibility="Collapsed">
-                    <TextBlock x:Name="VersionBadgeText" Text="2 copies" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource NocturneAmberBrush}" />
-                </Border>
+                    <!-- Fallback Placeholder Tile (shown when poster is unavailable or fails to load) -->
+                    <Grid x:Name="FallbackTile" Background="{DynamicResource SubtleFillColorSecondaryBrush}">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12">
+                            <ui:SymbolIcon Symbol="MoviesAndTv24" FontSize="36"
+                                           Foreground="{DynamicResource NocturneAmberBrush}"
+                                           HorizontalAlignment="Center" Margin="0,0,0,10" />
+                            <TextBlock x:Name="FallbackTitleText"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                       TextAlignment="Center" TextWrapping="Wrap"
+                                       MaxHeight="80" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="FallbackYearText"
+                                       FontSize="11"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       TextAlignment="Center" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Grid>
 
-                <!-- Played Badge -->
-                <Border x:Name="PlayedBadge" Width="22" Height="22" CornerRadius="11"
-                        Background="#2EA043" HorizontalAlignment="Right" VerticalAlignment="Top"
-                        Margin="6" Visibility="Collapsed">
-                    <ui:SymbolIcon Symbol="Checkmark16" FontSize="12" Foreground="White"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                </Border>
+                    <!-- Poster Image -->
+                    <Image x:Name="PosterImage" Stretch="UniformToFill" />
 
-                <!-- Progress Bar -->
-                <ProgressBar x:Name="ProgressBar" Height="4" VerticalAlignment="Bottom"
-                             Foreground="{DynamicResource NocturneAmberBrush}"
-                             Background="#40000000" BorderThickness="0"
-                             Visibility="Collapsed" />
-            </Grid>
-        </Border>
+                    <!-- Version Count Badge (for deduplicated items) -->
+                    <Border x:Name="VersionBadge" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            Margin="6" Padding="6,2" CornerRadius="4" Background="#D9141414"
+                            BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1"
+                            Visibility="Collapsed">
+                        <TextBlock x:Name="VersionBadgeText" Text="2 copies" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource NocturneAmberBrush}" />
+                    </Border>
+
+                    <!-- Played Badge -->
+                    <Border x:Name="PlayedBadge" Width="22" Height="22" CornerRadius="11"
+                            Background="#2EA043" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Margin="6" Visibility="Collapsed">
+                        <ui:SymbolIcon Symbol="Checkmark16" FontSize="12" Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+
+                    <!-- Progress Bar (Inset from edges so border remains crisp) -->
+                    <ProgressBar x:Name="ProgressBar" Height="4" VerticalAlignment="Bottom"
+                                 Margin="6,0,6,6"
+                                 Foreground="{DynamicResource NocturneAmberBrush}"
+                                 Background="#50000000" BorderThickness="0"
+                                 Visibility="Collapsed" />
+                </Grid>
+            </Border>
+
+            <!-- Overlay Border (Always rendered ON TOP of image and progress bar, never cut off!) -->
+            <Border x:Name="CardBorder" CornerRadius="8"
+                    BorderThickness="1"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    IsHitTestVisible="False" Panel.ZIndex="10" />
+        </Grid>
 
         <!-- Title & Info -->
         <StackPanel Grid.Row="1" Margin="2,6,2,0">

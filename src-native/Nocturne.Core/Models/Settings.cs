@@ -56,6 +56,7 @@ public class NocturneSettings
     public int SubtitleSize { get; set; } = 46;
     public string SubtitleColor { get; set; } = "#FFFFFF";
     public string SubtitleBackground { get; set; } = "none"; // "none" | "semi" | "opaque"
+    public string SubtitleBorder { get; set; } = "none"; // "none" | "thin" | "medium" | "thick"
 
     // Skip segments (TheIntroDB)
     public string SkipIntroMode { get; set; } = "button"; // "button" | "auto" | "off"
@@ -73,6 +74,9 @@ public class NocturneSettings
     // Cache & Synchronization
     public bool SyncOnStartup { get; set; } = true;
     public int ImageCacheMaxMB { get; set; } = 500;
+    public string? LastFullSync { get; set; }
+    public string SyncStatus { get; set; } = "never"; // "never" | "in-progress" | "partial" | "complete"
+    public string DedupStatus { get; set; } = "never"; // "never" | "in-progress" | "failed" | "complete"
 
     // Trakt.tv integration
     public bool TraktAutoScrobble { get; set; } = true;

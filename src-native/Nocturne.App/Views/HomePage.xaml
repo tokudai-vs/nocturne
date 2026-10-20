@@ -10,42 +10,76 @@
                      Foreground="{DynamicResource NocturneAmberBrush}"
                      Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}" />
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="0,0,0,40">
 
-                <!-- Hero Section -->
-                <Grid Height="480" Visibility="{Binding HeroItem, Converter={StaticResource NullToVisibility}}">
-                    <!-- Backdrop Image -->
-                    <Image Source="{Binding HeroBackdropUrl}" Stretch="UniformToFill" />
-
-                    <!-- Gradient Masking for Mica Blend -->
+                <!-- Hero Section (Backdrop bleeds into top navigation bar with smooth bottom dissolve) -->
+                <Grid Height="500" Visibility="{Binding HeroItem, Converter={StaticResource NullToVisibility}}" ClipToBounds="True">
+                    <!-- Background Backdrop Container with OpacityMask (Text & Watch Now button are unmasked overlays) -->
                     <Grid>
-                        <Grid.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                <GradientStop Color="#00000000" Offset="0.0" />
-                                <GradientStop Color="#80000000" Offset="0.4" />
-                                <GradientStop Color="#E60F0F0F" Offset="1.0" />
+                        <Grid.OpacityMask>
+                            <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                                <GradientStop Color="#FFFFFFFF" Offset="0.0" />
+                                <GradientStop Color="#FFFFFFFF" Offset="0.75" />
+                                <GradientStop Color="#CCFFFFFF" Offset="0.88" />
+                                <GradientStop Color="#40FFFFFF" Offset="0.96" />
+                                <GradientStop Color="#00FFFFFF" Offset="1.0" />
                             </LinearGradientBrush>
-                        </Grid.Background>
+                        </Grid.OpacityMask>
+
+                        <!-- Backdrop Image -->
+                        <Image Source="{Binding HeroBackdropUrl}" Stretch="UniformToFill" />
+
+                        <!-- Background Trailer Player (Without sound, looping, fallback to image if failed) -->
+                        <MediaElement x:Name="HeroTrailerPlayer"
+                                      LoadedBehavior="Manual"
+                                      UnloadedBehavior="Manual"
+                                      IsMuted="True"
+                                      Volume="0"
+                                      Stretch="UniformToFill"
+                                      Visibility="Collapsed"
+                                      MediaOpened="OnTrailerMediaOpened"
+                                      MediaEnded="OnTrailerMediaEnded"
+                                      MediaFailed="OnTrailerMediaFailed" />
+
+                        <!-- Left Reading Scrim for Text Contrast -->
+                        <Border HorizontalAlignment="Left" Width="680">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                                    <GradientStop Color="#E0000000" Offset="0.0" />
+                                    <GradientStop Color="#A0000000" Offset="0.45" />
+                                    <GradientStop Color="#40000000" Offset="0.75" />
+                                    <GradientStop Color="#00000000" Offset="1.0" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+
+                        <!-- Bottom Soft Diffusion Scrim -->
+                        <Border VerticalAlignment="Bottom" Height="140">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                                    <GradientStop Color="#00000000" Offset="0.0" />
+                                    <GradientStop Color="#25000000" Offset="0.4" />
+                                    <GradientStop Color="#60000000" Offset="0.7" />
+                                    <GradientStop Color="#B0000000" Offset="1.0" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
                     </Grid>
 
-                    <Grid>
-                        <Grid.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                <GradientStop Color="#00000000" Offset="0.5" />
-                                <GradientStop Color="#F00F0F0F" Offset="1.0" />
-                            </LinearGradientBrush>
-                        </Grid.Background>
-                    </Grid>
-
-                    <!-- Hero Info -->
-                    <StackPanel VerticalAlignment="Bottom" Margin="40,0,40,40" MaxWidth="600" HorizontalAlignment="Left">
+                    <!-- Hero Info (Placed outside the OpacityMask so text and Watch Now button are 100% crisp, vibrant and never masked) -->
+                    <StackPanel VerticalAlignment="Bottom" Margin="40,0,40,36" MaxWidth="600" HorizontalAlignment="Left">
                         <TextBlock Text="{Binding HeroItem.Name}" FontSize="36" FontWeight="Bold"
-                                   Foreground="White" TextWrapping="Wrap" Margin="0,0,0,8" />
+                                   Foreground="White" TextWrapping="Wrap" Margin="0,0,0,8">
+                            <TextBlock.Effect>
+                                <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270" Color="#000000" Opacity="0.75" />
+                            </TextBlock.Effect>
+                        </TextBlock>
 
                         <!-- Meta Badges -->
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                            <Border Background="#33FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,8,0">
+                            <Border Background="#33FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
+                                    Visibility="{Binding HeroItem.ProductionYear, Converter={StaticResource NullToVisibility}}">
                                 <TextBlock Text="{Binding HeroItem.ProductionYear}" FontSize="12" Foreground="White" />
                             </Border>
                             <Border Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
@@ -60,8 +94,12 @@
                         </StackPanel>
 
                         <!-- Overview -->
-                        <TextBlock Text="{Binding HeroItem.Overview}" FontSize="13" Foreground="#D0D0D0"
-                                   TextWrapping="Wrap" MaxHeight="60" TextTrimming="CharacterEllipsis" Margin="0,0,0,20" />
+                        <TextBlock Text="{Binding HeroItem.Overview}" FontSize="13" Foreground="#E0E0E0"
+                                   TextWrapping="Wrap" MaxHeight="60" TextTrimming="CharacterEllipsis" Margin="0,0,0,20">
+                            <TextBlock.Effect>
+                                <DropShadowEffect BlurRadius="8" ShadowDepth="1" Direction="270" Color="#000000" Opacity="0.6" />
+                            </TextBlock.Effect>
+                        </TextBlock>
 
                         <!-- Play Hero Button -->
                         <Button Style="{StaticResource AmberPrimaryButton}" Click="OnPlayHeroClick" HorizontalAlignment="Left">
@@ -73,9 +111,13 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Continue Watching Row -->
+                <!-- Continue Watching Row (Horizontal Landscape Cards like official Emby app) -->
                 <controls:MediaRow Title="Continue Watching"
+                                   IsHorizontal="True"
                                    ItemsSource="{Binding ContinueWatching}"
+                                   PlayClick="OnContinueWatchingPlayClick"
+                                   ShowClick="OnContinueWatchingShowClick"
+                                   EpisodeClick="OnContinueWatchingEpisodeClick"
                                    ItemClick="OnRowItemClick" />
 
                 <!-- Next Up Episodes Row -->

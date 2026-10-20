@@ -6,6 +6,27 @@ The full project tour lives in `CLAUDE.md`. This file adds two sections that cap
 
 ---
 
+## Development Workflow — Issue Tracking (Mandatory)
+
+Every task, bug fix, polish item, or feature MUST follow this standard development cycle:
+
+1. **Create a GitHub issue** before writing any code:
+   ```bash
+   gh issue create --title "<Clear concise title>" --body "<Detailed description of bug/feature and scope>"
+   ```
+2. **Implement and verify**:
+   - Make code edits cleanly.
+   - Run unit tests (`dotnet test src-native/Nocturne.Tests/Nocturne.Tests.csproj` or `npm run test:native`).
+   - Smoke test if main-process/UI changes are involved.
+3. **Commit with issue reference**:
+   - Commit changes referencing the issue number (e.g. `feat: ... (fixes #12)` or `fix: ... (refs #12)`).
+4. **Close the issue with a summary**:
+   ```bash
+   gh issue close <issue-number> --comment "<Summary of what was done, key files touched, and verification results>"
+   ```
+
+---
+
 ## Pre-release smoke test
 
 **Required** before claiming any feature "shipped" that touches main-process code or IPC. Must be run on Windows after `npm run package:win` + install over the current build:

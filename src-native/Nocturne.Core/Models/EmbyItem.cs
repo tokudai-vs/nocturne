@@ -20,6 +20,7 @@ public class EmbyItem : INotifyPropertyChanged
     public string Name { get; set; } = string.Empty;
     public string? OriginalTitle { get; set; }
     public string Type { get; set; } = string.Empty; // Movie, Series, Season, Episode, BoxSet, Folder
+    public string? CollectionType { get; set; } // movies, tvshows, music, etc.
     public string? Overview { get; set; }
     public long? RunTimeTicks { get; set; }
     public int? ProductionYear { get; set; }
@@ -62,6 +63,7 @@ public class EmbyItem : INotifyPropertyChanged
     }
 
     public List<MediaSourceInfo>? MediaSources { get; set; }
+    public List<ChapterInfo>? Chapters { get; set; }
 
     // Multi-server or local metadata
     [JsonIgnore]
@@ -151,6 +153,23 @@ public class EmbyItem : INotifyPropertyChanged
 
     [JsonIgnore]
     public bool HasResumeProgress => !IsPlayed && ProgressPercentage > 0;
+
+    public override bool Equals(object? obj)
+    {
+        if (obj is EmbyItem other)
+        {
+            if (ReferenceEquals(this, other)) return true;
+            if (string.IsNullOrEmpty(Id) || string.IsNullOrEmpty(other.Id)) return false;
+            return string.Equals(Id, other.Id, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(ServerId, other.ServerId, StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(Id?.ToLowerInvariant(), ServerId?.ToLowerInvariant());
+    }
 }
 
 public class BaseItemPerson
@@ -200,15 +219,33 @@ public class MediaStreamInfo
     public string? Type { get; set; } // Video, Audio, Subtitle
     public int? Width { get; set; }
     public int? Height { get; set; }
+    public int? Channels { get; set; }
     public int? Index { get; set; }
     public bool IsDefault { get; set; }
     public bool IsForced { get; set; }
+}
+
+public class ChapterInfo
+{
+    [JsonPropertyName("StartPositionTicks")]
+    public long StartPositionTicks { get; set; }
+
+    [JsonPropertyName("Name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("ImageTag")]
+    public string? ImageTag { get; set; }
+
+    [JsonPropertyName("ImagePath")]
+    public string? ImagePath { get; set; }
 }
 
 public class ItemsResult<T>
 {
     public List<T> Items { get; set; } = new();
     public int TotalRecordCount { get; set; }
+    [JsonIgnore]
+    public bool IsSuccess { get; set; } = true;
 }
 
 public class FlexibleStringConverter : JsonConverter<string>

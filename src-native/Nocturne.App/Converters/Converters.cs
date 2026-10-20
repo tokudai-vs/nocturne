@@ -30,10 +30,18 @@ public class NullToVisibilityConverter : IValueConverter
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
+        if (value == null || value == DependencyProperty.UnsetValue)
+        {
+            return Invert ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         bool isNullOrEmpty = value switch
         {
-            null => true,
             string s => string.IsNullOrWhiteSpace(s),
+            int i => i <= 0,
+            long l => l <= 0,
+            double d => d <= 0,
+            float f => f <= 0,
             System.Collections.ICollection c => c.Count == 0,
             _ => false
         };
@@ -122,7 +130,7 @@ public class HeightRatioToBarHeightConverter : IValueConverter
     {
         double ratio = value is double r ? r : 0.05;
         double maxHeight = 100.0;
-        if (parameter is string pStr && double.TryParse(pStr, out var customMax))
+        if (parameter is string pStr && double.TryParse(pStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var customMax))
         {
             maxHeight = customMax;
         }
@@ -135,7 +143,7 @@ public class HeightRatioToBarHeightConverter : IValueConverter
 public class BoolToBrushConverter : IValueConverter
 {
     public Brush TrueBrush { get; set; } = new SolidColorBrush(Color.FromRgb(0xE5, 0xA0, 0x0D));
-    public Brush FalseBrush { get; set; } = new SolidColorBrush(Color.FromArgb(0x80, 0xAA, 0xAA, 0xAA));
+    public Brush FalseBrush { get; set; } = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -147,6 +155,41 @@ public class BoolToBrushConverter : IValueConverter
             }
             return TrueBrush;
         }
+
+        // Return theme-adaptive high-contrast secondary brush so inactive icons are never washed out
+        if (Application.Current?.TryFindResource("TextFillColorSecondaryBrush") is Brush secBrush)
+        {
+            return secBrush;
+        }
+
+        return FalseBrush;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+}
+
+public class HeroBoolToBrushConverter : IValueConverter
+{
+    private static readonly SolidColorBrush TrueBrush = new(Color.FromRgb(0xE5, 0xA0, 0x0D));
+    private static readonly SolidColorBrush FalseBrush = new(Color.FromArgb(0xDC, 0xFF, 0xFF, 0xFF));
+
+    static HeroBoolToBrushConverter()
+    {
+        TrueBrush.Freeze();
+        FalseBrush.Freeze();
+    }
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is true)
+        {
+            if (Application.Current?.Resources["NocturneAmberBrush"] is Brush dynamicBrush)
+            {
+                return dynamicBrush;
+            }
+            return TrueBrush;
+        }
+
         return FalseBrush;
     }
 

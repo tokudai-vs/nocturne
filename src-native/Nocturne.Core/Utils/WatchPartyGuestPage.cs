@@ -1,0 +1,454 @@
+namespace Nocturne.Core.Utils;
+
+public static class WatchPartyGuestPage
+{
+    public const string Html = @"<!doctype html>
+<html lang=""en"">
+<head>
+  <meta charset=""utf-8"" />
+  <meta name=""viewport"" content=""width=device-width, initial-scale=1, user-scalable=no"" />
+  <title>Watch Party • Nocturne</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; padding: 0; }
+    body {
+      background: #000;
+      color: #eee;
+      font-family: -apple-system, BlinkMacSystemFont, ""Segoe UI"", system-ui, sans-serif;
+      overflow: hidden;
+      position: relative;
+    }
+    video {
+      position: absolute;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000;
+      display: block;
+    }
+
+    .topBar, .bottomBar {
+      position: absolute;
+      left: 0;
+      right: 0;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: #fff;
+      transition: opacity 250ms ease, transform 250ms ease;
+      z-index: 5;
+    }
+    .topBar {
+      top: 0;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0));
+    }
+    .bottomBar {
+      bottom: 0;
+      background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0));
+    }
+    .topBar.hidden { opacity: 0; pointer-events: none; transform: translateY(-8px); }
+    .bottomBar.hidden { opacity: 0; pointer-events: none; transform: translateY(8px); }
+
+    .title {
+      flex: 1;
+      font-size: 16px;
+      font-weight: 600;
+      color: #e5b85b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin: 0;
+    }
+
+    .conn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.8);
+    }
+    .conn .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #888;
+    }
+    .conn .dot.connected { background: #4ade80; }
+    .conn .dot.disconnected { background: #ef4444; }
+
+    .hostHint {
+      flex: 1;
+      text-align: center;
+      font-size: 12px;
+      color: rgba(255,255,255,0.6);
+      letter-spacing: 0.02em;
+    }
+
+    .volumeWrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .volumeBtn {
+      width: 36px;
+      height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 0;
+      color: rgba(255,255,255,0.85);
+      cursor: pointer;
+      border-radius: 999px;
+      transition: background 150ms ease, color 150ms ease;
+    }
+    .volumeBtn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    .volumeBtn svg { display: block; }
+    input[type=""range""] {
+      width: 110px;
+      height: 4px;
+      accent-color: #e5b85b;
+      cursor: pointer;
+    }
+
+    .centerOverlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 24px;
+      text-align: center;
+      z-index: 10;
+    }
+    .centerOverlay h1 {
+      font-size: 22px;
+      font-weight: 600;
+      color: #e5b85b;
+      margin: 0;
+    }
+    .centerOverlay p {
+      font-size: 14px;
+      color: #aaa;
+      margin: 0;
+      max-width: 480px;
+      line-height: 1.5;
+    }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid rgba(229,184,91,0.25);
+      border-top-color: #e5b85b;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    body.idle { cursor: none; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <video id=""video"" playsinline></video>
+
+  <div class=""topBar"" id=""topBar"">
+    <h1 class=""title"" id=""title"">Watch Party</h1>
+    <span class=""conn"">
+      <span class=""dot disconnected"" id=""connDot""></span>
+      <span id=""connText"">Connecting…</span>
+    </span>
+  </div>
+
+  <div class=""bottomBar"" id=""bottomBar"">
+    <div class=""volumeWrap"">
+      <button class=""volumeBtn"" id=""volumeBtn"" title=""Mute / unmute"">
+        <svg id=""volumeIconHigh"" width=""20"" height=""20"" viewBox=""0 0 24 24"" fill=""none"" stroke=""currentColor"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""><polygon points=""11 5 6 9 2 9 2 15 6 15 11 19 11 5""></polygon><path d=""M19.07 4.93a10 10 0 0 1 0 14.14""></path><path d=""M15.54 8.46a5 5 0 0 1 0 7.07""></path></svg>
+        <svg id=""volumeIconMute"" width=""20"" height=""20"" viewBox=""0 0 24 24"" fill=""none"" stroke=""currentColor"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round"" style=""display:none""><polygon points=""11 5 6 9 2 9 2 15 6 15 11 19 11 5""></polygon><line x1=""23"" y1=""9"" x2=""17"" y2=""15""></line><line x1=""17"" y1=""9"" x2=""23"" y2=""15""></line></svg>
+      </button>
+      <input type=""range"" id=""volume"" min=""0"" max=""100"" value=""100"" />
+    </div>
+    <div class=""hostHint"">Host controls playback</div>
+    <span style=""width: 154px""></span>
+  </div>
+
+  <div class=""centerOverlay"" id=""centerOverlay"">
+    <div class=""spinner"" id=""centerSpinner""></div>
+    <h1 id=""centerTitle"">Connecting…</h1>
+    <p id=""centerMsg"">Reaching the host.</p>
+  </div>
+
+  <script src=""https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js""></script>
+  <script>
+  (function () {
+    var video = document.getElementById('video');
+    var topBar = document.getElementById('topBar');
+    var bottomBar = document.getElementById('bottomBar');
+    var centerOverlay = document.getElementById('centerOverlay');
+    var centerSpinner = document.getElementById('centerSpinner');
+    var centerTitle = document.getElementById('centerTitle');
+    var centerMsg = document.getElementById('centerMsg');
+    var titleEl = document.getElementById('title');
+    var connDot = document.getElementById('connDot');
+    var connText = document.getElementById('connText');
+    var volumeBtn = document.getElementById('volumeBtn');
+    var volumeIconHigh = document.getElementById('volumeIconHigh');
+    var volumeIconMute = document.getElementById('volumeIconMute');
+    var volume = document.getElementById('volume');
+
+    var hls = null;
+    var ws = null;
+    var sessionState = 'WAITING';
+    var hostPlaying = false;
+    var lastHeartbeat = null;
+    var lastKnownPosition = 0;
+    var hlsAttached = false;
+    var hlsRetryTimer = null;
+    var ended = false;
+    var reconnectTimer = null;
+
+    function showCenter(title, msg, spinner) {
+      centerTitle.textContent = title;
+      centerMsg.textContent = msg;
+      centerOverlay.classList.remove('hidden');
+      centerSpinner.style.display = spinner ? 'block' : 'none';
+    }
+    function hideCenter() {
+      centerOverlay.classList.add('hidden');
+    }
+
+    function setMuted(muted) {
+      video.muted = muted;
+      if (muted) {
+        volumeIconHigh.style.display = 'none';
+        volumeIconMute.style.display = 'block';
+      } else {
+        volumeIconHigh.style.display = 'block';
+        volumeIconMute.style.display = 'none';
+      }
+    }
+    volume.addEventListener('input', function () {
+      var v = Math.max(0, Math.min(1, volume.valueAsNumber / 100));
+      video.volume = v;
+      setMuted(v === 0);
+    });
+    volumeBtn.addEventListener('click', function () {
+      setMuted(!video.muted);
+    });
+    video.volume = 1;
+
+    var hideTimer = null;
+    function revealBars() {
+      topBar.classList.remove('hidden');
+      bottomBar.classList.remove('hidden');
+      document.body.classList.remove('idle');
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = setTimeout(hideBars, 3000);
+    }
+    function hideBars() {
+      if (!centerOverlay.classList.contains('hidden')) return;
+      topBar.classList.add('hidden');
+      bottomBar.classList.add('hidden');
+      document.body.classList.add('idle');
+    }
+    document.addEventListener('mousemove', revealBars, { passive: true });
+    document.addEventListener('keydown', revealBars);
+    document.addEventListener('touchstart', revealBars, { passive: true });
+
+    function currentTargetPosition() {
+      if (sessionState === 'LIVE' && hostPlaying && lastHeartbeat) {
+        return lastHeartbeat.position + (Date.now() - lastHeartbeat.localTime) / 1000;
+      }
+      return lastKnownPosition;
+    }
+
+    function attachHls(startPos) {
+      if (hlsAttached || ended) return;
+      hlsAttached = true;
+      var pos = typeof startPos === 'number' && isFinite(startPos) && startPos > 0 ? startPos : 0;
+      if (window.Hls && window.Hls.isSupported()) {
+        hls = new window.Hls({ enableWorker: true, lowLatencyMode: false, startPosition: pos });
+        hls.on(window.Hls.Events.ERROR, function (_, data) {
+          if (!data || !data.fatal) return;
+          console.warn('[watchparty] HLS fatal:', data.type, data.details);
+          if (ended) return;
+          if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+            try { hls.recoverMediaError(); } catch (e) {}
+            return;
+          }
+          try { hls.destroy(); } catch (e) {}
+          hls = null;
+          hlsAttached = false;
+          if (hlsRetryTimer) clearTimeout(hlsRetryTimer);
+          hlsRetryTimer = setTimeout(function () {
+            attachHls(currentTargetPosition());
+            if (sessionState === 'LIVE' && hostPlaying) playVideo();
+          }, 2500);
+        });
+        hls.loadSource('/stream.m3u8');
+        hls.attachMedia(video);
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = '/stream.m3u8';
+        if (pos > 0) {
+          video.addEventListener('loadedmetadata', function () { seekTo(pos); }, { once: true });
+        }
+      } else {
+        showCenter('Unsupported browser', 'This browser cannot play HLS streams. Try Chrome, Edge, Safari, or Firefox.', false);
+      }
+    }
+
+    function applyState(msg) {
+      sessionState = msg.state;
+      hostPlaying = !!msg.playing;
+      if (typeof msg.position === 'number' && isFinite(msg.position)) {
+        lastKnownPosition = msg.position;
+      }
+      if (msg.state === 'WAITING') {
+        showCenter('Waiting for host', 'The session will start shortly.', true);
+        attachHls(0);
+        return;
+      }
+      if (msg.state === 'ENDED') {
+        ended = true;
+        showCenter('Session ended', 'The host has ended this watch party.', false);
+        return;
+      }
+      attachHls(typeof msg.position === 'number' ? msg.position : 0);
+      hideCenter();
+      revealBars();
+      if (typeof msg.position === 'number' && isFinite(msg.position)) {
+        seekTo(msg.position);
+      }
+      if (hostPlaying) {
+        playVideo();
+      } else {
+        video.pause();
+      }
+    }
+
+    function seekTo(target) {
+      try {
+        if (Math.abs(video.currentTime - target) > 0.05) {
+          video.currentTime = target;
+        }
+      } catch (e) {}
+    }
+
+    function playVideo() {
+      var p = video.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch(function () {
+          setMuted(true);
+          video.play().catch(function () {});
+        });
+      }
+    }
+
+    function applyDriftCorrection() {
+      if (sessionState !== 'LIVE') return;
+      if (!hostPlaying || video.paused) return;
+      if (!lastHeartbeat) return;
+      var elapsed = (Date.now() - lastHeartbeat.localTime) / 1000;
+      var expected = lastHeartbeat.position + elapsed;
+      var local = video.currentTime;
+      var drift = expected - local;
+      var abs = Math.abs(drift);
+      if (abs < 0.5) {
+        if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
+      } else if (abs < 3.0) {
+        video.playbackRate = drift > 0 ? 1.05 : 0.95;
+      } else {
+        seekTo(expected);
+        video.playbackRate = 1.0;
+      }
+    }
+    setInterval(applyDriftCorrection, 500);
+
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case 'session_info':
+          titleEl.textContent = msg.title || 'Watch Party';
+          break;
+        case 'state':
+          applyState(msg);
+          break;
+        case 'play':
+          hostPlaying = true;
+          lastKnownPosition = msg.position;
+          if (sessionState !== 'LIVE') applyState({ type: 'state', state: 'LIVE', position: msg.position, playing: true });
+          else {
+            seekTo(msg.position);
+            playVideo();
+          }
+          break;
+        case 'pause':
+          hostPlaying = false;
+          lastKnownPosition = msg.position;
+          seekTo(msg.position);
+          video.pause();
+          break;
+        case 'seek':
+          lastKnownPosition = msg.position;
+          seekTo(msg.position);
+          break;
+        case 'heartbeat':
+          lastKnownPosition = msg.position;
+          lastHeartbeat = { position: msg.position, localTime: Date.now() };
+          break;
+        case 'session_end':
+          ended = true;
+          showCenter('Session ended', 'The host has ended this watch party.', false);
+          if (hlsRetryTimer) clearTimeout(hlsRetryTimer);
+          if (ws) try { ws.close(); } catch (e) {}
+          if (hls) try { hls.destroy(); } catch (e) {}
+          break;
+      }
+    }
+
+    function setConn(ok) {
+      if (ok) {
+        connDot.classList.remove('disconnected');
+        connDot.classList.add('connected');
+        connText.textContent = 'Connected';
+      } else {
+        connDot.classList.add('disconnected');
+        connDot.classList.remove('connected');
+        connText.textContent = ended ? 'Disconnected' : 'Reconnecting…';
+      }
+    }
+
+    function connect() {
+      if (ended) return;
+      var scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(scheme + '//' + location.host + '/ws');
+      ws.addEventListener('open', function () {
+        setConn(true);
+        try { ws.send(JSON.stringify({ type: 'join' })); } catch (e) {}
+      });
+      ws.addEventListener('message', function (ev) {
+        try {
+          var msg = JSON.parse(ev.data);
+          handleMessage(msg);
+        } catch (e) {}
+      });
+      ws.addEventListener('close', function () {
+        setConn(false);
+        if (ended) return;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 2000);
+      });
+      ws.addEventListener('error', function () {});
+    }
+
+    showCenter('Connecting…', 'Reaching the host.', true);
+    connect();
+  }());
+  </script>
+</body>
+</html>";
+}

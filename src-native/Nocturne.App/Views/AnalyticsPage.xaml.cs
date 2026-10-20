@@ -15,5 +15,13 @@ public partial class AnalyticsPage : UserControl
                 await vm.LoadStatsAsync();
             }
         };
+
+        IsVisibleChanged += async (s, e) =>
+        {
+            if (IsVisible && DataContext is AnalyticsViewModel vm)
+            {
+                await vm.LoadStatsAsync();
+            }
+        };
     }
 }

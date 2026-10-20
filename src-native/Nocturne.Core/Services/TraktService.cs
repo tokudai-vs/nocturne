@@ -111,9 +111,15 @@ public class TraktService
         ConfigureHeaders();
     }
 
-    private string ClientId => !string.IsNullOrEmpty(_settings.Current.TraktClientIdOverride)
-        ? _settings.Current.TraktClientIdOverride
+    public string ClientId => !string.IsNullOrWhiteSpace(_settings.Current.TraktClientIdOverride)
+        ? _settings.Current.TraktClientIdOverride.Trim()
         : DefaultClientId;
+
+    public string ClientSecret => !string.IsNullOrWhiteSpace(_settings.Current.TraktClientSecretOverride)
+        ? _settings.Current.TraktClientSecretOverride.Trim()
+        : string.Empty;
+
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(ClientId) && !string.IsNullOrWhiteSpace(ClientSecret);
 
     public void ConfigureHeaders()
     {
@@ -131,8 +137,13 @@ public class TraktService
 
     public bool IsConnected => !string.IsNullOrEmpty(_settings.Current.TraktAccessToken);
 
-    public async Task<TraktDeviceCode?> GetDeviceCodeAsync()
+    public async Task<(TraktDeviceCode? Code, string? ErrorMessage)> GetDeviceCodeAsync()
     {
+        if (string.IsNullOrWhiteSpace(ClientId) || string.IsNullOrWhiteSpace(ClientSecret))
+        {
+            return (null, "Please enter your Trakt Client ID and Client Secret in Settings below.");
+        }
+
         ConfigureHeaders();
         var payload = new { client_id = ClientId };
         try
@@ -140,23 +151,30 @@ public class TraktService
             var resp = await _http.PostAsJsonAsync("/oauth/device/code", payload);
             if (resp.IsSuccessStatusCode)
             {
-                return await resp.Content.ReadFromJsonAsync<TraktDeviceCode>();
+                var code = await resp.Content.ReadFromJsonAsync<TraktDeviceCode>();
+                return (code, null);
+            }
+            else
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                NocturneLogger.Warn("Trakt", $"Device code error ({resp.StatusCode}): {body}");
+                return (null, $"Trakt rejected request ({resp.StatusCode}). Please verify your Client ID.");
             }
         }
         catch (Exception ex)
         {
             NocturneLogger.Error("Trakt", "Failed to get device code", ex);
+            return (null, $"Connection failed: {ex.Message}");
         }
-        return null;
     }
 
-    public async Task<bool> PollTokenAsync(string deviceCode)
+    public async Task<(bool Success, bool Expired, string? ErrorMessage)> PollTokenAsync(string deviceCode)
     {
         var payload = new
         {
             code = deviceCode,
             client_id = ClientId,
-            client_secret = _settings.Current.TraktClientSecretOverride ?? ""
+            client_secret = ClientSecret
         };
 
         try
@@ -174,16 +192,53 @@ public class TraktService
                         s.TraktTokenExpiresAt = DateTime.UtcNow.AddSeconds(token.ExpiresIn);
                     });
                     ConfigureHeaders();
-                    NocturneLogger.Info("Trakt", "Authenticated successfully with Trakt.tv");
-                    return true;
+
+                    // Fetch user info to populate TraktUsername
+                    try
+                    {
+                        var userResp = await _http.GetAsync("/users/me");
+                        if (userResp.IsSuccessStatusCode)
+                        {
+                            using var doc = await JsonDocument.ParseAsync(await userResp.Content.ReadAsStreamAsync());
+                            if (doc.RootElement.TryGetProperty("username", out var uProp))
+                            {
+                                var username = uProp.GetString();
+                                _settings.Update(s => s.TraktUsername = username);
+                            }
+                        }
+                    }
+                    catch { }
+
+                    NocturneLogger.Info("Trakt", $"Authenticated successfully with Trakt.tv (@{_settings.Current.TraktUsername})");
+                    return (true, false, null);
                 }
+            }
+            else if (resp.StatusCode == System.Net.HttpStatusCode.BadRequest)
+            {
+                // 400 Bad Request = Pending authorization from user
+                return (false, false, null);
+            }
+            else if ((int)resp.StatusCode == 410)
+            {
+                // 410 = Code expired
+                return (false, true, "Device code expired. Please try connecting again.");
+            }
+            else if ((int)resp.StatusCode == 404 || (int)resp.StatusCode == 418 || (int)resp.StatusCode == 403)
+            {
+                // Denied or limit reached
+                return (false, true, "Trakt rejected authorization. If Trakt reported 'no more can be added', please disconnect unused apps at trakt.tv/settings/apps.");
+            }
+            else
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                NocturneLogger.Warn("Trakt", $"Poll token response {resp.StatusCode}: {body}");
             }
         }
         catch (Exception ex)
         {
             NocturneLogger.Warn("Trakt", $"Poll token error: {ex.Message}");
         }
-        return false;
+        return (false, false, null);
     }
 
     public void Disconnect()

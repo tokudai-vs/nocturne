@@ -1,8 +1,11 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using Microsoft.Extensions.DependencyInjection;
+using Nocturne.App.ViewModels;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
 
@@ -23,6 +26,10 @@ public partial class MediaCard : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        Unloaded += (s, e) =>
+        {
+            PosterImage.Source = null;
+        };
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -46,23 +53,44 @@ public partial class MediaCard : UserControl
                 VersionBadge.Visibility = Visibility.Collapsed;
             }
 
-            // Progress bar
-            if (item.ProgressPercentage > 0 && !item.IsPlayed)
+            // Progress bar & Continue Watching Context Menu
+            var isResumable = (item.UserData?.PlaybackPositionTicks ?? 0) > 0 && !item.IsPlayed;
+            if (isResumable)
             {
                 ProgressBar.Value = item.ProgressPercentage;
                 ProgressBar.Visibility = Visibility.Visible;
+                RemoveFromContinueMenuItem.Visibility = Visibility.Visible;
+                ContinueSeparator.Visibility = Visibility.Visible;
             }
             else
             {
                 ProgressBar.Visibility = Visibility.Collapsed;
+                RemoveFromContinueMenuItem.Visibility = Visibility.Collapsed;
+                ContinueSeparator.Visibility = Visibility.Collapsed;
             }
+
+            // Fallback tile
+            FallbackTitleText.Text = item.DisplayTitle;
+            FallbackYearText.Text = item.ProductionYear?.ToString() ?? string.Empty;
+            PosterImage.Source = null;
+            FallbackTile.Visibility = Visibility.Visible;
 
             // Image URL
             var emby = (Application.Current as App)?.Services.GetService<EmbyClient>();
+            var settings = (Application.Current as App)?.Services.GetService<SettingsService>();
             if (emby != null)
             {
+                ServerConfig? server = null;
+                if (!string.IsNullOrEmpty(item.ServerId) && settings != null)
+                {
+                    server = settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId);
+                }
+
                 var tag = item.ImageTags?.GetValueOrDefault("Primary");
-                var url = emby.BuildImageUrl(item.Id, "Primary", 320, tag);
+                var url = !string.IsNullOrEmpty(item.PrimaryImageUrl)
+                    ? item.PrimaryImageUrl
+                    : emby.BuildImageUrl(item.Id, "Primary", 320, tag, server?.Url, server?.AccessToken);
+
                 if (!string.IsNullOrEmpty(url))
                 {
                     try
@@ -75,11 +103,44 @@ public partial class MediaCard : UserControl
                         bmp.EndInit();
                         if (bmp.CanFreeze) bmp.Freeze();
                         PosterImage.Source = bmp;
+                        FallbackTile.Visibility = Visibility.Collapsed;
                     }
-                    catch { }
+                    catch
+                    {
+                        PosterImage.Source = null;
+                        FallbackTile.Visibility = Visibility.Visible;
+                    }
                 }
             }
         }
+    }
+
+    private void OnCardMouseEnter(object sender, MouseEventArgs e)
+    {
+        CardBorder.BorderThickness = new Thickness(2);
+        CardBorder.BorderBrush = Application.Current?.Resources["NocturneAmberBrush"] as Brush
+            ?? new SolidColorBrush(Color.FromRgb(229, 160, 13));
+        Panel.SetZIndex(this, 10);
+        Panel.SetZIndex(CardBox, 10);
+
+        var animX = new DoubleAnimation(1.05, TimeSpan.FromMilliseconds(180));
+        var animY = new DoubleAnimation(1.05, TimeSpan.FromMilliseconds(180));
+        CardScaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, animX);
+        CardScaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, animY);
+    }
+
+    private void OnCardMouseLeave(object sender, MouseEventArgs e)
+    {
+        CardBorder.BorderThickness = new Thickness(1);
+        CardBorder.BorderBrush = Application.Current?.TryFindResource("CardStrokeColorDefaultBrush") as Brush
+            ?? new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+        Panel.SetZIndex(this, 0);
+        Panel.SetZIndex(CardBox, 0);
+
+        var animX = new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(180));
+        var animY = new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(180));
+        CardScaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, animX);
+        CardScaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, animY);
     }
 
     private void OnCardClick(object sender, MouseButtonEventArgs e)
@@ -142,6 +203,18 @@ public partial class MediaCard : UserControl
                     item.UserData ??= new UserItemData();
                     item.UserData.IsFavorite = newFav;
                 }
+            }
+        }
+    }
+
+    private async void OnContextMenuRemoveFromContinueClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is EmbyItem item)
+        {
+            var homeVM = (Application.Current as App)?.Services.GetService<HomeViewModel>();
+            if (homeVM != null)
+            {
+                await homeVM.RemoveFromContinueWatchingAsync(item);
             }
         }
     }

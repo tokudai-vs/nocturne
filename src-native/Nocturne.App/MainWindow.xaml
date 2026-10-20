@@ -15,30 +15,6 @@
         Padding="0"
         Margin="0">
 
-    <ui:FluentWindow.Resources>
-        <!-- ViewModel to View Mappings -->
-        <DataTemplate DataType="{x:Type vm:HomeViewModel}">
-            <views:HomePage />
-        </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:LibraryViewModel}">
-            <views:LibraryPage />
-        </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:DetailViewModel}">
-            <views:DetailPage />
-        </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:SearchViewModel}">
-            <views:SearchPage />
-        </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
-            <views:SettingsPage />
-        </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:AnalyticsViewModel}">
-            <views:AnalyticsPage />
-        </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:OnboardingViewModel}">
-            <views:OnboardingPage />
-        </DataTemplate>
-    </ui:FluentWindow.Resources>
 
     <Grid>
         <Grid.Resources>
@@ -66,6 +42,30 @@
                     </Setter.Value>
                 </Setter>
             </Style>
+
+            <!-- Caption Button Style for Minimize/Maximize -->
+            <Style x:Key="CaptionButtonStyle" TargetType="Button">
+                <Setter Property="Width" Value="44" />
+                <Setter Property="Height" Value="32" />
+                <Setter Property="Margin" Value="2,0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="b" CornerRadius="4" Background="{TemplateBinding Background}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="b" Property="Background" Value="#25FFFFFF" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </Grid.Resources>
 
         <Grid.RowDefinitions>
@@ -73,24 +73,72 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Windows 11 Fluent Header & Top Navigation Bar -->
-        <Grid Grid.Row="0" Background="Transparent" MouseDown="OnTitleBarMouseDown">
-            <!-- 3 Columns: Left Navigation & Brand | Center Search | Right User & Controls -->
+        <!-- Persistent View Tree (Edge-to-Edge, Spans full window height for seamless 0ms instant tab switching) -->
+        <Grid Grid.Row="0" Grid.RowSpan="2">
+            <views:HomePage DataContext="{Binding HomeVM}"
+                            Visibility="{Binding IsHomeActive, Converter={StaticResource BoolToVisibility}}" />
+            <views:LibraryPage DataContext="{Binding LibraryVM}"
+                               Visibility="{Binding IsLibraryActive, Converter={StaticResource BoolToVisibility}}" />
+            <views:DetailPage DataContext="{Binding DetailVM}"
+                              Visibility="{Binding IsDetailActive, Converter={StaticResource BoolToVisibility}}" />
+            <views:SearchPage DataContext="{Binding SearchVM}"
+                              Visibility="{Binding IsSearchActive, Converter={StaticResource BoolToVisibility}}" />
+            <views:SettingsPage DataContext="{Binding SettingsVM}"
+                                Visibility="{Binding IsSettingsActive, Converter={StaticResource BoolToVisibility}}" />
+            <views:AnalyticsPage DataContext="{Binding AnalyticsVM}"
+                                 Visibility="{Binding IsAnalyticsActive, Converter={StaticResource BoolToVisibility}}" />
+            <views:OnboardingPage DataContext="{Binding OnboardingVM}"
+                                  Visibility="{Binding IsOnboardingActive, Converter={StaticResource BoolToVisibility}}" />
+        </Grid>
+
+        <!-- Windows 11 Fluent Header & Top Navigation Bar (Liquid Glass Adaptive Overlay, ZIndex=100) -->
+        <Grid Grid.Row="0" Panel.ZIndex="100" MouseDown="OnTitleBarMouseDown">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Background" Value="{DynamicResource ApplicationBackgroundBrush}" />
+                    <Setter Property="Opacity" Value="0.96" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsHeroPage}" Value="True">
+                            <Setter Property="Opacity" Value="1.0" />
+                            <Setter Property="Background">
+                                <Setter.Value>
+                                    <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                                        <GradientStop Color="#D0000000" Offset="0.0" />
+                                        <GradientStop Color="#90000000" Offset="0.50" />
+                                        <GradientStop Color="#35000000" Offset="0.80" />
+                                        <GradientStop Color="#00000000" Offset="1.0" />
+                                    </LinearGradientBrush>
+                                </Setter.Value>
+                            </Setter>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+
+            <!-- 4 Columns: Left Brand & Tabs | Center Search | Right Indicators & Profile | Fixed Caption Buttons -->
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
+            <!-- Subtle translucent bottom divider border spanning all columns -->
+            <Border Grid.ColumnSpan="4" BorderThickness="0,0,0,1" BorderBrush="#18FFFFFF" VerticalAlignment="Bottom" IsHitTestVisible="False" />
+
             <!-- Column 0: Left Brand & Top Navigation Tabs -->
-            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,12,0">
                 <!-- Nocturne Logo & Title -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,24,0" Cursor="Hand" MouseDown="OnLogoMouseDown">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,20,0" Cursor="Hand" MouseDown="OnLogoMouseDown">
                     <Border Width="30" Height="30" CornerRadius="15" Background="{DynamicResource NocturneAmberBrush}" Margin="0,0,10,0">
                         <ui:SymbolIcon Symbol="MoviesAndTv24" FontSize="16" Foreground="#111111" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <TextBlock Text="NOCTURNE" FontSize="15" FontWeight="Bold"
-                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                               Foreground="{Binding TopBarForeground}" VerticalAlignment="Center">
+                        <TextBlock.Effect>
+                            <DropShadowEffect BlurRadius="8" ShadowDepth="1" Direction="270" Color="#000000" Opacity="0.5" />
+                        </TextBlock.Effect>
+                    </TextBlock>
                 </StackPanel>
 
                 <!-- Navigation Tabs (Home & Libraries) -->
@@ -110,9 +158,9 @@
                         </Button.Style>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <ui:SymbolIcon Symbol="Home24" FontSize="16" Margin="0,0,8,0"
-                                           Foreground="{Binding IsHomeActive, Converter={StaticResource BoolToBrushConverter}}" />
+                                           Foreground="{Binding HomeTabIconBrush}" />
                             <TextBlock Text="Home" FontSize="13" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                       Foreground="{Binding TopBarForeground}" />
                         </StackPanel>
                     </Button>
 
@@ -131,16 +179,16 @@
                         </Button.Style>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <ui:SymbolIcon Symbol="Folder24" FontSize="16" Margin="0,0,8,0"
-                                           Foreground="{Binding IsLibraryActive, Converter={StaticResource BoolToBrushConverter}}" />
+                                           Foreground="{Binding LibraryTabIconBrush}" />
                             <TextBlock Text="Libraries" FontSize="13" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                       Foreground="{Binding TopBarForeground}" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
             </StackPanel>
 
-            <!-- Column 1: Centered Search Bar -->
-            <Grid Grid.Column="1" HorizontalAlignment="Center" Width="440"
+            <!-- Column 1: Centered Prominent Search Bar -->
+            <Grid Grid.Column="1" HorizontalAlignment="Center" Width="480" MaxWidth="560" Margin="12,0"
                   Visibility="{Binding IsNavigationVisible, Converter={StaticResource BoolToVisibility}}">
                 <ui:TextBox x:Name="SearchBox" Height="36" VerticalAlignment="Center"
                             PlaceholderText="Search movies, shows, episodes... (Ctrl+K)"
@@ -151,19 +199,37 @@
                 </ui:TextBox>
             </Grid>
 
-            <!-- Column 2: User Profile Dropdown + Windows 11 TitleBar Buttons -->
-            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,0">
+            <!-- Column 2: User Profile & Live Sync Indicator -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,8,0">
+                <!-- Live Sync Status Header Indicator with Smooth Filling Bar (Numbers removed) -->
+                <Border Visibility="{Binding IsSyncing, Converter={StaticResource BoolToVisibility}}"
+                        Background="#25FFB020" BorderBrush="{DynamicResource NocturneAmberBrush}"
+                        BorderThickness="1" CornerRadius="14" Padding="10,5" Margin="0,0,10,0"
+                        VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="ArrowSync24" FontSize="13" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,6,0" />
+                        <TextBlock Text="Syncing..." FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource NocturneAmberBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <!-- Sleek Filling Progress Bar -->
+                        <Border Width="64" Height="4" CornerRadius="2" Background="#35FFFFFF" VerticalAlignment="Center">
+                            <ProgressBar Value="{Binding SyncProgressPercent}" Minimum="0" Maximum="100" Height="4"
+                                         Foreground="{DynamicResource NocturneAmberBrush}" Background="Transparent" BorderThickness="0" />
+                        </Border>
+                    </StackPanel>
+                </Border>
+
                 <!-- User Profile Avatar Button -->
                 <Button x:Name="UserProfileButton" Click="OnUserProfileClick"
-                        Width="36" Height="36" Margin="0,0,12,0" Padding="0" Cursor="Hand"
+                        Width="32" Height="32" Margin="0,0,4,0" Padding="0" Cursor="Hand"
+                        VerticalAlignment="Center"
                         Visibility="{Binding IsNavigationVisible, Converter={StaticResource BoolToVisibility}}"
                         ToolTip="Profile &amp; Settings">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
-                            <Border x:Name="b" CornerRadius="18" Background="{DynamicResource ControlFillColorDefaultBrush}"
+                            <Border x:Name="b" CornerRadius="16" Background="{DynamicResource ControlFillColorDefaultBrush}"
                                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1">
                                 <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding CurrentUserInitial}" FontSize="14" FontWeight="Bold"
+                                    <TextBlock Text="{Binding CurrentUserInitial}" FontSize="13" FontWeight="Bold"
                                                Foreground="{DynamicResource NocturneAmberBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Grid>
                             </Border>
@@ -176,14 +242,20 @@
                         </ControlTemplate>
                     </Button.Template>
 
-                    <!-- Context Menu with Settings, Analytics, Switch Server, Logout -->
+                    <!-- Context Menu with High-Contrast Header, Settings, Analytics, Switch Server, Logout -->
                     <Button.ContextMenu>
                         <ContextMenu x:Name="UserProfileContextMenu" Placement="Bottom"
                                      Background="{DynamicResource ApplicationBackgroundBrush}"
                                      BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-                            <MenuItem Header="{Binding CurrentUserName}" FontWeight="Bold" IsEnabled="False" />
-                            <MenuItem Header="{Binding CurrentServerName}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" IsEnabled="False" />
-                            <Separator />
+                            <!-- High-Contrast User Profile Header (Always 100% visible, crisp text) -->
+                            <Border Padding="14,10,14,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" MinWidth="220">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding CurrentUserName}" FontWeight="Bold" FontSize="13"
+                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding CurrentServerName}" FontSize="11" FontWeight="Medium"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,3,0,0" />
+                                </StackPanel>
+                            </Border>
                             <MenuItem Header="Analytics" Click="OnAnalyticsMenuClick">
                                 <MenuItem.Icon>
                                     <ui:SymbolIcon Symbol="DataTrending24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" />
@@ -194,8 +266,9 @@
                                     <ui:SymbolIcon Symbol="Settings24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" />
                                 </MenuItem.Icon>
                             </MenuItem>
-                            <Separator />
-                            <MenuItem Header="Switch Server" Click="OnSwitchServerMenuClick">
+                            <Separator Visibility="{Binding IsSwitchServerVisible, Converter={StaticResource BoolToVisibility}}" />
+                            <MenuItem Header="Switch Server" Click="OnSwitchServerMenuClick"
+                                      Visibility="{Binding IsSwitchServerVisible, Converter={StaticResource BoolToVisibility}}">
                                 <MenuItem.Icon>
                                     <ui:SymbolIcon Symbol="ArrowRepeatAll24" FontSize="16" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </MenuItem.Icon>
@@ -208,16 +281,50 @@
                         </ContextMenu>
                     </Button.ContextMenu>
                 </Button>
+            </StackPanel>
 
-                <!-- Windows 11 Native Fluent TitleBar with Snap Layout Support -->
-                <ui:TitleBar x:Name="AppTitleBar" Title=""
-                             ShowMaximize="True" ShowMinimize="True" ShowClose="True"
-                             VerticalAlignment="Center" Height="52" Width="138" />
+            <!-- Column 3: Vertically Centered Native Window Caption Controls (Permanently Anchored & Fully Visible) -->
+            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,14,0">
+                <!-- Minimize Button -->
+                <Button x:Name="MinimizeBtn" Style="{StaticResource CaptionButtonStyle}" Click="OnMinimizeClick" ToolTip="Minimize">
+                    <ui:SymbolIcon Symbol="Subtract24" FontSize="13" Foreground="{Binding TopBarForeground}" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <ui:SymbolIcon.Effect>
+                            <DropShadowEffect BlurRadius="6" ShadowDepth="1" Direction="270" Color="#000000" Opacity="0.8" />
+                        </ui:SymbolIcon.Effect>
+                    </ui:SymbolIcon>
+                </Button>
+
+                <!-- Maximize / Restore Button -->
+                <Button x:Name="MaximizeBtn" Style="{StaticResource CaptionButtonStyle}" Click="OnMaximizeClick" ToolTip="Maximize / Restore">
+                    <ui:SymbolIcon x:Name="MaxIcon" Symbol="Square24" FontSize="13" Foreground="{Binding TopBarForeground}" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <ui:SymbolIcon.Effect>
+                            <DropShadowEffect BlurRadius="6" ShadowDepth="1" Direction="270" Color="#000000" Opacity="0.8" />
+                        </ui:SymbolIcon.Effect>
+                    </ui:SymbolIcon>
+                </Button>
+
+                <!-- Close Button -->
+                <Button x:Name="CloseBtn" Click="OnCloseClick" Width="44" Height="32" Margin="2,0"
+                        Background="Transparent" BorderThickness="0" Cursor="Hand" ToolTip="Close">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="b" CornerRadius="4" Background="{TemplateBinding Background}">
+                                <ui:SymbolIcon Symbol="Dismiss24" FontSize="13" Foreground="{Binding TopBarForeground}" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <ui:SymbolIcon.Effect>
+                                        <DropShadowEffect BlurRadius="6" ShadowDepth="1" Direction="270" Color="#000000" Opacity="0.8" />
+                                    </ui:SymbolIcon.Effect>
+                                </ui:SymbolIcon>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="b" Property="Background" Value="#E81123" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
             </StackPanel>
         </Grid>
-
-        <!-- Pure Edge-to-Edge Content Area -->
-        <ContentControl Grid.Row="1" Content="{Binding CurrentViewModel}" />
 
         <!-- In-Window Video Player Overlay (Full Shell Overlay, ZIndex=600) -->
         <Grid x:Name="PlayerOverlayGrid" Grid.RowSpan="2" Panel.ZIndex="600" Background="#000000"

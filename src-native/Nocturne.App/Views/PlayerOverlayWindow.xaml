@@ -5,16 +5,186 @@
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
+        BorderThickness="0"
+        BorderBrush="Transparent"
         ShowInTaskbar="False"
         Topmost="False"
         Focusable="True">
 
-    <Grid x:Name="OverlayRootGrid" Background="#01000000"
-          MouseMove="OnOverlayMouseMove"
-          MouseDown="OnOverlayMouseDown">
+    <Window.Resources>
+        <!-- Custom High-Contrast Video Player Timeline Slider Style (Translucent Groove, Amber Progress) -->
+        <Style x:Key="PlayerSliderStyle" TargetType="Slider">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="IsMoveToPointEnabled" Value="True" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid VerticalAlignment="Center" Height="32">
+                            <!-- Background Groove (Translucent high-contrast white groove) -->
+                            <Border Height="4" CornerRadius="2" Background="#40FFFFFF" VerticalAlignment="Center" Margin="0" IsHitTestVisible="False" />
+
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton OverridesDefaultStyle="True" Focusable="False"
+                                                  Command="{x:Static Slider.DecreaseLarge}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="{DynamicResource NocturneAmberBrush}" Height="4" CornerRadius="2" Margin="0" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+
+                                <Track.Thumb>
+                                    <Thumb Cursor="Hand">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border x:Name="ThumbVisual" Width="14" Height="14" CornerRadius="7"
+                                                        Background="#FFFFFF" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="2">
+                                                    <Border.Effect>
+                                                        <DropShadowEffect Color="#000000" BlurRadius="6" ShadowDepth="1" Opacity="0.6" />
+                                                    </Border.Effect>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="ThumbVisual" Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
+                                                        <Setter TargetName="ThumbVisual" Property="BorderBrush" Value="#FFFFFF" />
+                                                        <Setter TargetName="ThumbVisual" Property="Width" Value="16" />
+                                                        <Setter TargetName="ThumbVisual" Property="Height" Value="16" />
+                                                        <Setter TargetName="ThumbVisual" Property="CornerRadius" Value="8" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter TargetName="ThumbVisual" Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
+                                                        <Setter TargetName="ThumbVisual" Property="BorderBrush" Value="#FFFFFF" />
+                                                        <Setter TargetName="ThumbVisual" Property="Width" Value="16" />
+                                                        <Setter TargetName="ThumbVisual" Property="Height" Value="16" />
+                                                        <Setter TargetName="ThumbVisual" Property="CornerRadius" Value="8" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton OverridesDefaultStyle="True" Focusable="False"
+                                                  Command="{x:Static Slider.IncreaseLarge}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="#40FFFFFF" Height="4" CornerRadius="2" Margin="0" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Custom Volume Slider Style (Filled Amber Track, Smooth Seeking) -->
+        <Style x:Key="PlayerVolumeSliderStyle" TargetType="Slider">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="IsMoveToPointEnabled" Value="True" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid VerticalAlignment="Center" Height="24">
+                            <!-- Background Groove -->
+                            <Border Height="4" CornerRadius="2" Background="#40FFFFFF" VerticalAlignment="Center" Margin="0" IsHitTestVisible="False" />
+
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton OverridesDefaultStyle="True" Focusable="False"
+                                                  Command="{x:Static Slider.DecreaseLarge}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="{DynamicResource NocturneAmberBrush}" Height="4" CornerRadius="2" Margin="0" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+
+                                <Track.Thumb>
+                                    <Thumb Cursor="Hand">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border x:Name="ThumbVisual" Width="12" Height="12" CornerRadius="6"
+                                                        Background="#FFFFFF" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1.5">
+                                                    <Border.Effect>
+                                                        <DropShadowEffect Color="#000000" BlurRadius="4" ShadowDepth="1" Opacity="0.5" />
+                                                    </Border.Effect>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="ThumbVisual" Property="Width" Value="14" />
+                                                        <Setter TargetName="ThumbVisual" Property="Height" Value="14" />
+                                                        <Setter TargetName="ThumbVisual" Property="CornerRadius" Value="7" />
+                                                        <Setter TargetName="ThumbVisual" Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton OverridesDefaultStyle="True" Focusable="False"
+                                                  Command="{x:Static Slider.IncreaseLarge}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="#40FFFFFF" Height="4" CornerRadius="2" Margin="0" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Player Circular Action Button Style -->
+        <Style x:Key="PlayerControlButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="38" />
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="19" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#30FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#50FFFFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="OverlayRootBorder" Background="#01000000" CornerRadius="8">
+        <Grid x:Name="OverlayRootGrid" Background="Transparent"
+              MouseMove="OnOverlayMouseMove"
+              MouseDown="OnOverlayMouseDown">
 
         <!-- Top Floating Controls Bar -->
-        <Border x:Name="TopControlsBar" VerticalAlignment="Top" Height="80">
+        <Border x:Name="TopControlsBar" VerticalAlignment="Top" Height="80" CornerRadius="8,8,0,0">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
                     <GradientStop Color="#E6000000" Offset="0.0" />
@@ -79,12 +249,29 @@
                             <ui:SymbolIcon Symbol="Next24" FontSize="15" />
                         </StackPanel>
                     </Button>
+
+                    <!-- Close Button -->
+                    <Button Click="OnExitClick" Width="38" Height="38" Margin="12,0,0,0" Cursor="Hand" ToolTip="Close Player (Esc)">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="cb" CornerRadius="19" Background="#60000000" BorderBrush="#35FFFFFF" BorderThickness="1">
+                                    <ui:SymbolIcon Symbol="Dismiss24" FontSize="16" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="cb" Property="Background" Value="#E81123" />
+                                        <Setter TargetName="cb" Property="BorderBrush" Value="#E81123" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
 
         <!-- Center Skip Button (TheIntroDB Segment Skip) -->
-        <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,36,130"
+        <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,36,110"
                     Visibility="{Binding IsSkipPromptVisible, Converter={StaticResource BoolToVisibility}}">
             <Button Click="OnSkipPromptClick" Style="{StaticResource AmberPrimaryButton}"
                     Padding="22,12" Cursor="Hand" ToolTip="Skip Segment (Enter)">
@@ -98,102 +285,245 @@
             </Button>
         </StackPanel>
 
-        <!-- Bottom Floating Controls Bar -->
-        <Border x:Name="BottomControlsBar" VerticalAlignment="Bottom" Height="110">
+        <!-- Netflix-Style Timeline Scrub Thumbnail Popup -->
+        <Border x:Name="TimelineThumbnailPopup"
+                VerticalAlignment="Bottom"
+                HorizontalAlignment="Left"
+                Margin="0,0,0,94"
+                Visibility="Collapsed"
+                CornerRadius="8"
+                BorderThickness="1.5"
+                BorderBrush="{DynamicResource NocturneAmberBrush}"
+                Background="#1E1E28"
+                Width="192"
+                IsHitTestVisible="False"
+                Panel.ZIndex="100">
+            <Border.Effect>
+                <DropShadowEffect Color="#000000" BlurRadius="20" ShadowDepth="4" Opacity="0.8" />
+            </Border.Effect>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="108" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Thumbnail Image (16:9 Aspect Ratio) -->
+                <Border Grid.Row="0" CornerRadius="7,7,0,0" ClipToBounds="True" Background="#0C0C14">
+                    <Grid>
+                        <!-- Image Element -->
+                        <Image x:Name="ThumbnailPreviewImage"
+                               Stretch="UniformToFill"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                        <!-- Subtle dark gradient at bottom of image for contrast -->
+                        <Border VerticalAlignment="Bottom" Height="36">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                                    <GradientStop Color="#00000000" Offset="0" />
+                                    <GradientStop Color="#B0000000" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <!-- Timestamp & Chapter Name Footer -->
+                <Border Grid.Row="1" Background="#161622" CornerRadius="0,0,7,7" Padding="10,6">
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock x:Name="ThumbnailTimeText"
+                                   Text="00:00"
+                                   FontSize="13"
+                                   FontWeight="Bold"
+                                   Foreground="#FFFFFF"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock x:Name="ThumbnailChapterText"
+                                   Text="Chapter"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource NocturneAmberBrush}"
+                                   HorizontalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="170"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Bottom Floating Controls Bar (Single sleek bottom row) -->
+        <Border x:Name="BottomControlsBar" VerticalAlignment="Bottom" Height="80" CornerRadius="0,0,8,8">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
                     <GradientStop Color="#00000000" Offset="0.0" />
-                    <GradientStop Color="#80000000" Offset="0.3" />
+                    <GradientStop Color="#90000000" Offset="0.3" />
                     <GradientStop Color="#E6000000" Offset="1.0" />
                 </LinearGradientBrush>
             </Border.Background>
 
             <Grid Margin="24,0,24,14" VerticalAlignment="Bottom">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <!-- 0: Left Playback Controls: Skip Back, Play/Pause, Skip Forward -->
+                    <ColumnDefinition Width="Auto" />
+                    <!-- 1: Center: Timeline Slider & Time Display -->
+                    <ColumnDefinition Width="*" />
+                    <!-- 2: Right Controls: Volume, Audio, Subtitles, Fullscreen -->
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-                <!-- Row 0: Timeline Scrubber & Time Display -->
-                <Grid Grid.Row="0" Margin="0,0,0,8">
+                <!-- Left: Skip -10s, Play/Pause, Skip +10s -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <!-- Seek -10s -->
+                    <Button Click="OnSeekBackClick" Style="{StaticResource PlayerControlButtonStyle}"
+                            Margin="0,0,6,0" ToolTip="Rewind 10s (Left Arrow)">
+                        <ui:SymbolIcon Symbol="SkipBack1024" FontSize="20" Foreground="#FFFFFF" />
+                    </Button>
+
+                    <!-- Play / Pause Button -->
+                    <Button Click="OnPlayPauseClick" Width="44" Height="44" Margin="0,0,6,0" Cursor="Hand" ToolTip="Play / Pause (Space)">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="b" CornerRadius="22" Background="{DynamicResource NocturneAmberBrush}">
+                                    <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <ui:SymbolIcon Symbol="Pause24" FontSize="20" Foreground="#111111"
+                                                       Visibility="{Binding IsPaused, Converter={StaticResource InvertBoolToVisibility}}" />
+                                        <ui:SymbolIcon Symbol="Play24" FontSize="20" Foreground="#111111" Margin="2,0,0,0"
+                                                       Visibility="{Binding IsPaused, Converter={StaticResource BoolToVisibility}}" />
+                                    </Grid>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="b" Property="Background" Value="{DynamicResource NocturneAmberHoverBrush}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+
+                    <!-- Seek +10s -->
+                    <Button Click="OnSeekForwardClick" Style="{StaticResource PlayerControlButtonStyle}"
+                            ToolTip="Fast Forward 10s (Right Arrow)">
+                        <ui:SymbolIcon Symbol="SkipForward1024" FontSize="20" Foreground="#FFFFFF" />
+                    </Button>
+                </StackPanel>
+
+                <!-- Center: Time Bar (Timeline Slider + Time String 00:00 / 47:21) -->
+                <Grid Grid.Column="1" VerticalAlignment="Center" Margin="6,0,20,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
                     <Slider x:Name="TimelineSlider" Grid.Column="0"
+                            Style="{StaticResource PlayerSliderStyle}"
                             Minimum="0"
                             Maximum="{Binding TotalDurationSeconds}"
-                            Value="{Binding CurrentPlaybackSeconds, Mode=OneWay}"
+                            Value="{Binding CurrentPlaybackSeconds, Mode=TwoWay}"
                             PreviewMouseDown="OnSliderMouseDown"
                             PreviewMouseUp="OnSliderMouseUp"
+                            MouseMove="OnTimelineSliderMouseMove"
+                            MouseLeave="OnTimelineSliderMouseLeave"
                             VerticalAlignment="Center"
                             Cursor="Hand" />
 
                     <TextBlock Grid.Column="1" Text="{Binding TimeString}" FontSize="13" FontWeight="SemiBold"
-                               Foreground="#FFFFFF" Margin="16,0,4,0" VerticalAlignment="Center" />
+                               Foreground="#E0E0E0" Margin="14,0,0,0" VerticalAlignment="Center" />
                 </Grid>
 
-                <!-- Row 1: Player Control Buttons -->
-                <Grid Grid.Row="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
+                <!-- Right: Volume, Audio Track, Subtitle Button, Fullscreen Toggle -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- Volume Icon / Mute Toggle -->
+                    <Button Click="OnMuteToggleClick" Style="{StaticResource PlayerControlButtonStyle}"
+                            Width="34" Height="34" Margin="0,0,4,0" ToolTip="Mute / Unmute (M)">
+                        <ui:SymbolIcon x:Name="VolumeSpeakerIcon" Symbol="Speaker224" FontSize="18" Foreground="#FFFFFF" />
+                    </Button>
 
-                    <!-- Left: Play/Pause, -10s, +10s, Prev, Next -->
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <!-- Play / Pause Button -->
-                        <Button Click="OnPlayPauseClick" Width="44" Height="44" Margin="0,0,10,0" Cursor="Hand">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border x:Name="b" CornerRadius="22" Background="{DynamicResource NocturneAmberBrush}">
-                                        <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <ui:SymbolIcon Symbol="Pause24" FontSize="20" Foreground="#111111"
-                                                           Visibility="{Binding IsPaused, Converter={StaticResource InvertBoolToVisibility}}" />
-                                            <ui:SymbolIcon Symbol="Play24" FontSize="20" Foreground="#111111" Margin="2,0,0,0"
-                                                           Visibility="{Binding IsPaused, Converter={StaticResource BoolToVisibility}}" />
-                                        </Grid>
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="b" Property="Background" Value="{DynamicResource NocturneAmberHoverBrush}" />
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
+                    <!-- Volume Slider -->
+                    <Slider Width="85" Style="{StaticResource PlayerVolumeSliderStyle}"
+                            Minimum="0" Maximum="100"
+                            Value="{Binding Volume, Mode=TwoWay}"
+                            VerticalAlignment="Center" Margin="0,0,16,0" Cursor="Hand"
+                            ToolTip="Volume (Up / Down Arrows)" />
 
-                        <!-- Seek -10s -->
-                        <Button Click="OnSeekBackClick" Width="36" Height="36" Margin="0,0,6,0" Cursor="Hand"
-                                Background="Transparent" BorderThickness="0" ToolTip="Rewind 10s (Left Arrow)">
-                            <ui:SymbolIcon Symbol="ArrowCounterclockwise24" FontSize="18" Foreground="#FFFFFF" />
-                        </Button>
+                    <!-- Audio Track Button -->
+                    <Button x:Name="AudioTrackBtn" Click="OnAudioTrackClick"
+                            Style="{StaticResource PlayerControlButtonStyle}"
+                            Margin="0,0,6,0" ToolTip="Audio Tracks (A)">
+                        <ui:SymbolIcon Symbol="SoundSource24" FontSize="18" Foreground="#FFFFFF" />
+                    </Button>
 
-                        <!-- Seek +10s -->
-                        <Button Click="OnSeekForwardClick" Width="36" Height="36" Margin="0,0,14,0" Cursor="Hand"
-                                Background="Transparent" BorderThickness="0" ToolTip="Fast Forward 10s (Right Arrow)">
-                            <ui:SymbolIcon Symbol="ArrowClockwise24" FontSize="18" Foreground="#FFFFFF" />
-                        </Button>
+                    <!-- Subtitle Button -->
+                    <Button x:Name="SubtitleTrackBtn" Click="OnSubtitleTrackClick"
+                            Style="{StaticResource PlayerControlButtonStyle}"
+                            Margin="0,0,6,0" ToolTip="Subtitles (S / C)">
+                        <ui:SymbolIcon Symbol="ClosedCaption24" FontSize="18" Foreground="#FFFFFF" />
+                    </Button>
 
-                        <!-- Volume Icon + Slider -->
-                        <ui:SymbolIcon Symbol="Speaker224" FontSize="18" Foreground="#FFFFFF" Margin="0,0,8,0" VerticalAlignment="Center" />
-                        <Slider Width="90" Minimum="0" Maximum="100"
-                                Value="{Binding Volume, Mode=TwoWay}"
-                                VerticalAlignment="Center" Margin="0,0,16,0" Cursor="Hand" />
+                    <!-- Fullscreen Toggle Button -->
+                    <Button Click="OnFullscreenToggleClick"
+                            Style="{StaticResource PlayerControlButtonStyle}"
+                            ToolTip="Toggle Fullscreen (F)">
+                        <ui:SymbolIcon x:Name="FullscreenIcon" Symbol="ArrowMaximize24" FontSize="18" Foreground="#FFFFFF" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- In-Window Modern Acrylic Track Selector Flyout (Subtitles & Audio) -->
+        <Border x:Name="TrackSelectorFlyout"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,24,90" Width="340" MaxHeight="400"
+                CornerRadius="12" Background="#F014141E"
+                BorderBrush="#40FFFFFF" BorderThickness="1.2"
+                Visibility="Collapsed" Panel.ZIndex="50"
+                MouseDown="OnFlyoutMouseDown">
+            <Border.Effect>
+                <DropShadowEffect Color="#000000" BlurRadius="28" ShadowDepth="4" Direction="270" Opacity="0.85" />
+            </Border.Effect>
+            <Grid Margin="16,14,16,14">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Header: Icon, Title, and Close Button -->
+                <Grid Grid.Row="0" Margin="0,0,0,10">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:SymbolIcon x:Name="FlyoutHeaderIcon" Symbol="ClosedCaption24" FontSize="16" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                        <TextBlock x:Name="FlyoutTitle" Text="Subtitles" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF" VerticalAlignment="Center" />
                     </StackPanel>
-
-                    <!-- Right: Fullscreen Toggle -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Click="OnFullscreenToggleClick" Width="36" Height="36" Cursor="Hand"
-                                Background="Transparent" BorderThickness="0" ToolTip="Toggle Fullscreen (F)">
-                            <ui:SymbolIcon Symbol="FullScreenMaximize24" FontSize="18" Foreground="#FFFFFF" />
-                        </Button>
-                    </StackPanel>
+                    <Button Click="OnCloseFlyoutClick" HorizontalAlignment="Right" Width="28" Height="28" Cursor="Hand" Background="Transparent" BorderThickness="0">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="cb" CornerRadius="14" Background="Transparent">
+                                    <ui:SymbolIcon Symbol="Dismiss24" FontSize="14" Foreground="#AAAAAA" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="cb" Property="Background" Value="#30FFFFFF" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
                 </Grid>
+
+                <!-- Separator -->
+                <Border Grid.Row="1" Height="1" Background="#20FFFFFF" Margin="0,0,0,8" />
+
+                <!-- Scrollable Track Items -->
+                <ScrollViewer Grid.Row="2" MaxHeight="280" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="FlyoutTrackList" />
+                </ScrollViewer>
+
+                <!-- Footer Shortcut Hint -->
+                <Border Grid.Row="3" Margin="0,8,0,0" Padding="0,6,0,0" BorderBrush="#15FFFFFF" BorderThickness="0,1,0,0">
+                    <TextBlock x:Name="FlyoutShortcutHint" Text="Press S to cycle subtitles" FontSize="11" Foreground="#888888" HorizontalAlignment="Center" />
+                </Border>
             </Grid>
         </Border>
 
     </Grid>
+    </Border>
 </Window>

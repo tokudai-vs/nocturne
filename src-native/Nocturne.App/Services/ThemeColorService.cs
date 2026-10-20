@@ -11,7 +11,43 @@ public class ThemeColorUiOption
 {
     public string Name { get; set; } = string.Empty;
     public string HexColor { get; set; } = string.Empty;
-    public SolidColorBrush PreviewBrush => new((Color)ColorConverter.ConvertFromString(HexColor));
+
+    public SolidColorBrush PreviewBrush
+    {
+        get
+        {
+            if (string.Equals(HexColor, "System", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var sysColor = ApplicationAccentColorManager.GetColorizationColor();
+                    if (sysColor.A > 0)
+                    {
+                        var b = new SolidColorBrush(sysColor);
+                        b.Freeze();
+                        return b;
+                    }
+                }
+                catch { }
+                var defBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0078D4"));
+                defBrush.Freeze();
+                return defBrush;
+            }
+
+            try
+            {
+                var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(HexColor));
+                brush.Freeze();
+                return brush;
+            }
+            catch
+            {
+                var fallback = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E5A00D"));
+                fallback.Freeze();
+                return fallback;
+            }
+        }
+    }
 }
 
 public class ThemeColorService
@@ -35,7 +71,28 @@ public class ThemeColorService
         try
         {
             if (string.IsNullOrWhiteSpace(hexColor)) hexColor = "#E5A00D";
-            var color = (Color)ColorConverter.ConvertFromString(hexColor);
+            bool isSystem = string.Equals(hexColor, "System", StringComparison.OrdinalIgnoreCase);
+
+            Color color;
+            if (isSystem)
+            {
+                try
+                {
+                    color = ApplicationAccentColorManager.GetColorizationColor();
+                    if (color.A == 0)
+                    {
+                        color = (Color)ColorConverter.ConvertFromString("#0078D4");
+                    }
+                }
+                catch
+                {
+                    color = (Color)ColorConverter.ConvertFromString("#0078D4");
+                }
+            }
+            else
+            {
+                color = (Color)ColorConverter.ConvertFromString(hexColor);
+            }
 
             // Compute hover (lighter) and muted (darker) variants
             var hoverColor = Color.FromRgb(
@@ -89,7 +146,14 @@ public class ThemeColorService
 
                     try
                     {
-                        ApplicationAccentColorManager.Apply(color);
+                        if (isSystem)
+                        {
+                            ApplicationAccentColorManager.ApplySystemAccent();
+                        }
+                        else
+                        {
+                            ApplicationAccentColorManager.Apply(color);
+                        }
                     }
                     catch { }
                 });
@@ -97,11 +161,19 @@ public class ThemeColorService
 
             _settings.Update(s => s.AccentColor = hexColor);
             ThemeColorChanged?.Invoke(hexColor);
-            NocturneLogger.Info("ThemeColorService", $"Applied theme accent color: {hexColor}");
+            NocturneLogger.Info("ThemeColorService", $"Applied theme accent color: {hexColor} (resolved: #{color.R:X2}{color.G:X2}{color.B:X2})");
         }
         catch (Exception ex)
         {
             NocturneLogger.Error("ThemeColorService", $"Failed to apply theme color {hexColor}", ex);
+        }
+    }
+
+    public void RefreshSystemAccentIfNeeded()
+    {
+        if (string.Equals(_settings.Current.AccentColor, "System", StringComparison.OrdinalIgnoreCase))
+        {
+            ApplyColor("System");
         }
     }
 }

@@ -1,6 +1,6 @@
 <div align="center">
 
-# :movie_camera: Nocturne v4.0
+# :movie_camera: Nocturne v4.1
 
 **A modern, cinematic native Windows desktop client for Emby — powered by .NET 8, WPF-UI, and mpv.**
 
@@ -12,14 +12,16 @@
 
 </div>
 
-## What's New in v4.0 (Pure Native Windows)
+## What's New in v4.1
 
-Nocturne v4.0 is a complete rewrite from Electron to **pure native Windows (.NET 8 + WPF-UI + libmpv)**:
-- **Instantaneous performance**: ~60MB memory footprint (down from 450MB+ in Electron), zero Chromium overhead.
-- **Windows 11 Native Shell**: Native DWM Mica, Acrylic, and Tabbed backdrops with automatic OS light/dark mode tracking.
-- **Personalized Theme Accents**: Choose from Signature Amber, Electric Blue, Ultraviolet, Emerald Green, Crimson Rose, Sunset Orange, or Cyber Cyan.
-- **TheIntroDB Skip Prompts**: Real-time intro, recap, and credit segment skipping with amber OSC prompts and auto-advance.
-- **Deep Trakt.tv & Analytics**: Full scrobbler with 80%+ watched thresholds, bidirectional sync, GitHub-style activity heatmap, and frequency bar charts.
+Nocturne v4.1 introduces major player polish, window cohesion, and pipeline performance:
+- **Media Player Close Button & Window Cohesion**: Dedicated close button (`Dismiss24`) in the player top overlay bar, paired with reliable Win32 foreground focus restoration so Nocturne always returns to the front when closing the player.
+- **Netflix-Style Timeline Scrubbing Thumbnails**: 16:9 interactive chapter and preview thumbnail popup hovering above the timeline scrubber with drop shadow, amber border, chapter title, and timestamp.
+- **Subtitle Border Customization**: New setting in Settings → Playback allowing users to choose subtitle border size (`None` by default, `Thin`, `Medium`, `Thick`), dynamically passed to mpv (`--sub-border-size`).
+- **Timeline Progress Bar Reset**: Clean reset of timeline sliders and counters to 0:00 immediately upon advancing or switching episodes.
+- **Preserved Window Rounded Corners**: Windows 11 DWM rounded corners (`DWMWCP_ROUND`) are now retained during windowed media playback.
+- **Sync Engine Pipeline Overhaul**: High-throughput bounded pipeline with batched atomic SQLite WAL commits and contiguous low-water-mark checkpoints.
+- **YouTube Trailer Playback & Watch Party**: Direct trailer playback integration from detail pages and native watch party synchronization.
 
 ---
 
@@ -58,10 +60,14 @@ Nocturne v4.0 is a complete rewrite from Electron to **pure native Windows (.NET
 ### :tv: Video Playback Engine (Embedded mpv)
 - **Embedded Win32 HWND Player**: Embedded directly within Nocturne's main window — zero separate processes or lost focus.
 - **Modern Floating Player HUD**: Sleek translucent overlay that appears on mouse activity and auto-hides after 2.5s of inactivity.
-  - Interactive timeline scrubber with live timestamp formatting (`hh:mm:ss`).
+  - Interactive timeline scrubber with live timestamp formatting (`hh:mm:ss`) and clean progress reset across tracks.
+  - **Netflix-Style Timeline Scrubbing Thumbnails**: 16:9 chapter images, titles, and timestamps display smoothly on hover/seek.
   - Play, Pause, -10s rewind, +10s fast-forward, volume control, and Fullscreen toggle.
-  - Floating top bar with title, subtitle, episode jump, and quick back button (`Esc`).
-- **Direct play**: No server transcoding needed; native support for 4K UHD, HDR10, Dolby Vision, HEVC, AV1, DTS-HD, and TrueHD Atmos.
+  - Floating top bar with title, subtitle, episode jump, back button, and dedicated close button (`Dismiss24`).
+  - **Seamless Window Cohesion**: Immediate foreground focus restoration prevents the app from being dropped to the background on exit.
+- **Direct play**: No server transcoding needed; native support for 4K UHD, HDR10, Dolby Vision (P5/P8 tone-mapped), HEVC, AV1, DTS-HD, and TrueHD Atmos.
+- **Customizable Subtitle Borders**: Configure subtitle outline thickness (`None`, `Thin`, `Medium`, `Thick`) in Settings.
+- **Windowed Rounded Corners**: Windows 11 DWM rounded corners are preserved during windowed playback.
 - **In-player navigation**:
   - `>` / `N`: Jump to next episode without interrupting playback.
   - `<` / `P`: Jump to previous episode.
@@ -107,7 +113,7 @@ dotnet test src-native/Nocturne.Tests/Nocturne.Tests.csproj
 node scripts/build-installer.js
 ```
 
-The generated installer will be output directly to `dist/Nocturne-v4.0.0-Setup.exe`.
+The generated installer will be output directly to `dist/Nocturne-v4.1.0-Setup.exe`.
 
 ---
 

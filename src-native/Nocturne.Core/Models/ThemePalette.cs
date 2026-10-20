@@ -10,6 +10,7 @@ public static class ThemePalette
 {
     public static readonly List<ThemeColorOption> AvailableColors = new()
     {
+        new() { Name = "Windows Accent Color", HexColor = "System" },
         new() { Name = "Signature Amber", HexColor = "#E5A00D" },
         new() { Name = "Electric Blue", HexColor = "#0078D4" },
         new() { Name = "Ultraviolet", HexColor = "#8A2BE2" },

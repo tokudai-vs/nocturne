@@ -4,47 +4,284 @@
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              xmlns:controls="clr-namespace:Nocturne.App.Controls">
 
+    <UserControl.Resources>
+        <!-- Version ComboBox Item Style (Guaranteed Dark, High-Contrast Hover & Selection) -->
+        <Style x:Key="VersionPickerItemStyle" TargetType="ComboBoxItem">
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="OverridesDefaultStyle" Value="True" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="b" Background="#181820" CornerRadius="6" Margin="4,2" Padding="12,8"
+                                BorderThickness="3,0,0,0" BorderBrush="Transparent">
+                            <ContentPresenter VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#30FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#25E5A00D" />
+                                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Version ComboBox Custom Dark Acrylic Style (Never White Popup, Never Invisible Text) -->
+        <Style x:Key="VersionPickerComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="OverridesDefaultStyle" Value="True" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+            <Setter Property="ItemContainerStyle" Value="{StaticResource VersionPickerItemStyle}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid HorizontalAlignment="Stretch" MinWidth="{TemplateBinding MinWidth}">
+                            <!-- Closed Box / Toggle Button (Guaranteed to stretch full width of control) -->
+                            <ToggleButton x:Name="ToggleButton" ClickMode="Press" Focusable="False"
+                                          OverridesDefaultStyle="True"
+                                          HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                          HorizontalContentAlignment="Stretch"
+                                          IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="b" CornerRadius="8" Background="#1E1E28"
+                                                BorderBrush="#55FFFFFF" BorderThickness="1.5"
+                                                Padding="14,6" MinHeight="44" HorizontalAlignment="Stretch">
+                                            <Grid HorizontalAlignment="Stretch">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <ui:SymbolIcon Grid.Column="1" Symbol="ChevronDown24" FontSize="14" Foreground="#CCCCCC"
+                                                               VerticalAlignment="Center" Margin="12,0,4,0" />
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                                <Setter TargetName="b" Property="Background" Value="#282836" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+
+                            <!-- Selected Item Content Display inside closed button -->
+                            <ContentPresenter Name="ContentSite" IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                              VerticalAlignment="Center" HorizontalAlignment="Stretch"
+                                              Margin="14,0,40,0" />
+
+                            <!-- Dropdown Popup with Guaranteed Dark Background (Never White!) -->
+                            <Popup Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
+                                <Grid Name="DropDown" SnapsToDevicePixels="True"
+                                      MinWidth="{TemplateBinding ActualWidth}" MaxHeight="260">
+                                    <Border x:Name="DropDownBorder" CornerRadius="8"
+                                            Background="#181820" BorderBrush="#55FFFFFF" BorderThickness="1.5"
+                                            Margin="0,4,0,10">
+                                        <Border.Effect>
+                                            <DropShadowEffect Color="#000000" BlurRadius="16" ShadowDepth="4" Direction="270" Opacity="0.75" />
+                                        </Border.Effect>
+                                        <ScrollViewer Margin="2,4" SnapsToDevicePixels="True">
+                                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained" />
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
     <Grid Background="{DynamicResource ApplicationBackgroundBrush}">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer x:Name="PageScrollViewer" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
             <Grid>
-                <!-- Hero Backdrop Image with Deep Cinematic Vignette & Bottom Fade -->
-                <Grid Height="500" VerticalAlignment="Top" ClipToBounds="True">
+                <!-- Hero Backdrop Image & Video Trailer with Deep Cinematic Vignette & Bottom Dissolve -->
+                <Grid Height="520" VerticalAlignment="Top" ClipToBounds="True" Background="#141418">
+                    <Grid.OpacityMask>
+                        <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                            <GradientStop Color="#FFFFFFFF" Offset="0.0" />
+                            <GradientStop Color="#FFFFFFFF" Offset="0.75" />
+                            <GradientStop Color="#CCFFFFFF" Offset="0.88" />
+                            <GradientStop Color="#40FFFFFF" Offset="0.96" />
+                            <GradientStop Color="#00FFFFFF" Offset="1.0" />
+                        </LinearGradientBrush>
+                    </Grid.OpacityMask>
+
+                    <!-- Static Backdrop Image (Fallback or initial frame) -->
                     <Image Source="{Binding BackdropUrl}" Stretch="UniformToFill" />
 
+                    <!-- Background Trailer Player (Without sound, looping, fallback to image if failed) -->
+                    <MediaElement x:Name="BackgroundTrailerPlayer"
+                                  LoadedBehavior="Manual"
+                                  UnloadedBehavior="Manual"
+                                  IsMuted="True"
+                                  Volume="0"
+                                  Stretch="UniformToFill"
+                                  Visibility="Collapsed"
+                                  MediaOpened="OnTrailerMediaOpened"
+                                  MediaEnded="OnTrailerMediaEnded"
+                                  MediaFailed="OnTrailerMediaFailed" />
+
                     <!-- Left Reading Scrim (Ensures White Text is 100% Readable on Any Backdrop) -->
-                    <Border>
+                    <Border HorizontalAlignment="Left" Width="720">
                         <Border.Background>
                             <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
-                                <GradientStop Color="#F0000000" Offset="0.0" />
-                                <GradientStop Color="#C0000000" Offset="0.3" />
-                                <GradientStop Color="#60000000" Offset="0.65" />
-                                <GradientStop Color="#00000000" Offset="0.95" />
+                                <GradientStop Color="#E5000000" Offset="0.0" />
+                                <GradientStop Color="#B0000000" Offset="0.45" />
+                                <GradientStop Color="#50000000" Offset="0.75" />
+                                <GradientStop Color="#00000000" Offset="1.0" />
                             </LinearGradientBrush>
                         </Border.Background>
                     </Border>
 
-                    <!-- Bottom Gradient Fade to Black / Page Floor -->
-                    <Border>
+                    <!-- Bottom Soft Diffusion Scrim -->
+                    <Border VerticalAlignment="Bottom" Height="140">
                         <Border.Background>
                             <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
                                 <GradientStop Color="#00000000" Offset="0.0" />
-                                <GradientStop Color="#00000000" Offset="0.45" />
-                                <GradientStop Color="#80000000" Offset="0.75" />
-                                <GradientStop Color="#D0000000" Offset="0.9" />
-                                <GradientStop Color="#FF0A0A0A" Offset="1.0" />
+                                <GradientStop Color="#25000000" Offset="0.4" />
+                                <GradientStop Color="#60000000" Offset="0.7" />
+                                <GradientStop Color="#B0000000" Offset="1.0" />
                             </LinearGradientBrush>
                         </Border.Background>
                     </Border>
                 </Grid>
 
-                <!-- Main Content Container -->
-                <StackPanel Margin="48,24,48,48">
+                <!-- Skeleton Loading Shimmer Layout (Displayed while loading item metadata) -->
+                <Grid Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}"
+                      Margin="48,64,48,48" ClipToBounds="True">
+                    <!-- Moving Shimmer Highlight Scrim -->
+                    <Border IsHitTestVisible="False" Panel.ZIndex="10" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                        <Border.RenderTransform>
+                            <TranslateTransform x:Name="ShimmerWave" />
+                        </Border.RenderTransform>
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                <GradientStop Color="#00FFFFFF" Offset="0.0" />
+                                <GradientStop Color="#14FFFFFF" Offset="0.5" />
+                                <GradientStop Color="#00FFFFFF" Offset="1.0" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Border.Triggers>
+                            <EventTrigger RoutedEvent="Border.Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard RepeatBehavior="Forever">
+                                        <DoubleAnimation Storyboard.TargetName="ShimmerWave"
+                                                         Storyboard.TargetProperty="X"
+                                                         From="-700" To="1400"
+                                                         Duration="0:0:1.6" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Border.Triggers>
+                    </Border>
+
+                    <StackPanel>
+                        <!-- Back Button Placeholder -->
+                        <Border Width="42" Height="42" CornerRadius="21" Background="#222228"
+                                HorizontalAlignment="Left" Margin="0,0,0,18" />
+
+                        <!-- Hero Block Placeholder -->
+                        <Grid Margin="0,4,0,36">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="240" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Poster Placeholder Box -->
+                            <Border Grid.Column="0" CornerRadius="12" Height="360" Background="#1D1D24" BorderBrush="#25FFFFFF" BorderThickness="1" />
+
+                            <!-- Details Column Placeholder -->
+                            <StackPanel Grid.Column="1" Margin="36,6,0,0">
+                                <!-- Title Bar -->
+                                <Border Width="420" Height="36" CornerRadius="6" Background="#262630" HorizontalAlignment="Left" Margin="0,0,0,14" />
+
+                                <!-- Tagline Bar -->
+                                <Border Width="260" Height="16" CornerRadius="4" Background="#1F1F26" HorizontalAlignment="Left" Margin="0,0,0,16" />
+
+                                <!-- Meta Badges Row -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                                    <Border Width="55" Height="22" CornerRadius="4" Background="#22222A" Margin="0,0,8,0" />
+                                    <Border Width="70" Height="22" CornerRadius="4" Background="#22222A" Margin="0,0,8,0" />
+                                    <Border Width="50" Height="22" CornerRadius="4" Background="#22222A" Margin="0,0,8,0" />
+                                    <Border Width="65" Height="22" CornerRadius="4" Background="#22222A" Margin="0,0,8,0" />
+                                </StackPanel>
+
+                                <!-- Action Buttons Row -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
+                                    <Border Width="130" Height="42" CornerRadius="6" Background="#3A2D1B" Margin="0,0,12,0" />
+                                    <Border Width="95" Height="42" CornerRadius="6" Background="#24242C" Margin="0,0,10,0" />
+                                    <Border Width="110" Height="42" CornerRadius="6" Background="#24242C" Margin="0,0,10,0" />
+                                    <Border Width="100" Height="42" CornerRadius="6" Background="#24242C" Margin="0,0,10,0" />
+                                </StackPanel>
+
+                                <!-- Overview Lines Placeholder -->
+                                <Border Width="580" Height="14" CornerRadius="3" Background="#1E1E26" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                                <Border Width="530" Height="14" CornerRadius="3" Background="#1E1E26" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                                <Border Width="470" Height="14" CornerRadius="3" Background="#1E1E26" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                                <Border Width="290" Height="14" CornerRadius="3" Background="#1E1E26" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Cast Row Placeholder -->
+                        <Border Width="120" Height="18" CornerRadius="4" Background="#262630" HorizontalAlignment="Left" Margin="0,16,0,16" />
+                        <StackPanel Orientation="Horizontal">
+                            <StackPanel Width="96" Margin="0,0,16,0" HorizontalAlignment="Center">
+                                <Border Width="80" Height="80" CornerRadius="40" Background="#22222A" Margin="0,0,0,8" />
+                                <Border Width="64" Height="12" CornerRadius="3" Background="#1E1E26" Margin="0,0,0,4" />
+                                <Border Width="46" Height="10" CornerRadius="3" Background="#1A1A22" />
+                            </StackPanel>
+                            <StackPanel Width="96" Margin="0,0,16,0" HorizontalAlignment="Center">
+                                <Border Width="80" Height="80" CornerRadius="40" Background="#22222A" Margin="0,0,0,8" />
+                                <Border Width="64" Height="12" CornerRadius="3" Background="#1E1E26" Margin="0,0,0,4" />
+                                <Border Width="46" Height="10" CornerRadius="3" Background="#1A1A22" />
+                            </StackPanel>
+                            <StackPanel Width="96" Margin="0,0,16,0" HorizontalAlignment="Center">
+                                <Border Width="80" Height="80" CornerRadius="40" Background="#22222A" Margin="0,0,0,8" />
+                                <Border Width="64" Height="12" CornerRadius="3" Background="#1E1E26" Margin="0,0,0,4" />
+                                <Border Width="46" Height="10" CornerRadius="3" Background="#1A1A22" />
+                            </StackPanel>
+                            <StackPanel Width="96" Margin="0,0,16,0" HorizontalAlignment="Center">
+                                <Border Width="80" Height="80" CornerRadius="40" Background="#22222A" Margin="0,0,0,8" />
+                                <Border Width="64" Height="12" CornerRadius="3" Background="#1E1E26" Margin="0,0,0,4" />
+                                <Border Width="46" Height="10" CornerRadius="3" Background="#1A1A22" />
+                            </StackPanel>
+                            <StackPanel Width="96" Margin="0,0,16,0" HorizontalAlignment="Center">
+                                <Border Width="80" Height="80" CornerRadius="40" Background="#22222A" Margin="0,0,0,8" />
+                                <Border Width="64" Height="12" CornerRadius="3" Background="#1E1E26" Margin="0,0,0,4" />
+                                <Border Width="46" Height="10" CornerRadius="3" Background="#1A1A22" />
+                            </StackPanel>
+                            <StackPanel Width="96" Margin="0,0,16,0" HorizontalAlignment="Center">
+                                <Border Width="80" Height="80" CornerRadius="40" Background="#22222A" Margin="0,0,0,8" />
+                                <Border Width="64" Height="12" CornerRadius="3" Background="#1E1E26" Margin="0,0,0,4" />
+                                <Border Width="46" Height="10" CornerRadius="3" Background="#1A1A22" />
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Main Content Container (Hidden while IsLoading is true) -->
+                <StackPanel Margin="48,64,48,48" Visibility="{Binding IsLoading, Converter={StaticResource InvertBoolToVisibility}}">
                     <!-- Back Button -->
                     <Button Click="OnBackClick" Width="42" Height="42" Margin="0,0,0,18"
                             HorizontalAlignment="Left" Cursor="Hand" ToolTip="Back">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border x:Name="b" CornerRadius="21" Background="#60000000" BorderBrush="#35FFFFFF" BorderThickness="1">
+                                <Border x:Name="b" CornerRadius="21" Background="#85000000" BorderBrush="#60FFFFFF" BorderThickness="1.5">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="12" Direction="0" ShadowDepth="0" Color="#000000" Opacity="0.75" />
+                                    </Border.Effect>
                                     <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
                                 <ControlTemplate.Triggers>
@@ -145,20 +382,27 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <!-- Version Picker (Multi-Server Dedup) -->
+                            <!-- Version Picker (Multi-Server Dedup - High-Contrast Container) -->
                             <StackPanel Margin="0,0,0,18" Visibility="{Binding HasMultipleVersions, Converter={StaticResource BoolToVisibility}}">
                                 <TextBlock Text="Available Versions" FontSize="12" FontWeight="SemiBold"
                                            Foreground="#CCCCCC" Margin="0,0,0,6" />
-                                <ComboBox HorizontalAlignment="Left" MinWidth="280" Height="36"
+                                <ComboBox HorizontalAlignment="Left" MinWidth="340"
+                                          Style="{StaticResource VersionPickerComboBoxStyle}"
                                           ItemsSource="{Binding GroupVersions}"
                                           SelectedItem="{Binding SelectedVersion, Mode=TwoWay}">
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate>
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="{Binding ResolutionBadge}" FontWeight="SemiBold" Margin="0,0,8,0" />
-                                                <TextBlock Text="{Binding CodecBadge}" Foreground="#CCCCCC" Margin="0,0,8,0" />
-                                                <TextBlock Text="•" Foreground="#888888" Margin="0,0,8,0" />
-                                                <TextBlock Text="{Binding ServerName}" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <ui:SymbolIcon Symbol="Server24" FontSize="15" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding ServerName}" FontWeight="Bold" FontSize="13" Foreground="#FFFFFF" Margin="0,0,10,0" VerticalAlignment="Center" />
+                                                <Border Background="#35FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,6,0"
+                                                        Visibility="{Binding ResolutionBadge, Converter={StaticResource NullToVisibility}}" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ResolutionBadge}" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
+                                                </Border>
+                                                <Border Background="#25FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,6,0"
+                                                        Visibility="{Binding CodecBadge, Converter={StaticResource NullToVisibility}}" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding CodecBadge}" FontSize="11" FontWeight="Medium" Foreground="#E0E0E0" />
+                                                </Border>
                                             </StackPanel>
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
@@ -185,14 +429,43 @@
                                     </StackPanel>
                                 </Button>
 
-                                <!-- Watched Toggle Button -->
-                                <Button Click="OnPlayedToggleClick" Margin="0,0,8,0" Padding="14,10"
-                                        Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="Checkmark24" FontSize="16" Margin="0,0,6,0"
-                                                       Foreground="{Binding IsPlayed, Converter={StaticResource BoolToBrushConverter}}" />
-                                        <TextBlock Text="{Binding PlayedButtonText}" FontWeight="Medium" />
-                                    </StackPanel>
+                                <!-- Watched Toggle Button (Filled for Watched, Hollow for Unwatched) -->
+                                <Button Click="OnPlayedToggleClick" Margin="0,0,8,0" Padding="16,10" Cursor="Hand">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="Background" Value="#30FFFFFF" />
+                                            <Setter Property="BorderBrush" Value="#40FFFFFF" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <Setter Property="Foreground" Value="#FFFFFF" />
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="Button">
+                                                        <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}"
+                                                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                                                Padding="{TemplateBinding Padding}">
+                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <ui:SymbolIcon x:Name="icon" Symbol="Checkmark24" FontSize="16" Margin="0,0,8,0"
+                                                                               Foreground="{TemplateBinding Foreground}" />
+                                                                <TextBlock x:Name="txt" Text="{Binding PlayedButtonText}" FontWeight="SemiBold"
+                                                                           Foreground="{TemplateBinding Foreground}" />
+                                                            </StackPanel>
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <DataTrigger Binding="{Binding IsPlayed}" Value="True">
+                                                                <Setter TargetName="b" Property="Background" Value="#2EA043" />
+                                                                <Setter TargetName="b" Property="BorderBrush" Value="#38B854" />
+                                                                <Setter Property="Foreground" Value="#FFFFFF" />
+                                                                <Setter TargetName="txt" Property="FontWeight" Value="Bold" />
+                                                            </DataTrigger>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="b" Property="Opacity" Value="0.9" />
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </Button.Style>
                                 </Button>
 
                                 <!-- Favorite Toggle Button -->
@@ -200,7 +473,7 @@
                                         Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="Heart24" FontSize="16" Margin="0,0,6,0"
-                                                       Foreground="{Binding IsFavorite, Converter={StaticResource BoolToBrushConverter}}" />
+                                                       Foreground="{Binding IsFavorite, Converter={StaticResource HeroBoolToBrushConverter}}" />
                                         <TextBlock Text="Favorite" FontWeight="Medium" />
                                     </StackPanel>
                                 </Button>
@@ -210,11 +483,73 @@
                                         Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="Bookmark24" FontSize="16" Margin="0,0,6,0"
-                                                       Foreground="{Binding IsInWatchlist, Converter={StaticResource BoolToBrushConverter}}" />
+                                                       Foreground="{Binding IsInWatchlist, Converter={StaticResource HeroBoolToBrushConverter}}" />
                                         <TextBlock Text="Watchlist" FontWeight="Medium" />
                                     </StackPanel>
                                 </Button>
+
+                                <!-- Watch Party Button -->
+                                <Button Click="OnWatchPartyButtonClick" Margin="0,0,8,0" Padding="14,10"
+                                        Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <ui:SymbolIcon Symbol="PeopleCommunity24" FontSize="16" Margin="0,0,6,0" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                        <TextBlock Text="Watch Party" FontWeight="Medium" />
+                                    </StackPanel>
+                                </Button>
                             </StackPanel>
+
+                            <!-- Active Watch Party Banner / Card -->
+                            <Border Visibility="{Binding IsWatchPartyActive, Converter={StaticResource BoolToVisibility}}"
+                                    Background="#D8141416" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1.5"
+                                    CornerRadius="12" Padding="18,14" Margin="0,0,0,16" MaxWidth="850" HorizontalAlignment="Left">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                            <Border Background="{DynamicResource NocturneAmberBrush}" CornerRadius="4" Padding="6,2" Margin="0,0,10,0">
+                                                <TextBlock Text="{Binding WatchPartyStateText}" FontWeight="Bold" FontSize="10" Foreground="#000000" />
+                                            </Border>
+                                            <TextBlock Text="🍿 Live Watch Party" FontWeight="Bold" FontSize="14" Foreground="#FFFFFF" VerticalAlignment="Center" />
+                                            <TextBlock Text="•" Margin="8,0" Foreground="#888888" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding WatchPartyGuestsText}" Foreground="{DynamicResource NocturneAmberBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                            <TextBlock Text="•" Margin="8,0" Foreground="#888888" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding WatchPartyTranscodedText}" Foreground="#AAAAAA" VerticalAlignment="Center" />
+                                        </StackPanel>
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <TextBlock Text="Guest Link:" Foreground="#888888" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" />
+                                            <TextBox Text="{Binding WatchPartyTunnelUrl, Mode=OneWay}" IsReadOnly="True" MinWidth="340"
+                                                     Background="#222225" Foreground="#EEEEEE" BorderBrush="#40FFFFFF" Padding="8,4" FontSize="12" VerticalAlignment="Center" />
+                                            <Button Click="OnCopyWatchPartyLinkClick" Margin="8,0,0,0" Padding="12,6"
+                                                    Background="#35FFFFFF" Foreground="#FFFFFF">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <ui:SymbolIcon Symbol="Copy24" FontSize="14" Margin="0,0,6,0" />
+                                                    <TextBlock Text="{Binding CopyButtonText}" FontSize="12" FontWeight="SemiBold" />
+                                                </StackPanel>
+                                            </Button>
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                                        <Button Style="{StaticResource AmberPrimaryButton}" Click="OnWatchPartyStartShowClick" Padding="16,10" Margin="0,0,8,0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon Symbol="Play24" FontSize="16" Margin="0,0,6,0" />
+                                                <TextBlock Text="Sync Play" FontWeight="Bold" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Click="OnWatchPartyEndClick" Padding="14,10" Background="#30FF4444" BorderBrush="#50FF4444" Foreground="#FF6666">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon Symbol="Dismiss24" FontSize="16" Margin="0,0,6,0" />
+                                                <TextBlock Text="End Party" FontWeight="SemiBold" />
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
 
                             <!-- Flowing Overview Text Section (No box borders, crisp readable text) -->
                             <StackPanel Margin="0,4,0,0" MaxWidth="850" HorizontalAlignment="Left">
@@ -276,16 +611,6 @@
                                                                    FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
                                                     </Border>
 
-                                                    <!-- Watched Badge (Top-Right) -->
-                                                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8"
-                                                            Background="#D0157347" CornerRadius="12" Padding="7,3"
-                                                            Visibility="{Binding IsPlayed, Converter={StaticResource BoolToVisibility}}">
-                                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                            <ui:SymbolIcon Symbol="Checkmark16" FontSize="11" Foreground="#FFFFFF" Margin="0,0,3,0" />
-                                                            <TextBlock Text="Watched" FontSize="10" FontWeight="Bold" Foreground="#FFFFFF" />
-                                                        </StackPanel>
-                                                    </Border>
-
                                                     <!-- In-Progress Resume Progress Bar (Bottom edge) -->
                                                     <ProgressBar VerticalAlignment="Bottom" Height="4"
                                                                  Minimum="0" Maximum="100" Value="{Binding ProgressPercentage, Mode=OneWay}"
@@ -303,12 +628,6 @@
                                                     <TextBlock Text="{Binding DisplayTitle}" FontSize="15" FontWeight="SemiBold"
                                                                Foreground="{DynamicResource TextFillColorPrimaryBrush}"
                                                                TextTrimming="CharacterEllipsis" MaxWidth="500" />
-
-                                                    <!-- Subtle Watched checkmark badge -->
-                                                    <Border Background="#25107C41" CornerRadius="10" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
-                                                            Visibility="{Binding IsPlayed, Converter={StaticResource BoolToVisibility}}">
-                                                        <ui:SymbolIcon Symbol="Checkmark12" FontSize="10" Foreground="#107C41" />
-                                                    </Border>
                                                 </StackPanel>
 
                                                 <!-- Metadata Row -->
@@ -327,15 +646,39 @@
 
                                             <!-- Actions (Right) -->
                                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,4,0">
-                                                <!-- Mark as Played / Unplayed Toggle Button -->
+                                                <!-- Mark as Played / Unplayed Toggle Button (Filled for Watched, Hollow for Unwatched) -->
                                                 <Button Click="OnToggleEpisodePlayedClick"
                                                         ToolTip="Toggle watched status"
-                                                        Margin="0,0,8,0" Padding="10,8"
-                                                        Background="{DynamicResource SubtleFillColorSecondaryBrush}"
-                                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                                        BorderThickness="1">
-                                                    <ui:SymbolIcon Symbol="Checkmark24" FontSize="16"
-                                                                   Foreground="{Binding IsPlayed, Converter={StaticResource BoolToBrushConverter}}" />
+                                                        Margin="0,0,10,0" Width="38" Height="36" Cursor="Hand">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button">
+                                                            <Setter Property="Background" Value="Transparent" />
+                                                            <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}" />
+                                                            <Setter Property="BorderThickness" Value="1.5" />
+                                                            <Setter Property="Template">
+                                                                <Setter.Value>
+                                                                    <ControlTemplate TargetType="Button">
+                                                                        <Border x:Name="b" CornerRadius="6" Background="{TemplateBinding Background}"
+                                                                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                                                                            <ui:SymbolIcon x:Name="icon" Symbol="Checkmark24" FontSize="16"
+                                                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsPlayed}" Value="True">
+                                                                                <Setter TargetName="b" Property="Background" Value="#2EA043" />
+                                                                                <Setter TargetName="b" Property="BorderBrush" Value="#2EA043" />
+                                                                                <Setter TargetName="icon" Property="Foreground" Value="#FFFFFF" />
+                                                                            </DataTrigger>
+                                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                                <Setter TargetName="b" Property="Opacity" Value="0.85" />
+                                                                            </Trigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </Style>
+                                                    </Button.Style>
                                                 </Button>
 
                                                 <!-- Play Button -->
@@ -355,10 +698,11 @@
                     </StackPanel>
 
                     <!-- Cast & Crew Section (Circular Avatars, Names on Bottom, No Outer Box, Floating Scroll Buttons, Hidden Scrollbar) -->
-                    <StackPanel Visibility="{Binding HasCast, Converter={StaticResource BoolToVisibility}}" Margin="0,12,0,36">
+                    <StackPanel Margin="0,12,0,36">
                         <TextBlock Text="Cast &amp; Crew" FontSize="20" FontWeight="Bold"
                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,16" />
-                        <Grid x:Name="CastRowGrid" MouseEnter="OnCastRowMouseEnter" MouseLeave="OnCastRowMouseLeave">
+                        <Grid x:Name="CastRowGrid" Visibility="{Binding HasCast, Converter={StaticResource BoolToVisibility}}"
+                              MouseEnter="OnCastRowMouseEnter" MouseLeave="OnCastRowMouseLeave">
                             <ScrollViewer x:Name="CastScrollViewer"
                                           HorizontalScrollBarVisibility="Hidden"
                                           VerticalScrollBarVisibility="Disabled"
@@ -411,46 +755,61 @@
                                 </ItemsControl>
                             </ScrollViewer>
 
-                            <!-- Floating Left Scroll Button -->
+                            <!-- Left Gradient Scrim under button (Theme adaptive fade, only visible on hover) -->
+                            <Border x:Name="CastLeftScrim" Width="80" HorizontalAlignment="Left" VerticalAlignment="Stretch"
+                                    Background="{DynamicResource ScrollEdgeLeftBrush}" IsHitTestVisible="False" Panel.ZIndex="5" Opacity="0" />
+
+                            <!-- Right Gradient Scrim under button (Theme adaptive fade, only visible on hover) -->
+                            <Border x:Name="CastRightScrim" Width="80" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                                    Background="{DynamicResource ScrollEdgeRightBrush}" IsHitTestVisible="False" Panel.ZIndex="5" Opacity="0" />
+
+                            <!-- Floating Left Circular Scroll Button -->
                             <Button x:Name="CastScrollLeftButton" Click="OnCastScrollLeftClick"
                                     HorizontalAlignment="Left" VerticalAlignment="Center"
-                                    Width="36" Height="64" Margin="0,0,0,24"
+                                    Width="42" Height="42" Margin="10,0,0,24"
                                     Opacity="0" Cursor="Hand" Panel.ZIndex="10">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border x:Name="b" CornerRadius="18" Background="#CC111111" BorderBrush="#40FFFFFF" BorderThickness="1">
+                                        <Border x:Name="b" CornerRadius="21" Background="#E0141416" BorderBrush="#40FFFFFF" BorderThickness="1">
                                             <ui:SymbolIcon Symbol="ChevronLeft24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
                                                 <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
-                                                <Setter TargetName="b" Property="Background" Value="#F0111111" />
+                                                <Setter TargetName="b" Property="Background" Value="#F51E1E22" />
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
 
-                            <!-- Floating Right Scroll Button -->
+                            <!-- Floating Right Circular Scroll Button -->
                             <Button x:Name="CastScrollRightButton" Click="OnCastScrollRightClick"
                                     HorizontalAlignment="Right" VerticalAlignment="Center"
-                                    Width="36" Height="64" Margin="0,0,0,24"
+                                    Width="42" Height="42" Margin="0,0,10,24"
                                     Opacity="0" Cursor="Hand" Panel.ZIndex="10">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border x:Name="b" CornerRadius="18" Background="#CC111111" BorderBrush="#40FFFFFF" BorderThickness="1">
+                                        <Border x:Name="b" CornerRadius="21" Background="#E0141416" BorderBrush="#40FFFFFF" BorderThickness="1">
                                             <ui:SymbolIcon Symbol="ChevronRight24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
                                                 <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
-                                                <Setter TargetName="b" Property="Background" Value="#F0111111" />
+                                                <Setter TargetName="b" Property="Background" Value="#F51E1E22" />
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
                         </Grid>
+
+                        <!-- Fallback when no cast information is available -->
+                        <TextBlock Text="Cast information is not available."
+                                   FontSize="13" FontStyle="Italic"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Visibility="{Binding HasCast, Converter={StaticResource InvertBoolToVisibility}}"
+                                   Margin="4,0,0,12" />
                     </StackPanel>
 
                     <!-- More Like This Row (Powered by MediaRow with hidden scrollbars and chevron buttons) -->
@@ -461,5 +820,59 @@
                 </StackPanel>
             </Grid>
         </ScrollViewer>
+
+        <!-- Watch Party Setup & Preflight Modal Dialog Overlay -->
+        <Grid Visibility="{Binding IsWatchPartyModalOpen, Converter={StaticResource BoolToVisibility}}"
+              Background="#D0000000" Panel.ZIndex="100">
+            <Border Background="#1C1C1E" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1.5"
+                    CornerRadius="16" Padding="32" Width="520" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <!-- Header -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                        <Border Background="#30E5B85B" CornerRadius="12" Padding="12" Margin="0,0,16,0">
+                            <ui:SymbolIcon Symbol="PeopleCommunity24" FontSize="26" Foreground="{DynamicResource NocturneAmberBrush}" />
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Watch Party • Media Sharing" FontSize="18" FontWeight="Bold" Foreground="#FFFFFF" />
+                            <TextBlock Text="Host a synchronized cinema session over Cloudflare tunnel" FontSize="12" Foreground="#888888" Margin="0,3,0,0" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- Downloading Binaries State -->
+                    <StackPanel Visibility="{Binding IsWatchPartyDownloading, Converter={StaticResource BoolToVisibility}}" Margin="0,12,0,12">
+                        <TextBlock Text="{Binding WatchPartyStatusText}" Foreground="#DDDDDD" FontSize="13" Margin="0,0,0,12" />
+                        <ProgressBar Value="{Binding WatchPartyProgress}" Height="8" Maximum="100" Margin="0,0,0,20" Foreground="{DynamicResource NocturneAmberBrush}" />
+                        <Button Click="OnCloseWatchPartyModalClick" Content="Cancel" HorizontalAlignment="Right" Padding="20,8" />
+                    </StackPanel>
+
+                    <!-- Configuration / Preflight State -->
+                    <StackPanel Visibility="{Binding IsWatchPartyDownloading, Converter={StaticResource InvertBoolToVisibility}}" Margin="0,4,0,0">
+                        <TextBlock Text="Item" FontSize="12" FontWeight="SemiBold" Foreground="#888888" Margin="0,0,0,4" />
+                        <TextBlock Text="{Binding Item.Name}" FontSize="15" FontWeight="Bold" Foreground="#FFFFFF" Margin="0,0,0,16" />
+
+                        <!-- Stream Quality -->
+                        <TextBlock Text="Transcode Quality" FontSize="12" FontWeight="SemiBold" Foreground="#888888" Margin="0,0,0,6" />
+                        <ComboBox ItemsSource="{Binding AvailableQualities}" SelectedItem="{Binding SelectedQuality, Mode=TwoWay}"
+                                  Height="38" Margin="0,0,0,16" />
+
+                        <!-- Start Position -->
+                        <CheckBox IsChecked="{Binding StartFromResume, Mode=TwoWay}" Content="Resume from saved playback position"
+                                  FontSize="13" Foreground="#DDDDDD" Margin="0,0,0,24" />
+
+                        <!-- Buttons -->
+                        <DockPanel Margin="0,8,0,0">
+                            <Button Click="OnCloseWatchPartyModalClick" Content="Cancel" Padding="20,10" Background="Transparent" Foreground="#AAAAAA" />
+                            <Button Style="{StaticResource AmberPrimaryButton}" Click="OnStartWatchPartyConfirmClick"
+                                    HorizontalAlignment="Right" Padding="24,10">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="Play24" FontSize="16" Margin="0,0,8,0" />
+                                    <TextBlock Text="Start Watch Party" FontWeight="Bold" />
+                                </StackPanel>
+                            </Button>
+                        </DockPanel>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </UserControl>

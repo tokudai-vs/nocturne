@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
 using System.Windows;
+using System.Windows.Media;
 using Wpf.Ui.Appearance;
 using Nocturne.App.Services;
 using Nocturne.Core.Models;
@@ -61,6 +63,37 @@ public class SettingsViewModel : BaseViewModel
     private readonly ThemeColorService _themeColors;
     private readonly EmbyConnectService _connect;
 
+    // Categorized Tabs Navigation
+    private string _selectedCategory = "servers";
+    public string SelectedCategory
+    {
+        get => _selectedCategory;
+        set
+        {
+            if (SetProperty(ref _selectedCategory, value))
+            {
+                OnPropertyChanged(nameof(IsServersCategory));
+                OnPropertyChanged(nameof(IsLibrariesCategory));
+                OnPropertyChanged(nameof(IsPlaybackCategory));
+                OnPropertyChanged(nameof(IsAppearanceCategory));
+                OnPropertyChanged(nameof(IsIntegrationsCategory));
+                OnPropertyChanged(nameof(IsAboutCategory));
+            }
+        }
+    }
+
+    public bool IsServersCategory => SelectedCategory == "servers";
+    public bool IsLibrariesCategory => SelectedCategory == "libraries";
+    public bool IsPlaybackCategory => SelectedCategory == "playback";
+    public bool IsAppearanceCategory => SelectedCategory == "appearance";
+    public bool IsIntegrationsCategory => SelectedCategory == "integrations";
+    public bool IsAboutCategory => SelectedCategory == "about";
+
+    public void SelectCategory(string category)
+    {
+        SelectedCategory = category;
+    }
+
     // Server adding fields
     private string _newServerUrl = "http://";
     private string _newUsername = string.Empty;
@@ -118,6 +151,11 @@ public class SettingsViewModel : BaseViewModel
     // Sync & Trakt
     private string _syncStatusText = "Idle";
     private bool _isSyncing;
+    private double _syncProgressPercent;
+    private bool _isSyncIndeterminate;
+    private string _syncDetailedStatus = string.Empty;
+    private string _cacheStatusMessage = string.Empty;
+    public event Action? CacheCleared;
     private string? _traktAuthCode;
     private string? _traktAuthUrl;
     private bool _traktAutoScrobble = true;
@@ -150,14 +188,27 @@ public class SettingsViewModel : BaseViewModel
 
         LoadFromSettings();
 
+        _sync.ProgressReported += report =>
+        {
+            System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                SyncDetailedStatus = report.StatusMessage;
+                SyncProgressPercent = report.Percentage;
+                IsSyncIndeterminate = report.State == SyncState.Discovering;
+            });
+        };
+
         _sync.StateChanged += (state, msg) =>
         {
-            SyncStatusText = msg;
-            IsSyncing = state != SyncState.Idle && state != SyncState.Done && state != SyncState.Error;
-            if (state == SyncState.Done)
+            System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
             {
-                RefreshDatabaseStats();
-            }
+                SyncStatusText = msg;
+                IsSyncing = state != SyncState.Idle && state != SyncState.Done && state != SyncState.Error;
+                if (state == SyncState.Done)
+                {
+                    RefreshDatabaseStats();
+                }
+            });
         };
 
         RefreshDatabaseStats();
@@ -175,10 +226,11 @@ public class SettingsViewModel : BaseViewModel
         _skipRecapMode = s.SkipRecapMode;
         _skipCreditsMode = s.SkipCreditsMode;
 
-        _subtitleFont = s.SubtitleFont;
+        _subtitleFont = CleanFontName(s.SubtitleFont);
         _subtitleSize = s.SubtitleSize;
         _subtitleColor = s.SubtitleColor;
         _subtitleBackground = s.SubtitleBackground;
+        _subtitleBorder = s.SubtitleBorder;
         _defaultSubtitleLanguage = s.DefaultSubtitleLanguage;
         _defaultAudioLanguage = s.DefaultAudioLanguage;
 
@@ -194,6 +246,27 @@ public class SettingsViewModel : BaseViewModel
 
         LoadServers();
         LoadCombinedGroups();
+    }
+
+    public static string CleanFontName(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "Segoe UI Variable Text";
+        var clean = raw.Replace("System.Windows.Controls.ComboBoxItem: ", "").Trim();
+        return string.IsNullOrEmpty(clean) ? "Segoe UI Variable Text" : clean;
+    }
+
+    public static string FormatBytes(long bytes)
+    {
+        if (bytes <= 0) return "0 B";
+        string[] suffixes = { "B", "KB", "MB", "GB", "TB" };
+        int i = 0;
+        double dblBytes = bytes;
+        while (dblBytes >= 1024.0 && i < suffixes.Length - 1)
+        {
+            dblBytes /= 1024.0;
+            i++;
+        }
+        return $"{dblBytes:0.##} {suffixes[i]}";
     }
 
     public void LoadServers()
@@ -221,7 +294,7 @@ public class SettingsViewModel : BaseViewModel
             CachedItemsCount = _db.GetCachedItemsCount();
             DedupGroupsCount = _db.GetDedupGroupsCount();
             var sizeBytes = _db.GetDatabaseSize();
-            DatabaseSizeText = $"{sizeBytes / (1024.0 * 1024.0):F1} MB";
+            DatabaseSizeText = FormatBytes(sizeBytes);
         }
         catch { }
     }
@@ -736,9 +809,14 @@ public class SettingsViewModel : BaseViewModel
             if (SetProperty(ref _libraryMode, value))
             {
                 _settings.Update(s => s.LibraryMode = value);
+                OnPropertyChanged(nameof(IsSeparateMode));
+                OnPropertyChanged(nameof(IsCombinedMode));
             }
         }
     }
+
+    public bool IsSeparateMode => _libraryMode != "combined";
+    public bool IsCombinedMode => _libraryMode == "combined";
 
     public bool ShowUnmappedLibraries
     {
@@ -900,9 +978,10 @@ public class SettingsViewModel : BaseViewModel
         get => _subtitleFont;
         set
         {
-            if (SetProperty(ref _subtitleFont, value))
+            var clean = CleanFontName(value);
+            if (SetProperty(ref _subtitleFont, clean))
             {
-                _settings.Update(s => s.SubtitleFont = value);
+                _settings.Update(s => s.SubtitleFont = clean);
             }
         }
     }
@@ -939,6 +1018,19 @@ public class SettingsViewModel : BaseViewModel
             if (SetProperty(ref _subtitleBackground, value))
             {
                 _settings.Update(s => s.SubtitleBackground = value);
+            }
+        }
+    }
+
+    private string _subtitleBorder = "none";
+    public string SubtitleBorder
+    {
+        get => _subtitleBorder;
+        set
+        {
+            if (SetProperty(ref _subtitleBorder, value))
+            {
+                _settings.Update(s => s.SubtitleBorder = value);
             }
         }
     }
@@ -1044,13 +1136,71 @@ public class SettingsViewModel : BaseViewModel
         }
     }
 
+    private string? _traktStatusMessage;
+    public string? TraktStatusMessage
+    {
+        get => _traktStatusMessage;
+        set => SetProperty(ref _traktStatusMessage, value);
+    }
+
+    public void OpenTraktAppCreationUrl()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://trakt.tv/oauth/applications/new",
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
+    public void OpenTraktManageAppsUrl()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://trakt.tv/settings/apps",
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
+    public void OpenTraktActivationUrl()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://trakt.tv/activate",
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
     public async Task StartTraktAuthAsync()
     {
-        var dc = await _trakt.GetDeviceCodeAsync();
+        TraktStatusMessage = "Connecting to Trakt.tv...";
+        var (dc, err) = await _trakt.GetDeviceCodeAsync();
         if (dc != null)
         {
             TraktAuthCode = dc.UserCode;
             TraktAuthUrl = dc.VerificationUrl;
+            TraktStatusMessage = $"Code generated: {dc.UserCode}. Opening trakt.tv/activate...";
+
+            // Auto-copy code to clipboard
+            try
+            {
+                Clipboard.SetText(dc.UserCode);
+            }
+            catch { }
+
+            // Auto-open browser to activate
+            OpenTraktActivationUrl();
 
             _ = Task.Run(async () =>
             {
@@ -1058,16 +1208,34 @@ public class SettingsViewModel : BaseViewModel
                 while (DateTime.UtcNow < deadline)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(dc.Interval > 0 ? dc.Interval : 5));
-                    var success = await _trakt.PollTokenAsync(dc.DeviceCode);
+                    var (success, expired, pollErr) = await _trakt.PollTokenAsync(dc.DeviceCode);
                     if (success)
                     {
-                        OnPropertyChanged(nameof(IsTraktConnected));
-                        OnPropertyChanged(nameof(TraktUsername));
-                        TraktAuthCode = null;
+                        await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        {
+                            OnPropertyChanged(nameof(IsTraktConnected));
+                            OnPropertyChanged(nameof(TraktUsername));
+                            TraktAuthCode = null;
+                            TraktStatusMessage = $"Connected successfully as @{_settings.Current.TraktUsername}!";
+                            _ = _sync.RunFullSyncAsync();
+                        });
+                        break;
+                    }
+                    if (expired)
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            TraktAuthCode = null;
+                            TraktStatusMessage = pollErr ?? "Device code expired. Please click Connect Trakt again.";
+                        });
                         break;
                     }
                 }
             });
+        }
+        else
+        {
+            TraktStatusMessage = err ?? "Failed to initiate Trakt authorization. Please check credentials.";
         }
     }
 
@@ -1080,8 +1248,20 @@ public class SettingsViewModel : BaseViewModel
             s.TraktUsername = null;
             s.TraktTokenExpiresAt = null;
         });
+        TraktStatusMessage = "Disconnected from Trakt.tv.";
         OnPropertyChanged(nameof(IsTraktConnected));
         OnPropertyChanged(nameof(TraktUsername));
+    }
+
+    public async Task AutoMapCombinedGroupsAsync()
+    {
+        IsSyncing = true;
+        SyncStatusText = "Scanning all servers and auto-mapping combined libraries...";
+        await _sync.RunFullSyncAsync(forceResync: true);
+        LoadCombinedGroups();
+        RefreshDatabaseStats();
+        IsSyncing = false;
+        SyncStatusText = "Auto-mapped combined libraries successfully.";
     }
 
     // Diagnostics & Sync
@@ -1097,16 +1277,50 @@ public class SettingsViewModel : BaseViewModel
         set => SetProperty(ref _isSyncing, value);
     }
 
+    public double SyncProgressPercent
+    {
+        get => _syncProgressPercent;
+        set => SetProperty(ref _syncProgressPercent, value);
+    }
+
+    public bool IsSyncIndeterminate
+    {
+        get => _isSyncIndeterminate;
+        set => SetProperty(ref _isSyncIndeterminate, value);
+    }
+
+    public string SyncDetailedStatus
+    {
+        get => _syncDetailedStatus;
+        set => SetProperty(ref _syncDetailedStatus, value);
+    }
+
+    public string CacheStatusMessage
+    {
+        get => _cacheStatusMessage;
+        set => SetProperty(ref _cacheStatusMessage, value);
+    }
+
     public async Task TriggerSyncAsync()
     {
-        await _sync.RunFullSyncAsync();
+        CacheStatusMessage = string.Empty;
+        await _sync.RunFullSyncAsync(forceResync: true);
         RefreshDatabaseStats();
     }
 
     public void ClearCache()
     {
-        _db.ClearAllCache();
-        RefreshDatabaseStats();
+        try
+        {
+            _db.ClearAllCache();
+            RefreshDatabaseStats();
+            CacheStatusMessage = $"Cache cleared successfully. Storage reset to {DatabaseSizeText}.";
+            CacheCleared?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            CacheStatusMessage = $"Failed to clear cache: {ex.Message}";
+        }
     }
 
     public void ApplyTheme(string theme)
@@ -1124,6 +1338,95 @@ public class SettingsViewModel : BaseViewModel
                 default:
                     ApplicationThemeManager.ApplySystemTheme();
                     break;
+            }
+            UpdateThemeGradients();
+        }
+        catch { }
+    }
+
+    public static void UpdateThemeGradients()
+    {
+        try
+        {
+            if (Application.Current == null) return;
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                var appTheme = ApplicationThemeManager.GetAppTheme();
+                bool isLight = appTheme == ApplicationTheme.Light;
+
+                Color startColor = isLight ? Color.FromArgb(0xEE, 0xFA, 0xFA, 0xFC) : Color.FromArgb(0xC8, 0x0A, 0x0A, 0x0E);
+                Color endColor = isLight ? Color.FromArgb(0x00, 0xFA, 0xFA, 0xFC) : Color.FromArgb(0x00, 0x0A, 0x0A, 0x0E);
+
+                var leftBrush = new LinearGradientBrush(startColor, endColor, new Point(0, 0.5), new Point(1, 0.5));
+                leftBrush.Freeze();
+
+                var rightBrush = new LinearGradientBrush(endColor, startColor, new Point(0, 0.5), new Point(1, 0.5));
+                rightBrush.Freeze();
+
+                Application.Current.Resources["ScrollEdgeLeftBrush"] = leftBrush;
+                Application.Current.Resources["ScrollEdgeRightBrush"] = rightBrush;
+            });
+        }
+        catch { }
+    }
+
+    // ── About & Logging ──────────────────────────────────────────────────
+    public string AppVersion => "v4.0.0 (Native Windows Edition)";
+    public string RuntimeInfo => $".NET {Environment.Version} ({System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture})";
+    public string LogsDirectoryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Nocturne");
+
+    public void OpenLogsFolder()
+    {
+        try
+        {
+            var dir = LogsDirectoryPath;
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = dir,
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
+    public void OpenMainLog()
+    {
+        try
+        {
+            var path = Path.Combine(LogsDirectoryPath, "nocturne.log");
+            if (File.Exists(path))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true
+                });
+            }
+            else
+            {
+                OpenLogsFolder();
+            }
+        }
+        catch { }
+    }
+
+    public void OpenCrashLog()
+    {
+        try
+        {
+            var path = Path.Combine(LogsDirectoryPath, "crash.log");
+            if (File.Exists(path))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true
+                });
+            }
+            else
+            {
+                OpenLogsFolder();
             }
         }
         catch { }

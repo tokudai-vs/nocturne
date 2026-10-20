@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="clr-namespace:Nocturne.App.Controls">
 
-    <Grid Margin="24,16">
+    <Grid Margin="24,60,24,16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -12,7 +12,7 @@
         <TextBlock Grid.Row="0" Text="Search Results" FontSize="20" FontWeight="SemiBold"
                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,16" />
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
             <ItemsControl ItemsSource="{Binding Results}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>

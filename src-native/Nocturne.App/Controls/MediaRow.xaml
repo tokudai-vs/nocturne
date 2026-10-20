@@ -4,6 +4,21 @@
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              xmlns:controls="clr-namespace:Nocturne.App.Controls"
              Margin="0,12,0,24">
+
+    <UserControl.Resources>
+        <!-- Standard Vertical Poster Card (Movies, TV Shows, Collections) -->
+        <DataTemplate x:Key="VerticalCardTemplate">
+            <controls:MediaCard CardClick="OnMediaCardClick" />
+        </DataTemplate>
+
+        <!-- Official Emby Style Horizontal Card (Continue Watching, 16:9 Artwork, All 3 Elements Clickable) -->
+        <DataTemplate x:Key="HorizontalCardTemplate">
+            <controls:ContinueWatchingCard PlayClick="OnContinueWatchingPlayClick"
+                                           ShowClick="OnContinueWatchingShowClick"
+                                           EpisodeClick="OnContinueWatchingEpisodeClick" />
+        </DataTemplate>
+    </UserControl.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -24,54 +39,64 @@
                 <ItemsControl x:Name="ItemsHost" Margin="14,0"
                               VirtualizingPanel.IsVirtualizing="True"
                               VirtualizingPanel.VirtualizationMode="Recycling"
-                              ScrollViewer.CanContentScroll="True">
+                              ScrollViewer.CanContentScroll="True"
+                              ItemTemplate="{StaticResource VerticalCardTemplate}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <VirtualizingStackPanel Orientation="Horizontal" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <controls:MediaCard CardClick="OnMediaCardClick" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </ScrollViewer>
 
-            <!-- Floating Left Scroll Button -->
+            <!-- Gradient Scrim under Left Button (Theme adaptive fade, only visible on hover) -->
+            <Border x:Name="LeftScrim" HorizontalAlignment="Left" Width="80"
+                    Background="{DynamicResource ScrollEdgeLeftBrush}" IsHitTestVisible="False" Panel.ZIndex="5" Opacity="0" />
+
+            <!-- Floating Circular Left Scroll Button -->
             <Button x:Name="LeftScrollButton" Click="OnScrollLeftClick"
                     HorizontalAlignment="Left" VerticalAlignment="Center"
-                    Width="36" Height="64" Margin="6,0,0,0"
-                    Opacity="0" Cursor="Hand" Panel.ZIndex="10">
+                    Width="42" Height="42" Margin="10,0,0,0"
+                    Opacity="0" Cursor="Hand" Panel.ZIndex="10" ToolTip="Scroll Left">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="b" CornerRadius="18" Background="#CC111111" BorderBrush="#40FFFFFF" BorderThickness="1">
+                        <Border x:Name="b" CornerRadius="21" Background="#E0141416" BorderBrush="#55FFFFFF" BorderThickness="1.5">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="12" Direction="0" ShadowDepth="0" Color="#000000" Opacity="0.8" />
+                            </Border.Effect>
                             <ui:SymbolIcon Symbol="ChevronLeft24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
-                                <Setter TargetName="b" Property="Background" Value="#F0111111" />
+                                <Setter TargetName="b" Property="Background" Value="#F51E1E22" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Button.Template>
             </Button>
 
-            <!-- Floating Right Scroll Button -->
+            <!-- Gradient Scrim under Right Button (Theme adaptive fade, only visible on hover) -->
+            <Border x:Name="RightScrim" HorizontalAlignment="Right" Width="80"
+                    Background="{DynamicResource ScrollEdgeRightBrush}" IsHitTestVisible="False" Panel.ZIndex="5" Opacity="0" />
+
+            <!-- Floating Circular Right Scroll Button -->
             <Button x:Name="RightScrollButton" Click="OnScrollRightClick"
                     HorizontalAlignment="Right" VerticalAlignment="Center"
-                    Width="36" Height="64" Margin="0,0,6,0"
-                    Opacity="0" Cursor="Hand" Panel.ZIndex="10">
+                    Width="42" Height="42" Margin="0,0,10,0"
+                    Opacity="0" Cursor="Hand" Panel.ZIndex="10" ToolTip="Scroll Right">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="b" CornerRadius="18" Background="#CC111111" BorderBrush="#40FFFFFF" BorderThickness="1">
+                        <Border x:Name="b" CornerRadius="21" Background="#E0141416" BorderBrush="#55FFFFFF" BorderThickness="1.5">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="12" Direction="0" ShadowDepth="0" Color="#000000" Opacity="0.8" />
+                            </Border.Effect>
                             <ui:SymbolIcon Symbol="ChevronRight24" FontSize="18" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
-                                <Setter TargetName="b" Property="Background" Value="#F0111111" />
+                                <Setter TargetName="b" Property="Background" Value="#F51E1E22" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
