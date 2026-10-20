@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading.Channels;
 using Nocturne.Core.Models;
@@ -108,61 +109,60 @@ public class SyncEngine
 
         try
         {
-            var discoveredServerViews = new List<(ServerConfig Server, List<EmbyItem> Views)>();
-
-            // Phase 0: Discovery
-            for (int sIndex = 0; sIndex < servers.Count; sIndex++)
+            // =========================================================================
+            // PHASE 0: DISCOVERY & PROBING (Parallel across servers, sequential per server)
+            // =========================================================================
+            var discMsg = $"Discovering libraries across {servers.Count} server(s)...";
+            SetState(SyncState.Discovering, discMsg);
+            ProgressReported?.Invoke(new SyncProgressReport
             {
-                if (ct.IsCancellationRequested) break;
-                var server = servers[sIndex];
+                State = SyncState.Discovering,
+                StatusMessage = discMsg,
+                Percentage = 5.0
+            });
 
-                var discMsg = $"Discovering libraries from {server.Name} ({sIndex + 1}/{servers.Count})...";
-                SetState(SyncState.Discovering, discMsg);
-                ProgressReported?.Invoke(new SyncProgressReport
-                {
-                    State = SyncState.Discovering,
-                    ServerName = server.Name,
-                    StatusMessage = discMsg,
-                    Percentage = servers.Count > 0 ? ((double)sIndex / servers.Count) * 10.0 : 0
-                });
-
+            // Concurrently query views from each distinct server
+            var discResults = await Task.WhenAll(servers.Select(async server =>
+            {
                 var client = new EmbyClient();
                 client.Configure(server.Url, server.AccessToken, server.UserId);
-
-                List<EmbyItem> views;
                 try
                 {
-                    views = await client.GetViewsAsync();
+                    var views = await client.GetViewsAsync();
+                    return (Server: server, Views: views, Success: true);
                 }
                 catch (Exception ex)
                 {
                     NocturneLogger.Warn("SyncEngine", $"Failed to fetch views from server {server.Name}: {ex.Message}");
-                    continue;
+                    return (Server: server, Views: new List<EmbyItem>(), Success: false);
                 }
+            }));
 
-                discoveredServerViews.Add((server, views));
+            var discoveredServerViews = new List<(ServerConfig Server, List<EmbyItem> Views)>();
+            foreach (var res in discResults)
+            {
+                if (res.Success && res.Views.Count > 0)
+                {
+                    discoveredServerViews.Add((res.Server, res.Views));
+                }
             }
 
-            int totalViews = discoveredServerViews.Sum(x => x.Views.Count);
-            int currentViewIndex = 0;
-
-            // Pre-calculate total items expected across all libraries to give an accurate percentage
-            int totalExpectedItems = 0;
-            int totalProcessedItems = 0;
-
-            // Probe counts
-            var probedViews = new List<(ServerConfig Server, EmbyItem View, int ServerTotal, bool NeedsFetch, int StartIndex)>();
-            foreach (var (server, views) in discoveredServerViews)
+            // Probe counts: parallel across servers, but sequential per server to protect server load
+            var probeResults = await Task.WhenAll(discoveredServerViews.Select(async entry =>
             {
+                var server = entry.Server;
+                var views = entry.Views;
                 var client = new EmbyClient();
                 client.Configure(server.Url, server.AccessToken, server.UserId);
 
+                var list = new List<(ServerConfig Server, EmbyItem View, int ServerTotal, bool NeedsFetch, int StartIndex)>();
+
                 foreach (var view in views)
                 {
+                    if (ct.IsCancellationRequested) break;
                     var checkpoint = _db.GetSyncCheckpoint(server.Id, view.Id);
                     var probe = await client.GetItemsAsync(parentId: view.Id, limit: 1);
                     int serverTotal = probe.IsSuccess ? probe.TotalRecordCount : (checkpoint?.TotalItems ?? 0);
-                    totalExpectedItems += serverTotal;
 
                     bool needsFetch = true;
                     int startIndex = 0;
@@ -170,43 +170,47 @@ public class SyncEngine
                     if (!forceResync && checkpoint != null && checkpoint.IsCompleted && probe.IsSuccess && checkpoint.TotalItems == serverTotal && serverTotal > 0)
                     {
                         needsFetch = false;
-                        totalProcessedItems += serverTotal;
                     }
                     else if (!forceResync && checkpoint != null && !checkpoint.IsCompleted && checkpoint.StartIndex > 0)
                     {
                         startIndex = checkpoint.StartIndex;
-                        totalProcessedItems += startIndex;
                     }
 
-                    probedViews.Add((server, view, serverTotal, needsFetch, startIndex));
+                    list.Add((server, view, serverTotal, needsFetch, startIndex));
                 }
-            }
+
+                return list;
+            }));
+
+            var probedViews = probeResults.SelectMany(x => x).ToList();
+            int totalViews = probedViews.Count;
+            int totalExpectedItems = probedViews.Sum(x => x.ServerTotal);
+            int totalProcessedItems = probedViews.Where(x => !x.NeedsFetch).Sum(x => x.ServerTotal) +
+                                      probedViews.Where(x => x.NeedsFetch).Sum(x => x.StartIndex);
 
             // =========================================================================
             // PHASE 1: PIPELINE — PARALLELIZE NETWORK, SERIALIZE WRITES (Bounded Channel)
             // =========================================================================
-            // Channel capacity = 8 batches (8,000 items max in flight). Backpressure bounds memory to <20 MB.
+            // Channel capacity = 8 batches (~10,000 items max in flight). Backpressure bounds memory to <20 MB.
             var channel = Channel.CreateBounded<SyncBatch>(new BoundedChannelOptions(8)
             {
                 FullMode = BoundedChannelFullMode.Wait,
-                SingleWriter = true,
-                SingleReader = true
+                SingleWriter = false, // Multiple parallel server fetchers write to the channel
+                SingleReader = true   // Single SQLite writer task
             });
 
-            int totalItemsFetched = 0;
-            int totalItemsWritten = 0;
+            var viewWatermarks = new ConcurrentDictionary<string, int>();
+            int totalItemsFetched = totalProcessedItems;
+            int totalItemsWritten = totalProcessedItems;
             long totalServerRequestMs = 0;
             long totalSqliteWriteMs = 0;
-            var failedServers = new HashSet<string>();
+            var failedServers = new ConcurrentDictionary<string, byte>();
+
             var syncSw = Stopwatch.StartNew();
 
             _settings.Update(s => s.SyncStatus = "in-progress");
 
             // ── Single Consumer / Writer Task (Serialized SQLite Transactions) ──
-            string activeServerId = "";
-            string activeViewId = "";
-            int contiguousWatermark = 0;
-
             var writerTask = Task.Run(async () =>
             {
                 while (await channel.Reader.WaitToReadAsync(ct))
@@ -215,40 +219,35 @@ public class SyncEngine
                     {
                         var swWrite = Stopwatch.StartNew();
 
-                        if (batch.Server.Id != activeServerId || batch.View.Id != activeViewId)
-                        {
-                            activeServerId = batch.Server.Id;
-                            activeViewId = batch.View.Id;
-                            contiguousWatermark = batch.StartIndex;
-                        }
-
-                        contiguousWatermark += batch.Items.Count;
+                        string watermarkKey = $"{batch.Server.Id}:{batch.View.Id}";
+                        int watermark = batch.StartIndex + batch.Items.Count;
+                        viewWatermarks[watermarkKey] = watermark;
 
                         // Atomic crash safety: items + checkpoint committed in the exact same transaction!
                         _db.UpsertItems(
                             batch.Items,
                             batch.Server.Id,
                             batch.View.Id,
-                            checkpointStartIndex: contiguousWatermark,
+                            checkpointStartIndex: watermark,
                             checkpointTotalItems: batch.TotalInView,
                             checkpointIsCompleted: batch.IsCompleted);
 
                         swWrite.Stop();
-                        totalSqliteWriteMs += swWrite.ElapsedMilliseconds;
-                        totalItemsWritten += batch.Items.Count;
+                        Interlocked.Add(ref totalSqliteWriteMs, swWrite.ElapsedMilliseconds);
+                        Interlocked.Add(ref totalItemsWritten, batch.Items.Count);
 
                         double overallPercent = totalExpectedItems > 0
                             ? Math.Min(90.0, 10.0 + (((double)Math.Min(totalItemsFetched, totalItemsWritten) / totalExpectedItems) * 78.0))
                             : 10.0;
 
-                        var msg = $"Saving {batch.Server.Name} • {batch.View.Name} ({contiguousWatermark:N0} / {batch.TotalInView:N0} items)...";
+                        var msg = $"Saving {batch.Server.Name} • {batch.View.Name} ({watermark:N0} / {batch.TotalInView:N0} items)...";
                         SetState(SyncState.Writing, msg);
                         ProgressReported?.Invoke(new SyncProgressReport
                         {
                             State = SyncState.Writing,
                             ServerName = batch.Server.Name,
                             LibraryName = batch.View.Name,
-                            CurrentItem = contiguousWatermark,
+                            CurrentItem = watermark,
                             TotalItems = batch.TotalInView,
                             ItemsFetched = totalItemsFetched,
                             ItemsWritten = totalItemsWritten,
@@ -259,118 +258,179 @@ public class SyncEngine
                 }
             }, ct);
 
-            // ── Producer / Fetcher (Paginating with FullSyncItemFields) ──
-            foreach (var (server, view, serverTotal, needsFetch, initialStartIndex) in probedViews)
+            // ── Parallel Multi-Server Producer with Adaptive Latency Batch Sizing ──
+            // Group libraries by server: distinct servers fetch concurrently (up to maxConcurrentServers),
+            // while queries within each server execute sequentially (1 active query per server) to avoid server load.
+            var viewsByServer = probedViews
+                .GroupBy(p => p.Server.Id)
+                .Select(g => (Server: g.First().Server, Views: g.ToList()))
+                .ToList();
+
+            const int maxConcurrentServers = 4;
+            using var serverSemaphore = new SemaphoreSlim(maxConcurrentServers);
+            int completedViews = 0;
+
+            var serverTasks = viewsByServer.Select(async group =>
             {
-                if (ct.IsCancellationRequested) break;
-                currentViewIndex++;
-                ProgressChanged?.Invoke(currentViewIndex, Math.Max(1, totalViews));
-
-                if (!needsFetch)
+                await serverSemaphore.WaitAsync(ct);
+                try
                 {
-                    NocturneLogger.Info("SyncEngine", $"{server.Name} • {view.Name} is already up to date ({serverTotal:N0} items). Skipping network download.");
-                    continue;
+                    var server = group.Server;
+                    var client = new EmbyClient();
+                    client.Configure(server.Url, server.AccessToken, server.UserId);
+
+                    var batchController = new AdaptiveBatchController(AdaptiveBatchController.DefaultBatchSize);
+
+                    foreach (var (_, view, serverTotal, needsFetch, initialStartIndex) in group.Views)
+                    {
+                        if (ct.IsCancellationRequested) break;
+
+                        int doneViews = Interlocked.Increment(ref completedViews);
+                        ProgressChanged?.Invoke(doneViews, Math.Max(1, totalViews));
+
+                        if (!needsFetch)
+                        {
+                            NocturneLogger.Info("SyncEngine", $"{server.Name} • {view.Name} is already up to date ({serverTotal:N0} items). Skipping network download.");
+                            continue;
+                        }
+
+                        int startIndex = initialStartIndex;
+                        if (startIndex > 0)
+                        {
+                            NocturneLogger.Info("SyncEngine", $"Resuming sync for {server.Name} • {view.Name} from item {startIndex:N0} / {serverTotal:N0} (batch size {batchController.CurrentBatchSize})...");
+                        }
+
+                        bool hasMore = true;
+                        var libSw = Stopwatch.StartNew();
+                        long libServerRequestMs = 0;
+                        int libItemsFetched = 0;
+
+                        while (hasMore && !ct.IsCancellationRequested)
+                        {
+                            int currentLimit = batchController.CurrentBatchSize;
+                            var swReq = Stopwatch.StartNew();
+                            var itemsResult = await client.GetItemsAsync(
+                                parentId: view.Id,
+                                limit: currentLimit,
+                                startIndex: startIndex,
+                                fields: EmbyClient.FullSyncItemFields);
+                            swReq.Stop();
+
+                            long reqDurationMs = swReq.ElapsedMilliseconds;
+                            libServerRequestMs += reqDurationMs;
+                            Interlocked.Add(ref totalServerRequestMs, reqDurationMs);
+
+                            if (!itemsResult.IsSuccess)
+                            {
+                                // Back off batch size immediately
+                                batchController.RecordLatency(reqDurationMs, wasSuccess: false);
+
+                                // Transient retry with backoff to protect server and recover from brief blips
+                                int retryCount = 0;
+                                const int maxRetries = 2;
+                                while (!itemsResult.IsSuccess && retryCount < maxRetries && !ct.IsCancellationRequested)
+                                {
+                                    retryCount++;
+                                    NocturneLogger.Warn("SyncEngine", $"[{server.Name} • {view.Name}] Batch request failed at startIndex {startIndex}. Retrying ({retryCount}/{maxRetries}) in {retryCount}s with reduced batch size {batchController.CurrentBatchSize}...");
+                                    await Task.Delay(1000 * retryCount, ct);
+
+                                    currentLimit = batchController.CurrentBatchSize;
+                                    swReq.Restart();
+                                    itemsResult = await client.GetItemsAsync(
+                                        parentId: view.Id,
+                                        limit: currentLimit,
+                                        startIndex: startIndex,
+                                        fields: EmbyClient.FullSyncItemFields);
+                                    swReq.Stop();
+                                    Interlocked.Add(ref totalServerRequestMs, swReq.ElapsedMilliseconds);
+                                }
+
+                                if (!itemsResult.IsSuccess)
+                                {
+                                    NocturneLogger.Error("SyncEngine", $"Network error syncing {server.Name} • {view.Name} at item {startIndex} after {maxRetries} retries. Checkpoint preserved at last committed batch.");
+                                    failedServers[server.Id] = 1;
+                                    break;
+                                }
+                            }
+
+                            // Adaptively tune batch size for subsequent requests based on server latency
+                            int prevBatchSize = currentLimit;
+                            int nextBatchSize = batchController.RecordLatency(reqDurationMs, wasSuccess: true);
+                            if (nextBatchSize != prevBatchSize)
+                            {
+                                NocturneLogger.Info("SyncEngine", $"[{server.Name}] Adaptive batch size adjusted: {prevBatchSize} -> {nextBatchSize} (latency {reqDurationMs}ms)");
+                            }
+
+                            if (itemsResult.Items.Count == 0)
+                            {
+                                hasMore = false;
+                                break;
+                            }
+
+                            foreach (var item in itemsResult.Items)
+                            {
+                                item.ServerId = server.Id;
+                                item.ServerName = server.Name;
+                            }
+
+                            startIndex += itemsResult.Items.Count;
+                            Interlocked.Add(ref totalItemsFetched, itemsResult.Items.Count);
+                            libItemsFetched += itemsResult.Items.Count;
+                            int totalInView = itemsResult.TotalRecordCount > 0 ? itemsResult.TotalRecordCount : serverTotal;
+
+                            bool isLibraryComplete = (startIndex >= totalInView || itemsResult.Items.Count < currentLimit);
+
+                            var batch = new SyncBatch
+                            {
+                                Server = server,
+                                View = view,
+                                StartIndex = startIndex - itemsResult.Items.Count,
+                                TotalInView = totalInView,
+                                Items = itemsResult.Items,
+                                IsCompleted = isLibraryComplete,
+                                FetchDurationMs = reqDurationMs
+                            };
+
+                            // Backpressure applied here: if writer is busy, await channel pauses fetcher!
+                            await channel.Writer.WriteAsync(batch, ct);
+
+                            double overallPercent = totalExpectedItems > 0
+                                ? Math.Min(90.0, 10.0 + (((double)Math.Min(totalItemsFetched, totalItemsWritten) / totalExpectedItems) * 78.0))
+                                : 10.0;
+
+                            var msg = $"Fetching {server.Name} • {view.Name} ({startIndex:N0} / {totalInView:N0} items, batch size {currentLimit})...";
+                            SetState(SyncState.Fetching, msg);
+                            ProgressReported?.Invoke(new SyncProgressReport
+                            {
+                                State = SyncState.Fetching,
+                                ServerName = server.Name,
+                                LibraryName = view.Name,
+                                CurrentItem = startIndex,
+                                TotalItems = totalInView,
+                                ItemsFetched = totalItemsFetched,
+                                ItemsWritten = totalItemsWritten,
+                                Percentage = overallPercent,
+                                StatusMessage = msg
+                            });
+
+                            if (isLibraryComplete)
+                            {
+                                hasMore = false;
+                            }
+                        }
+
+                        libSw.Stop();
+                        NocturneLogger.Info("SyncEngine", $"[sync:timing] Library '{server.Name} • {view.Name}' ({libItemsFetched:N0} items): Server Request: {libServerRequestMs:N0}ms, Detail Fetches: 0ms (N+1 eliminated), Image Downloads: 0ms (lazy on-screen), Total Library Elapsed: {libSw.ElapsedMilliseconds:N0}ms");
+                    }
                 }
-
-                var client = new EmbyClient();
-                client.Configure(server.Url, server.AccessToken, server.UserId);
-
-                int startIndex = initialStartIndex;
-                if (startIndex > 0)
+                finally
                 {
-                    NocturneLogger.Info("SyncEngine", $"Resuming sync for {server.Name} • {view.Name} from item {startIndex:N0} / {serverTotal:N0}...");
+                    serverSemaphore.Release();
                 }
+            });
 
-                const int batchSize = 1000;
-                bool hasMore = true;
-                bool libraryFetchSuccess = true;
-
-                var libSw = Stopwatch.StartNew();
-                long libServerRequestMs = 0;
-                int libItemsFetched = 0;
-
-                while (hasMore && !ct.IsCancellationRequested)
-                {
-                    var swReq = Stopwatch.StartNew();
-                    var itemsResult = await client.GetItemsAsync(
-                        parentId: view.Id,
-                        limit: batchSize,
-                        startIndex: startIndex,
-                        fields: EmbyClient.FullSyncItemFields);
-                    swReq.Stop();
-
-                    libServerRequestMs += swReq.ElapsedMilliseconds;
-                    totalServerRequestMs += swReq.ElapsedMilliseconds;
-
-                    if (!itemsResult.IsSuccess)
-                    {
-                        NocturneLogger.Error("SyncEngine", $"Network error syncing {server.Name} • {view.Name} at item {startIndex}. Checkpoint preserved at last committed batch.");
-                        failedServers.Add(server.Id);
-                        libraryFetchSuccess = false;
-                        break;
-                    }
-
-                    if (itemsResult.Items.Count == 0)
-                    {
-                        hasMore = false;
-                        break;
-                    }
-
-                    foreach (var item in itemsResult.Items)
-                    {
-                        item.ServerId = server.Id;
-                        item.ServerName = server.Name;
-                    }
-
-                    startIndex += itemsResult.Items.Count;
-                    totalItemsFetched += itemsResult.Items.Count;
-                    libItemsFetched += itemsResult.Items.Count;
-                    int totalInView = itemsResult.TotalRecordCount > 0 ? itemsResult.TotalRecordCount : serverTotal;
-
-                    bool isLibraryComplete = (startIndex >= totalInView || itemsResult.Items.Count < batchSize);
-
-                    var batch = new SyncBatch
-                    {
-                        Server = server,
-                        View = view,
-                        StartIndex = startIndex - itemsResult.Items.Count,
-                        TotalInView = totalInView,
-                        Items = itemsResult.Items,
-                        IsCompleted = isLibraryComplete,
-                        FetchDurationMs = swReq.ElapsedMilliseconds
-                    };
-
-                    // Backpressure applied here: if writer is busy, await channel pauses fetcher!
-                    await channel.Writer.WriteAsync(batch, ct);
-
-                    double overallPercent = totalExpectedItems > 0
-                        ? Math.Min(90.0, 10.0 + (((double)Math.Min(totalItemsFetched, totalItemsWritten) / totalExpectedItems) * 78.0))
-                        : 10.0 + (((double)currentViewIndex / Math.Max(1, totalViews)) * 78.0);
-
-                    var msg = $"Fetching {server.Name} • {view.Name} ({startIndex:N0} / {totalInView:N0} items)...";
-                    SetState(SyncState.Fetching, msg);
-                    ProgressReported?.Invoke(new SyncProgressReport
-                    {
-                        State = SyncState.Fetching,
-                        ServerName = server.Name,
-                        LibraryName = view.Name,
-                        CurrentItem = startIndex,
-                        TotalItems = totalInView,
-                        ItemsFetched = totalItemsFetched,
-                        ItemsWritten = totalItemsWritten,
-                        Percentage = overallPercent,
-                        StatusMessage = msg
-                    });
-
-                    if (isLibraryComplete)
-                    {
-                        hasMore = false;
-                    }
-                }
-
-                libSw.Stop();
-                NocturneLogger.Info("SyncEngine", $"[sync:timing] Library '{server.Name} • {view.Name}' ({libItemsFetched:N0} items): Server Request: {libServerRequestMs:N0}ms, Detail Fetches: 0ms (N+1 eliminated), Image Downloads: 0ms (lazy on-screen), Total Library Elapsed: {libSw.ElapsedMilliseconds:N0}ms");
-            }
+            // Wait for all parallel server fetcher tasks to complete
+            await Task.WhenAll(serverTasks);
 
             // Signal producer completion to writer task and wait for writer to drain all batches
             channel.Writer.Complete();
@@ -391,7 +451,7 @@ public class SyncEngine
             NocturneLogger.Info("SyncEngine", benchmarkSummary.ToString());
 
             // ── Crash safety & Watermark rule: Check for failed servers ──
-            if (failedServers.Count > 0)
+            if (!failedServers.IsEmpty)
             {
                 _settings.Update(s => s.SyncStatus = "partial");
                 var partialMsg = $"Sync finished with network errors on {failedServers.Count} server(s). Checkpoints preserved for retry.";
