@@ -52,6 +52,46 @@ public class DiscoveredConnectServerUi : BaseViewModel
     }
 }
 
+public class ServerSyncProgressItem : BaseViewModel
+{
+    public string ServerId { get; set; } = string.Empty;
+
+    private string _serverName = string.Empty;
+    public string ServerName
+    {
+        get => _serverName;
+        set => SetProperty(ref _serverName, value);
+    }
+
+    private string _statusText = string.Empty;
+    public string StatusText
+    {
+        get => _statusText;
+        set => SetProperty(ref _statusText, value);
+    }
+
+    private double _progressPercent;
+    public double ProgressPercent
+    {
+        get => _progressPercent;
+        set => SetProperty(ref _progressPercent, value);
+    }
+
+    private bool _isIndeterminate;
+    public bool IsIndeterminate
+    {
+        get => _isIndeterminate;
+        set => SetProperty(ref _isIndeterminate, value);
+    }
+
+    private bool _isComplete;
+    public bool IsComplete
+    {
+        get => _isComplete;
+        set => SetProperty(ref _isComplete, value);
+    }
+}
+
 public class SettingsViewModel : BaseViewModel
 {
     private readonly SettingsService _settings;
@@ -195,6 +235,41 @@ public class SettingsViewModel : BaseViewModel
                 SyncDetailedStatus = report.StatusMessage;
                 SyncProgressPercent = report.Percentage;
                 IsSyncIndeterminate = report.State == SyncState.Discovering;
+
+                if (!string.IsNullOrEmpty(report.ServerId) && report.ServerId != "catalog" && report.ServerId != "trakt")
+                {
+                    var existing = ActiveServerProgresses.FirstOrDefault(p => p.ServerId == report.ServerId);
+                    if (existing == null)
+                    {
+                        existing = new ServerSyncProgressItem
+                        {
+                            ServerId = report.ServerId,
+                            ServerName = !string.IsNullOrEmpty(report.ServerName) ? report.ServerName : "Server",
+                            StatusText = report.StatusMessage,
+                            ProgressPercent = Math.Clamp(report.ServerPercentage, 0, 100),
+                            IsIndeterminate = report.State == SyncState.Discovering,
+                            IsComplete = report.ServerPercentage >= 100.0
+                        };
+                        ActiveServerProgresses.Add(existing);
+                    }
+                    else
+                    {
+                        if (!string.IsNullOrEmpty(report.ServerName)) existing.ServerName = report.ServerName;
+                        existing.StatusText = report.StatusMessage;
+                        existing.ProgressPercent = Math.Clamp(report.ServerPercentage, 0, 100);
+                        existing.IsIndeterminate = report.State == SyncState.Discovering;
+                        if (report.ServerPercentage >= 100.0)
+                        {
+                            existing.IsComplete = true;
+                        }
+                    }
+                }
+                else if (report.State == SyncState.Deduping || report.ServerId == "catalog" || report.ServerId == "trakt")
+                {
+                    HasGlobalProgress = true;
+                    GlobalSyncStatusText = report.StatusMessage;
+                    GlobalSyncProgressPercent = report.Percentage;
+                }
             });
         };
 
@@ -204,9 +279,37 @@ public class SettingsViewModel : BaseViewModel
             {
                 SyncStatusText = msg;
                 IsSyncing = state != SyncState.Idle && state != SyncState.Done && state != SyncState.Error;
-                if (state == SyncState.Done)
+                if (state == SyncState.Discovering)
+                {
+                    ActiveServerProgresses.Clear();
+                    var srvs = _settings.Current.Servers.ToList();
+                    if (srvs.Count == 0 && _embyClient.IsAuthenticated)
+                    {
+                        srvs.Add(new ServerConfig
+                        {
+                            Id = _settings.Current.ActiveServerId ?? "primary",
+                            Name = "Emby Server",
+                            Url = _embyClient.BaseUrl
+                        });
+                    }
+
+                    foreach (var srv in srvs)
+                    {
+                        ActiveServerProgresses.Add(new ServerSyncProgressItem
+                        {
+                            ServerId = srv.Id,
+                            ServerName = srv.Name,
+                            StatusText = "Connecting & discovering libraries...",
+                            ProgressPercent = 0,
+                            IsIndeterminate = true
+                        });
+                    }
+                    HasGlobalProgress = false;
+                }
+                else if (state == SyncState.Done || state == SyncState.Error || state == SyncState.Idle)
                 {
                     RefreshDatabaseStats();
+                    HasGlobalProgress = false;
                 }
             });
         };
@@ -1262,6 +1365,29 @@ public class SettingsViewModel : BaseViewModel
         RefreshDatabaseStats();
         IsSyncing = false;
         SyncStatusText = "Auto-mapped combined libraries successfully.";
+    }
+
+    public ObservableCollection<ServerSyncProgressItem> ActiveServerProgresses { get; } = new();
+
+    private string _globalSyncStatusText = string.Empty;
+    public string GlobalSyncStatusText
+    {
+        get => _globalSyncStatusText;
+        set => SetProperty(ref _globalSyncStatusText, value);
+    }
+
+    private double _globalSyncProgressPercent;
+    public double GlobalSyncProgressPercent
+    {
+        get => _globalSyncProgressPercent;
+        set => SetProperty(ref _globalSyncProgressPercent, value);
+    }
+
+    private bool _hasGlobalProgress;
+    public bool HasGlobalProgress
+    {
+        get => _hasGlobalProgress;
+        set => SetProperty(ref _hasGlobalProgress, value);
     }
 
     // Diagnostics & Sync
