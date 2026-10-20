@@ -15,6 +15,30 @@
         Padding="0"
         Margin="0">
 
+    <ui:FluentWindow.Resources>
+        <!-- ViewModel to View Mappings -->
+        <DataTemplate DataType="{x:Type vm:HomeViewModel}">
+            <views:HomePage />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:LibraryViewModel}">
+            <views:LibraryPage />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:DetailViewModel}">
+            <views:DetailPage />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SearchViewModel}">
+            <views:SearchPage />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+            <views:SettingsPage />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:AnalyticsViewModel}">
+            <views:AnalyticsPage />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:OnboardingViewModel}">
+            <views:OnboardingPage />
+        </DataTemplate>
+    </ui:FluentWindow.Resources>
 
     <Grid>
         <Grid.Resources>
@@ -73,23 +97,8 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Persistent View Tree (Edge-to-Edge, Spans full window height for seamless 0ms instant tab switching) -->
-        <Grid Grid.Row="0" Grid.RowSpan="2">
-            <views:HomePage DataContext="{Binding HomeVM}"
-                            Visibility="{Binding IsHomeActive, Converter={StaticResource BoolToVisibility}}" />
-            <views:LibraryPage DataContext="{Binding LibraryVM}"
-                               Visibility="{Binding IsLibraryActive, Converter={StaticResource BoolToVisibility}}" />
-            <views:DetailPage DataContext="{Binding DetailVM}"
-                              Visibility="{Binding IsDetailActive, Converter={StaticResource BoolToVisibility}}" />
-            <views:SearchPage DataContext="{Binding SearchVM}"
-                              Visibility="{Binding IsSearchActive, Converter={StaticResource BoolToVisibility}}" />
-            <views:SettingsPage DataContext="{Binding SettingsVM}"
-                                Visibility="{Binding IsSettingsActive, Converter={StaticResource BoolToVisibility}}" />
-            <views:AnalyticsPage DataContext="{Binding AnalyticsVM}"
-                                 Visibility="{Binding IsAnalyticsActive, Converter={StaticResource BoolToVisibility}}" />
-            <views:OnboardingPage DataContext="{Binding OnboardingVM}"
-                                  Visibility="{Binding IsOnboardingActive, Converter={StaticResource BoolToVisibility}}" />
-        </Grid>
+        <!-- Active View Content Area (Edge-to-Edge behind liquid glass header) -->
+        <ContentControl Grid.Row="0" Grid.RowSpan="2" Content="{Binding CurrentViewModel}" Focusable="False" />
 
         <!-- Windows 11 Fluent Header & Top Navigation Bar (Liquid Glass Adaptive Overlay, ZIndex=100) -->
         <Grid Grid.Row="0" Panel.ZIndex="100" MouseDown="OnTitleBarMouseDown">
