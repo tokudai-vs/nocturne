@@ -10,6 +10,11 @@
     <SolidColorBrush x:Key="NocturneAmberHoverBrush" Color="{StaticResource NocturneAmberHoverColor}" />
     <SolidColorBrush x:Key="NocturneAmberMutedBrush" Color="{StaticResource NocturneAmberMutedColor}" />
     <SolidColorBrush x:Key="NocturneAmberTintBrush" Color="#33E5A00D" />
+    <Color x:Key="NocturneSplashGlowColor">#2EE5A00D</Color>
+    <RadialGradientBrush x:Key="SplashRadialGlowBrush" Center="0.5,0.45" GradientOrigin="0.5,0.45" RadiusX="0.6" RadiusY="0.5">
+        <GradientStop Color="{StaticResource NocturneSplashGlowColor}" Offset="0.0" />
+        <GradientStop Color="#00000000" Offset="1.0" />
+    </RadialGradientBrush>
 
     <!-- Glass & Border Brushes -->
     <SolidColorBrush x:Key="GlassBorderDarkBrush" Color="#1FFFFFFF" />

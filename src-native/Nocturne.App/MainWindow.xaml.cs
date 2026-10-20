@@ -392,6 +392,7 @@ public partial class MainWindow : FluentWindow
         {
             try
             {
+                UpdateSplashAccent();
                 await _viewModel.InitializeAsync();
             }
             catch (Exception ex)
@@ -399,6 +400,36 @@ public partial class MainWindow : FluentWindow
                 NocturneLogger.Error("MainWindow", "Init error", ex);
             }
         };
+
+        try
+        {
+            var themeColorService = (Application.Current as App)?.Services.GetService<ThemeColorService>();
+            if (themeColorService != null)
+            {
+                themeColorService.ThemeColorChanged += hex =>
+                {
+                    Dispatcher.InvokeAsync(UpdateSplashAccent);
+                };
+            }
+            UpdateSplashAccent();
+        }
+        catch { }
+    }
+
+    private void UpdateSplashAccent()
+    {
+        try
+        {
+            if (Application.Current?.Resources["SplashRadialGlowBrush"] is Brush glowBrush && SplashGlowBorder != null)
+            {
+                SplashGlowBorder.Background = glowBrush;
+            }
+            if (Application.Current?.Resources["NocturneAmberColor"] is Color amberColor && SplashLogoShadow != null)
+            {
+                SplashLogoShadow.Color = amberColor;
+            }
+        }
+        catch { }
     }
 
     private void OnHomeTabClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToHome();

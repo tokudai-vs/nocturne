@@ -336,23 +336,16 @@
         <!-- Full-Window Splash Screen Overlay (Theme Adaptive) -->
         <Grid Grid.RowSpan="2" Panel.ZIndex="999" Background="{DynamicResource ApplicationBackgroundBrush}"
               Visibility="{Binding IsSplashVisible, Converter={StaticResource BoolToVisibility}}">
-            <!-- Ambient Nocturne Amber Radial Glow -->
-            <Border>
-                <Border.Background>
-                    <RadialGradientBrush Center="0.5,0.45" RadiusX="0.6" RadiusY="0.5">
-                        <GradientStop Color="#2EE5A00D" Offset="0.0" />
-                        <GradientStop Color="#00000000" Offset="1.0" />
-                    </RadialGradientBrush>
-                </Border.Background>
-            </Border>
+            <!-- Ambient Theme Accent Radial Glow -->
+            <Border x:Name="SplashGlowBorder" Background="{DynamicResource SplashRadialGlowBrush}" />
 
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                <!-- Glowing Amber Logo -->
-                <TextBlock Text="N O C T U R N E" FontSize="38" FontWeight="Light"
+                <!-- Glowing Theme Accent Logo -->
+                <TextBlock x:Name="SplashLogoText" Text="N O C T U R N E" FontSize="38" FontWeight="Light"
                            Foreground="{DynamicResource NocturneAmberBrush}"
                            HorizontalAlignment="Center" Margin="0,0,0,28">
                     <TextBlock.Effect>
-                        <DropShadowEffect Color="#E5A00D" BlurRadius="28" ShadowDepth="0" Opacity="0.55" />
+                        <DropShadowEffect x:Name="SplashLogoShadow" Color="{DynamicResource NocturneAmberColor}" BlurRadius="28" ShadowDepth="0" Opacity="0.55" />
                     </TextBlock.Effect>
                 </TextBlock>
 

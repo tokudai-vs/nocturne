@@ -123,10 +123,24 @@ public class ThemeColorService
                     var tintBrush = new SolidColorBrush(tintColor);
                     tintBrush.Freeze();
 
+                    var glowColor = Color.FromArgb(0x2E, color.R, color.G, color.B);
+                    var glowBrush = new RadialGradientBrush
+                    {
+                        Center = new Point(0.5, 0.45),
+                        GradientOrigin = new Point(0.5, 0.45),
+                        RadiusX = 0.6,
+                        RadiusY = 0.5
+                    };
+                    glowBrush.GradientStops.Add(new GradientStop(glowColor, 0.0));
+                    glowBrush.GradientStops.Add(new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1.0));
+                    glowBrush.Freeze();
+
                     Application.Current.Resources["NocturneAmberBrush"] = brush;
                     Application.Current.Resources["NocturneAmberHoverBrush"] = hoverBrush;
                     Application.Current.Resources["NocturneAmberMutedBrush"] = mutedBrush;
                     Application.Current.Resources["NocturneAmberTintBrush"] = tintBrush;
+                    Application.Current.Resources["NocturneSplashGlowColor"] = glowColor;
+                    Application.Current.Resources["SplashRadialGlowBrush"] = glowBrush;
 
                     // Standard System and Wpf.Ui Accent Brushes
                     Application.Current.Resources["SystemAccentColor"] = color;

@@ -70,15 +70,15 @@ public partial class App : Application
             ConfigureServices(services);
             _serviceProvider = services.BuildServiceProvider();
 
-            var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
-            mainWindow.Show();
-
-            // Apply theme after mainWindow is instantiated and shown
+            // Apply theme and accent color before mainWindow is instantiated and shown
             var settings = _serviceProvider.GetRequiredService<SettingsService>();
             ApplyAppTheme(settings.Current.Theme);
 
             var themeColors = _serviceProvider.GetRequiredService<ThemeColorService>();
             themeColors.ApplyColor(settings.Current.AccentColor);
+
+            var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
+            mainWindow.Show();
 
             // Live real-time system theme watcher across Windows theme toggle
             Microsoft.Win32.SystemEvents.UserPreferenceChanged += (s, ev) =>
