@@ -34,6 +34,10 @@ public class DedupEngine
     private static readonly Regex PunctuationRegex = new(@"[^\w\d\s]", RegexOptions.Compiled);
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
+    // One dedup writer at a time: a sync and a rebuild both rewrite group ids, and a sync running across a
+    // rebuild's swap would write old ids into the new tables. Held for a whole sync or rebuild.
+    public SemaphoreSlim WriterGate { get; } = new(1, 1);
+
     public static string NormalizeTitle(string? title)
     {
         if (string.IsNullOrWhiteSpace(title)) return string.Empty;
@@ -214,6 +218,24 @@ public class DedupEngine
 
     public int RebuildIndex(DatabaseService db, IList<string>? serverPriority = null)
     {
+        if (!WriterGate.Wait(0))
+        {
+            NocturneLogger.Info("DedupEngine", "Rebuild waiting for the running sync to finish.");
+            WriterGate.Wait();
+        }
+        try
+        {
+            return RebuildIndexCore(db, serverPriority);
+        }
+        finally
+        {
+            WriterGate.Release();
+        }
+    }
+
+    private int RebuildIndexCore(DatabaseService db, IList<string>? serverPriority)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         var dedupIndex = new ConcurrentDedupIndex();
         dedupIndex.SetServerPriority(serverPriority);
 
@@ -278,14 +300,16 @@ public class DedupEngine
                 afterRowId = lastRowId;
             }
 
-            db.SaveRebuildDedupState(dedupIndex);
+            var save = System.Diagnostics.Stopwatch.StartNew();
+            db.SaveRebuildDedupState(dedupIndex); // one transaction under _dbLock
+            NocturneLogger.Info("DedupEngine", $"Rebuild state written in {save.ElapsedMilliseconds} ms.");
         }, unmapped =>
         {
             dedupIndex.ProcessBatch(unmapped, db);
         });
 
         db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
-        NocturneLogger.Info("DedupEngine", $"Rebuild complete: {dedupIndex.TotalGroupsCount} groups, {dedupIndex.MultiVersionGroupsCount} multi-version, {dedupIndex.ConflictsRefused} merges refused on conflicting ids.");
+        NocturneLogger.Info("DedupEngine", $"Rebuild complete in {clock.ElapsedMilliseconds} ms: {dedupIndex.TotalGroupsCount} groups, {dedupIndex.MultiVersionGroupsCount} multi-version, {dedupIndex.ConflictsRefused} merges refused on conflicting ids.");
         return dedupIndex.MultiVersionGroupsCount;
     }
 }

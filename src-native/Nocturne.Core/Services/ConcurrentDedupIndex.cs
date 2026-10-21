@@ -66,8 +66,8 @@ public class ConcurrentDedupIndex
     public const string EngineVersion = "2";
 
     private readonly object _lock = new();
-    private readonly Dictionary<string, (int GroupId, bool IsAuthoritative)> _keyToGroup = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<int, DedupGroupRecord> _groups = new();
+    private Dictionary<string, (int GroupId, bool IsAuthoritative)> _keyToGroup = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<int, DedupGroupRecord> _groups = new();
     private int _nextGroupId = 1;
     private IList<string>? _serverPriority;
     private int _connectedServerCount = 2;
@@ -118,57 +118,43 @@ public class ConcurrentDedupIndex
     /// Loads existing deduplication groups and keys from SQLite into the in-memory hash index.
     /// Fast column-only query that avoids loading or deserializing JSON blobs.
     /// </summary>
+    // Loads into locals and swaps on success. A load failure throws and leaves the index as it was: swallowing
+    // it left an empty index minting ids from 1, and SaveDedupBatch's ON CONFLICT(group_id) upsert then wrote
+    // new groups over unrelated existing ones.
     public void InitializeFromDb(DatabaseService db)
     {
         var loadClock = System.Diagnostics.Stopwatch.StartNew();
-        _seriesProviderIds.Clear();
-        bool loadedEmpty = false;
-        lock (_lock)
+        var (groupRows, keyRows, itemRows) = db.GetDedupStateForIndex();
+
+        var groups = new Dictionary<int, DedupGroupRecord>(groupRows.Count);
+        var keyToGroup = new Dictionary<string, (int GroupId, bool IsAuthoritative)>(keyRows.Count, StringComparer.OrdinalIgnoreCase);
+        int nextGroupId = 1;
+        foreach (var g in groupRows)
         {
-            _keyToGroup.Clear();
-            _groups.Clear();
-            _nextGroupId = 1;
-
-            try
-            {
-                var (groups, keys, items) = db.GetDedupStateForIndex();
-                foreach (var g in groups)
-                {
-                    _groups[g.GroupId] = g;
-                    if (g.GroupId >= _nextGroupId)
-                    {
-                        _nextGroupId = g.GroupId + 1;
-                    }
-                }
-
-                foreach (var (key, gid, isAuth) in keys)
-                {
-                    _keyToGroup[key] = (gid, isAuth);
-                    if (_groups.TryGetValue(gid, out var g))
-                    {
-                        g.Keys.Add(key);
-                    }
-                }
-
-                foreach (var (srv, id, gid) in items)
-                {
-                    if (_groups.TryGetValue(gid, out var g))
-                    {
-                        g.ItemIds.Add((srv, id));
-                    }
-                }
-
-                NocturneLogger.Info("ConcurrentDedupIndex", $"Initialized hash index with {_groups.Count} existing groups and {_keyToGroup.Count} keys in {loadClock.ElapsedMilliseconds} ms.");
-                loadedEmpty = _groups.Count == 0;
-            }
-            catch (Exception ex)
-            {
-                NocturneLogger.Warn("ConcurrentDedupIndex", $"Could not initialize existing dedup groups: {ex.Message}");
-            }
+            groups[g.GroupId] = g;
+            if (g.GroupId >= nextGroupId) nextGroupId = g.GroupId + 1;
+        }
+        foreach (var (key, gid, isAuth) in keyRows)
+        {
+            keyToGroup[key] = (gid, isAuth);
+            if (groups.TryGetValue(gid, out var g)) g.Keys.Add(key);
+        }
+        foreach (var (srv, id, gid) in itemRows)
+        {
+            if (groups.TryGetValue(gid, out var g)) g.ItemIds.Add((srv, id));
         }
 
+        lock (_lock)
+        {
+            _groups = groups;
+            _keyToGroup = keyToGroup;
+            _nextGroupId = nextGroupId;
+        }
+        _seriesProviderIds.Clear();
+        NocturneLogger.Info("ConcurrentDedupIndex", $"Initialized hash index with {groups.Count} existing groups and {keyToGroup.Count} keys in {loadClock.ElapsedMilliseconds} ms.");
+
         // An empty index is populated entirely by this engine. Outside _lock: the rebuild path takes _dbLock first.
-        if (loadedEmpty) db.SetMigrationState(EngineMarkerKey, EngineVersion);
+        if (groups.Count == 0) db.SetMigrationState(EngineMarkerKey, EngineVersion);
     }
 
     /// <summary>
@@ -677,16 +663,6 @@ public class ConcurrentDedupIndex
             {
                 db.SaveDedupBatch(dirty, new List<int>(), new List<(int, int)>(), new List<(string, int, bool)>());
             }
-        }
-    }
-
-    public void Reset()
-    {
-        lock (_lock)
-        {
-            _keyToGroup.Clear();
-            _groups.Clear();
-            _nextGroupId = 1;
         }
     }
 

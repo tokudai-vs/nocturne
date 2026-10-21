@@ -359,7 +359,11 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
                 var bytes = Convert.FromHexString(encKey);
                 apiKey = CredentialProtection.UnprotectString(bytes);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // Treated as no custom key (bundled mode applies); re-entering the key in Settings stores it again.
+                NocturneLogger.Error("TmdbEnrichmentService", "Stored TMDB API key could not be decrypted; ignoring it", ex);
+            }
         }
 
         return new TmdbAuthState

@@ -78,6 +78,22 @@ public partial class App : Application
 
             // Apply theme and accent color before mainWindow is instantiated and shown
             var settings = _serviceProvider.GetRequiredService<SettingsService>();
+            if (settings.LoadFailed)
+            {
+                var choice = MessageBox.Show(
+                    $"Nocturne could not read its settings file:\n\n{settings.SettingsPath}\n\n{settings.LoadError}\n\n" +
+                    "Yes: start with default settings. The unreadable file is kept next to it under a new name.\n" +
+                    "No: exit without changing anything.",
+                    "Nocturne Settings Error",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Error);
+                if (choice != MessageBoxResult.Yes)
+                {
+                    Shutdown(2);
+                    return;
+                }
+                settings.AcceptDefaults();
+            }
             Timed("settings load");
             _serviceProvider.GetRequiredService<DatabaseService>();
             Timed("DatabaseService.Initialize (schema, migrations, self-check)");

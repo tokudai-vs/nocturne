@@ -8,16 +8,60 @@ namespace Nocturne.Core.Services;
 
 public class DatabaseService : IDisposable
 {
+    public const string DatabaseFileName = "nocturne-v4.db";
+    private const string SharedLegacyFileName = "nocturne.db";
+
     private readonly object _dbLock = new();
     private readonly string _connectionString;
+    private readonly string _dbPath;
     private SqliteConnection? _connection;
 
-    public DatabaseService() : this(Path.Combine(AppPaths.DataDirectory, "nocturne.db"))
+    public DatabaseService() : this(ResolveDefaultPath(AppPaths.DataDirectory))
     {
+    }
+
+    // v3.5 (Electron) and v4 shared %APPDATA%\Nocturne\nocturne.db, and v4 dropped v3.5's tables on open. v4 now
+    // has its own file. A shared file holding v4's schema (dedup_keys) is v4's: its WAL is checkpointed so the
+    // main file is complete, then it is renamed. A v3.5 file is left alone. If the move can't be done safely
+    // (another connection holds it, the checkpoint is blocked, the rename fails) v4 uses the shared file in place.
+    public static string ResolveDefaultPath(string dir)
+    {
+        var path = Path.Combine(dir, DatabaseFileName);
+        var legacy = Path.Combine(dir, SharedLegacyFileName);
+        if (File.Exists(path) || !File.Exists(legacy)) return path;
+        try
+        {
+            var cs = new SqliteConnectionStringBuilder { DataSource = legacy, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString();
+            using (var conn = new SqliteConnection(cs))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'dedup_keys';";
+                if (Convert.ToInt64(cmd.ExecuteScalar()) == 0) return path;
+                cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                using var r = cmd.ExecuteReader();
+                if (!r.Read() || r.GetInt64(0) != 0) throw new IOException("the WAL checkpoint was blocked by another connection");
+            }
+            if (File.Exists(legacy + "-wal") && new FileInfo(legacy + "-wal").Length > 0)
+                throw new IOException("the WAL is still in use");
+            File.Move(legacy, path);
+            foreach (var suffix in new[] { "-wal", "-shm" })
+            {
+                try { File.Delete(legacy + suffix); } catch { /* empty side file; SQLite recreates it */ }
+            }
+            NocturneLogger.Info("DatabaseService", $"Moved the v4 database from {legacy} to {path}.");
+            return path;
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("DatabaseService", $"Could not move the v4 database out of the shared {legacy} ({ex.Message}); using it in place this run.");
+            return legacy;
+        }
     }
 
     public DatabaseService(string dbPath)
     {
+        _dbPath = dbPath;
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir))
         {
@@ -46,11 +90,6 @@ public class DatabaseService : IDisposable
                 PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = NORMAL;
                 PRAGMA busy_timeout = 5000;
-
-                DROP TABLE IF EXISTS items;
-                DROP TABLE IF EXISTS dedup_episode_groups;
-                DROP TABLE IF EXISTS sync_state;
-                DROP TABLE IF EXISTS image_cache;
 
                 CREATE TABLE IF NOT EXISTS cached_items (
                     id TEXT NOT NULL,
@@ -1574,26 +1613,14 @@ public class DatabaseService : IDisposable
     {
         try
         {
-            var dir = AppPaths.DataDirectory;
             long total = 0;
-            var dbPath = Path.Combine(dir, "nocturne.db");
-            var walPath = Path.Combine(dir, "nocturne.db-wal");
-            var shmPath = Path.Combine(dir, "nocturne.db-shm");
-            var imgDir = Path.Combine(dir, "image-cache");
+            var dbPath = _dbPath;
+            var walPath = _dbPath + "-wal";
+            var shmPath = _dbPath + "-shm";
 
             if (File.Exists(dbPath)) total += new FileInfo(dbPath).Length;
             if (File.Exists(walPath)) total += new FileInfo(walPath).Length;
             if (File.Exists(shmPath)) total += new FileInfo(shmPath).Length;
-
-            if (Directory.Exists(imgDir))
-            {
-                try
-                {
-                    var di = new DirectoryInfo(imgDir);
-                    total += di.EnumerateFiles("*", SearchOption.AllDirectories).Sum(fi => fi.Length);
-                }
-                catch { }
-            }
             return total;
         }
         catch { }
@@ -1776,21 +1803,16 @@ public class DatabaseService : IDisposable
                 _connection = null;
                 SqliteConnection.ClearAllPools();
 
-                var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                var dir = Path.Combine(appData, "Nocturne");
-                var dbPath = Path.Combine(dir, "nocturne.db");
-                var walPath = Path.Combine(dir, "nocturne.db-wal");
-                var shmPath = Path.Combine(dir, "nocturne.db-shm");
-                var imgDir = Path.Combine(dir, "image-cache");
+                // The constructor's path: a hard-coded %APPDATA% path deleted the real database from any other
+                // instance (an isolated NOCTURNE_DATA_DIR profile) and left that instance's own data in place.
+                var dbPath = _dbPath;
+                var walPath = _dbPath + "-wal";
+                var shmPath = _dbPath + "-shm";
 
                 if (File.Exists(dbPath)) File.Delete(dbPath);
                 if (File.Exists(walPath)) File.Delete(walPath);
                 if (File.Exists(shmPath)) File.Delete(shmPath);
-
-                if (Directory.Exists(imgDir))
-                {
-                    try { Directory.Delete(imgDir, recursive: true); } catch { }
-                }
+                // image-cache\ in this directory is v3.5's (src/main/image-cache.ts); v4 never writes it.
 
                 fileDeleteSucceeded = true;
             }
@@ -1819,10 +1841,6 @@ public class DatabaseService : IDisposable
                         DELETE FROM sibling_write_queue;
                         DELETE FROM trakt_watchlist;
                         DELETE FROM sync_checkpoints;
-                        DROP TABLE IF EXISTS items;
-                        DROP TABLE IF EXISTS dedup_episode_groups;
-                        DROP TABLE IF EXISTS sync_state;
-                        DROP TABLE IF EXISTS image_cache;
                         VACUUM;
                         PRAGMA wal_checkpoint(TRUNCATE);
                     ";
@@ -1832,16 +1850,6 @@ public class DatabaseService : IDisposable
                 {
                     NocturneLogger.Error("DatabaseService", "SQL fallback wipe error", sqlEx);
                 }
-
-                try
-                {
-                    var imgDir = Path.Combine(AppPaths.DataDirectory, "image-cache");
-                    if (Directory.Exists(imgDir))
-                    {
-                        Directory.Delete(imgDir, recursive: true);
-                    }
-                }
-                catch { }
             }
 
             NocturneLogger.Info("DatabaseService", $"ClearAllCache completed. Preserved {preservedEvents.Count} watch events, {preservedHistory.Count} trakt history.");
@@ -3082,16 +3090,22 @@ public class DatabaseService : IDisposable
         return items;
     }
 
+    // The build step reads chunks and fills the *_rebuild tables through the normal methods, each taking _dbLock
+    // briefly, so UI reads interleave with it; holding the lock for the whole build froze the UI for minutes on
+    // a large library. Only the swap holds it. Callers exclude sync via DedupEngine.WriterGate.
     public void SwapInRebuild(
         Action createMappingAndRebuildTables,
         Action<List<EmbyItem>>? postCommitReingest = null)
     {
+        // 1. Build new tables alongside existing tables
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        createMappingAndRebuildTables();
+        NocturneLogger.Info("DatabaseService", $"Rebuild tables built in {clock.ElapsedMilliseconds} ms; swapping.");
+        clock.Restart();
+
         lock (_dbLock)
         {
             if (_connection == null) return;
-
-            // 1. Build new tables alongside existing tables
-            createMappingAndRebuildTables();
 
             // 2. Perform atomic swap under PRAGMA legacy_alter_table = ON
             using (var pragmaCmd = _connection.CreateCommand())
@@ -3136,24 +3150,22 @@ public class DatabaseService : IDisposable
                         VALUES (new.group_id, new.name, new.sort_name);
                     END;
 
-                    -- 3a. Reassign mapped items
+                    -- 3a. Reassign mapped items, setting the legacy text column in the same pass: GetGroupVersions
+                    -- and the list queries still match on it, and group ids restart at 1, so a stale value names an
+                    -- unrelated group. Each update rewrites the whole row (json_data included), so rows whose ids
+                    -- are unchanged are skipped (most of them on a repeat rebuild).
                     UPDATE cached_items
-                       SET group_id = (SELECT r.group_id FROM item_group_rebuild r
-                                        WHERE r.id = cached_items.id AND r.server_id = cached_items.server_id)
-                     WHERE EXISTS (SELECT 1 FROM item_group_rebuild r
-                                    WHERE r.id = cached_items.id AND r.server_id = cached_items.server_id);
+                       SET group_id = r.group_id, dedup_group_id = CAST(r.group_id AS TEXT)
+                      FROM item_group_rebuild r
+                     WHERE r.id = cached_items.id AND r.server_id = cached_items.server_id
+                       AND (cached_items.group_id IS NOT r.group_id OR cached_items.dedup_group_id IS NOT CAST(r.group_id AS TEXT));
 
                     -- 3b. Clear unmapped items to NULL so they never hold stale IDs
                     UPDATE cached_items
                        SET group_id = NULL, dedup_group_id = NULL
-                     WHERE NOT EXISTS (SELECT 1 FROM item_group_rebuild r
+                     WHERE (group_id IS NOT NULL OR dedup_group_id IS NOT NULL)
+                       AND NOT EXISTS (SELECT 1 FROM item_group_rebuild r
                                         WHERE r.id = cached_items.id AND r.server_id = cached_items.server_id);
-
-                    -- 3c. Keep the legacy text column in step: GetGroupVersions and the list queries still match on
-                    -- it, and the rebuild restarts group ids at 1, so a stale value names an unrelated group.
-                    UPDATE cached_items
-                       SET dedup_group_id = CAST(group_id AS TEXT)
-                     WHERE group_id IS NOT NULL;
 
                     DROP TABLE IF EXISTS item_group_rebuild;
 
@@ -3169,15 +3181,16 @@ public class DatabaseService : IDisposable
                 pragmaOff.CommandText = "PRAGMA legacy_alter_table = OFF;";
                 pragmaOff.ExecuteNonQuery();
             }
+        }
+        NocturneLogger.Info("DatabaseService", $"Rebuild swap held the database lock for {clock.ElapsedMilliseconds} ms.");
 
-            // Post-commit reingest of any items where group_id IS NULL
-            if (postCommitReingest != null)
+        // Post-commit reingest of any items where group_id IS NULL
+        if (postCommitReingest != null)
+        {
+            var unmapped = GetItemsWithNullGroupId();
+            if (unmapped.Count > 0)
             {
-                var unmapped = GetItemsWithNullGroupId();
-                if (unmapped.Count > 0)
-                {
-                    postCommitReingest(unmapped);
-                }
+                postCommitReingest(unmapped);
             }
         }
     }

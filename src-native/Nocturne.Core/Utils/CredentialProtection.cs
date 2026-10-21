@@ -4,51 +4,23 @@ using System.Text;
 
 namespace Nocturne.Core.Utils;
 
+// DPAPI (current user) or nothing. The earlier fallback XORed with a fixed key whenever DPAPI threw or was
+// unavailable, which looks protected and isn't, and Unprotect returned garbage instead of failing.
+// Callers treat a throw as "no usable credential".
 public static class CredentialProtection
 {
-    private static readonly byte[] LinuxSalt = Encoding.UTF8.GetBytes("Nocturne_Linux_Fallback_Salt_v4.2");
-
     public static byte[] Protect(byte[] data)
     {
         if (data == null || data.Length == 0) return Array.Empty<byte>();
-
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                return ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
-            }
-        }
-        catch { }
-
-        // Cross-platform fallback for Linux / testing
-        var result = new byte[data.Length];
-        for (int i = 0; i < data.Length; i++)
-        {
-            result[i] = (byte)(data[i] ^ LinuxSalt[i % LinuxSalt.Length] ^ 0xA5);
-        }
-        return result;
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Credential storage requires Windows DPAPI.");
+        return ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
     }
 
     public static byte[] Unprotect(byte[] data)
     {
         if (data == null || data.Length == 0) return Array.Empty<byte>();
-
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                return ProtectedData.Unprotect(data, null, DataProtectionScope.CurrentUser);
-            }
-        }
-        catch { }
-
-        var result = new byte[data.Length];
-        for (int i = 0; i < data.Length; i++)
-        {
-            result[i] = (byte)(data[i] ^ LinuxSalt[i % LinuxSalt.Length] ^ 0xA5);
-        }
-        return result;
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Credential storage requires Windows DPAPI.");
+        return ProtectedData.Unprotect(data, null, DataProtectionScope.CurrentUser);
     }
 
     public static byte[] ProtectString(string plaintext)

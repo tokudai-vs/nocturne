@@ -97,7 +97,26 @@ public class SyncEngine
 
     public Task SyncAllAsync(CancellationToken ct = default, bool forceResync = false) => RunFullSyncAsync(ct, forceResync);
 
+    // Syncs queue behind each other and behind a dedup rebuild (DedupEngine.WriterGate): two overlapping runs
+    // shared one index, and the second's InitializeFromDb replaced it under the first's writer.
     public async Task RunFullSyncAsync(CancellationToken ct = default, bool forceResync = false)
+    {
+        if (!await _dedup.WriterGate.WaitAsync(0, ct))
+        {
+            NocturneLogger.Info("SyncEngine", "Sync queued behind a running sync or dedup rebuild.");
+            await _dedup.WriterGate.WaitAsync(ct);
+        }
+        try
+        {
+            await RunFullSyncCoreAsync(ct, forceResync);
+        }
+        finally
+        {
+            _dedup.WriterGate.Release();
+        }
+    }
+
+    private async Task RunFullSyncCoreAsync(CancellationToken ct, bool forceResync)
     {
         var servers = _settings.Current.Servers.ToList();
         if (servers.Count == 0)
