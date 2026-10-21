@@ -49,17 +49,71 @@
                 </Setter>
             </Style>
 
-            <!-- Global ToggleSwitch Style Ensuring Nocturne Accent Color is Always Used -->
-            <Style TargetType="{x:Type ui:ToggleSwitch}" BasedOn="{StaticResource {x:Type ui:ToggleSwitch}}">
-                <Style.Resources>
-                    <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="{DynamicResource NocturneAmberColor}" />
-                    <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="{DynamicResource NocturneAmberHoverColor}" />
-                    <SolidColorBrush x:Key="ToggleSwitchFillOnPressed" Color="{DynamicResource NocturneAmberMutedColor}" />
-                    <SolidColorBrush x:Key="ToggleSwitchStrokeOn" Color="{DynamicResource NocturneAmberColor}" />
-                    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPointerOver" Color="{DynamicResource NocturneAmberHoverColor}" />
-                    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPressed" Color="{DynamicResource NocturneAmberMutedColor}" />
-                    <SolidColorBrush x:Key="ToggleSwitchKnobFillOn" Color="#FFFFFF" />
-                </Style.Resources>
+            <!-- Global Native Fluent Windows 11 ToggleSwitch Style -->
+            <Style TargetType="{x:Type ui:ToggleSwitch}">
+                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="HorizontalAlignment" Value="Right" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="{x:Type ui:ToggleSwitch}">
+                            <Grid Background="Transparent">
+                                <!-- Switch Track (Outer Capsule Pill) -->
+                                <Border x:Name="SwitchTrack"
+                                        Width="44" Height="22"
+                                        CornerRadius="11"
+                                        Background="{DynamicResource ControlAltFillColorQuaternaryBrush}"
+                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center">
+                                    <!-- Switch Knob (Inner Circle) -->
+                                    <Border x:Name="SwitchKnob"
+                                            Width="12" Height="12"
+                                            CornerRadius="6"
+                                            Background="{DynamicResource TextFillColorSecondaryBrush}"
+                                            HorizontalAlignment="Left"
+                                            VerticalAlignment="Center"
+                                            Margin="4,0,0,0" />
+                                </Border>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <!-- Checked (ON) State -->
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="SwitchTrack" Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
+                                    <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                    <Setter TargetName="SwitchKnob" Property="Background" Value="#FFFFFF" />
+                                    <Setter TargetName="SwitchKnob" Property="HorizontalAlignment" Value="Right" />
+                                    <Setter TargetName="SwitchKnob" Property="Margin" Value="0,0,4,0" />
+                                </Trigger>
+                                <!-- Hover (Unchecked) -->
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="IsMouseOver" Value="True" />
+                                        <Condition Property="IsChecked" Value="False" />
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="SwitchTrack" Property="Background" Value="{DynamicResource ControlAltFillColorTertiaryBrush}" />
+                                    <Setter TargetName="SwitchKnob" Property="Background" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+                                </MultiTrigger>
+                                <!-- Hover (Checked) -->
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="IsMouseOver" Value="True" />
+                                        <Condition Property="IsChecked" Value="True" />
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="SwitchTrack" Property="Background" Value="{DynamicResource NocturneAmberHoverBrush}" />
+                                    <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="{DynamicResource NocturneAmberHoverBrush}" />
+                                </MultiTrigger>
+                                <!-- Disabled State -->
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="SwitchTrack" Property="Opacity" Value="0.38" />
+                                    <Setter TargetName="SwitchKnob" Property="Opacity" Value="0.38" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
             <!-- Globally Invisible ScrollBars (Zero width/height track, mouse wheel scrolling fully preserved) -->

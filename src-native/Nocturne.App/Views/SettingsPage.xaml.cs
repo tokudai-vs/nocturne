@@ -15,6 +15,7 @@ public partial class SettingsPage : UserControl
     public SettingsPage()
     {
         InitializeComponent();
+        Loaded += (s, e) => ViewModel?.RefreshDatabaseStats();
     }
 
     private void OnMoveServerUpClick(object sender, RoutedEventArgs e)

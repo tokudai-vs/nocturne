@@ -1539,6 +1539,16 @@ public class DatabaseService : IDisposable
         lock (_dbLock)
         {
             using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM dedup_groups WHERE version_count > 1;";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+    }
+
+    public int GetTotalDedupGroupsCount()
+    {
+        lock (_dbLock)
+        {
+            using var cmd = _connection.CreateCommand();
             cmd.CommandText = "SELECT COUNT(*) FROM dedup_groups;";
             return Convert.ToInt32(cmd.ExecuteScalar());
         }

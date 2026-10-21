@@ -242,6 +242,7 @@ public class SettingsViewModel : BaseViewModel
     private readonly ITraktSyncService _traktSync;
     private readonly ITmdbEnrichmentService _tmdbEnrichment;
     private readonly TraktQueueDrainWorker _traktDrain;
+    private DateTime _lastDatabaseStatsRefreshUtc = DateTime.MinValue;
 
     // Categorized Tabs Navigation
     private string _selectedCategory = "servers";
@@ -258,6 +259,7 @@ public class SettingsViewModel : BaseViewModel
                 OnPropertyChanged(nameof(IsAppearanceCategory));
                 OnPropertyChanged(nameof(IsIntegrationsCategory));
                 OnPropertyChanged(nameof(IsAboutCategory));
+                RefreshDatabaseStats();
             }
         }
     }
@@ -393,6 +395,16 @@ public class SettingsViewModel : BaseViewModel
                 SyncDetailedStatus = report.StatusMessage;
                 SyncProgressPercent = report.Percentage;
                 IsSyncIndeterminate = report.State == SyncState.Discovering;
+
+                // Live-update cached items & dedup groups count during active sync
+                if (report.State == SyncState.Writing || report.State == SyncState.Fetching || report.State == SyncState.Deduping)
+                {
+                    if ((DateTime.UtcNow - _lastDatabaseStatsRefreshUtc).TotalSeconds >= 1.5)
+                    {
+                        _lastDatabaseStatsRefreshUtc = DateTime.UtcNow;
+                        RefreshDatabaseStats();
+                    }
+                }
 
                 if (!string.IsNullOrEmpty(report.ServerId) && report.ServerId != "catalog" && report.ServerId != "trakt")
                 {
