@@ -10,6 +10,10 @@
     <SolidColorBrush x:Key="NocturneAmberHoverBrush" Color="{StaticResource NocturneAmberHoverColor}" />
     <SolidColorBrush x:Key="NocturneAmberMutedBrush" Color="{StaticResource NocturneAmberMutedColor}" />
     <SolidColorBrush x:Key="NocturneAmberTintBrush" Color="#33E5A00D" />
+    <Color x:Key="NocturneTextOnAmberColor">#111111</Color>
+    <SolidColorBrush x:Key="NocturneTextOnAmberBrush" Color="{StaticResource NocturneTextOnAmberColor}" />
+    <Color x:Key="NocturneAmberTextColor">#E5A00D</Color>
+    <SolidColorBrush x:Key="NocturneAmberTextBrush" Color="{StaticResource NocturneAmberTextColor}" />
     <Color x:Key="NocturneSplashGlowColor">#2EE5A00D</Color>
     <RadialGradientBrush x:Key="SplashRadialGlowBrush" Center="0.5,0.45" GradientOrigin="0.5,0.45" RadiusX="0.6" RadiusY="0.5">
         <GradientStop Color="{StaticResource NocturneSplashGlowColor}" Offset="0.0" />
@@ -41,11 +45,11 @@
         <GradientStop Color="#C0000000" Offset="1.0" />
     </LinearGradientBrush>
 
-    <!-- Amber Accent Primary Button Style -->
+    <!-- Amber Accent Primary Button Style with Dynamic High-Contrast Text -->
     <Style x:Key="AmberPrimaryButton" TargetType="Button">
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Background" Value="{DynamicResource NocturneAmberBrush}" />
-        <Setter Property="Foreground" Value="#111111" />
+        <Setter Property="Foreground" Value="{DynamicResource NocturneTextOnAmberBrush}" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Padding" Value="16,8" />
         <Setter Property="BorderThickness" Value="0" />
@@ -55,7 +59,8 @@
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="border" Background="{TemplateBinding Background}"
                             CornerRadius="6" Padding="{TemplateBinding Padding}">
-                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">

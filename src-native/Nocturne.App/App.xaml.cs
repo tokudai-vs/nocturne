@@ -98,6 +98,9 @@ public partial class App : Application
                                 ApplicationThemeManager.ApplySystemTheme();
                                 SettingsViewModel.UpdateThemeGradients();
                             }
+                            var themeService = _serviceProvider?.GetService<ThemeColorService>();
+                            themeService?.RefreshSystemAccentIfNeeded();
+                            themeService?.UpdateAdaptiveTextColors();
                         }
                         catch { }
                     });
@@ -164,6 +167,7 @@ public partial class App : Application
                     break;
             }
             SettingsViewModel.UpdateThemeGradients();
+            _serviceProvider?.GetService<ThemeColorService>()?.UpdateAdaptiveTextColors();
         }
         catch (Exception ex)
         {

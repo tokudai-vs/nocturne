@@ -181,7 +181,7 @@
                                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,8,0" />
                                                     <Border Background="{DynamicResource NocturneAmberTintBrush}" CornerRadius="4" Padding="6,1" VerticalAlignment="Center"
                                                             Visibility="{Binding Id, Converter={StaticResource NullToVisibility}}">
-                                                        <TextBlock Text="Connected" FontSize="10" Foreground="{DynamicResource NocturneAmberBrush}" FontWeight="SemiBold" />
+                                                        <TextBlock Text="Connected" FontSize="10" Foreground="{DynamicResource NocturneAmberTextBrush}" FontWeight="SemiBold" />
                                                     </Border>
                                                 </StackPanel>
                                                 <TextBlock Text="{Binding Url}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
@@ -400,7 +400,7 @@
                                     <!-- Right Side: Overall Percentage & Expand/Collapse Chevron Button -->
                                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding SyncProgressPercent, StringFormat='{}{0:F0}%'}"
-                                                   FontSize="13" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}"
+                                                   FontSize="13" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberTextBrush}"
                                                    VerticalAlignment="Center" Margin="0,0,10,0" />
                                         <Button Padding="6,4" Click="OnToggleSyncDetailsClick" Cursor="Hand"
                                                 Background="Transparent" BorderThickness="0" ToolTip="Toggle sync details">
@@ -415,7 +415,7 @@
 
                                     <!-- Left Side: Sync Icon + Master Title + Bullet + Master Subtitle -->
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="ArrowSync24" FontSize="15" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                                        <ui:SymbolIcon Symbol="ArrowSync24" FontSize="15" Foreground="{DynamicResource NocturneAmberTextBrush}" Margin="0,0,8,0" />
                                         <TextBlock Text="{Binding MasterSyncTitle}" FontSize="13" FontWeight="Bold"
                                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,6,0" VerticalAlignment="Center" />
                                         <TextBlock Text="•" FontSize="13" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,6,0" VerticalAlignment="Center" />
@@ -486,7 +486,7 @@
                                                             <!-- Right: Server Percentage -->
                                                             <TextBlock DockPanel.Dock="Right"
                                                                        Text="{Binding ProgressPercent, StringFormat='{}{0:F0}%'}"
-                                                                       FontSize="12" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}"
+                                                                       FontSize="12" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberTextBrush}"
                                                                        VerticalAlignment="Center" />
 
                                                             <!-- Left: Server Name + Status Badge -->
@@ -501,9 +501,9 @@
                                                                     <TextBlock Text="Complete" FontSize="10" FontWeight="SemiBold" Foreground="#10B981" />
                                                                 </Border>
                                                                 <Border Visibility="{Binding IsComplete, Converter={StaticResource InvertBoolToVisibility}}"
-                                                                        Background="#1AFFB020" BorderBrush="#40FFB020" BorderThickness="1"
+                                                                        Background="{DynamicResource NocturneAmberTintBrush}" BorderBrush="{DynamicResource NocturneAmberBrush}" BorderThickness="1"
                                                                         CornerRadius="4" Padding="6,2">
-                                                                    <TextBlock Text="Syncing" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                                                    <TextBlock Text="Syncing" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberTextBrush}" />
                                                                 </Border>
                                                             </StackPanel>
                                                         </DockPanel>
@@ -559,7 +559,7 @@
                                         <StackPanel>
                                             <DockPanel Margin="0,0,0,8">
                                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                    <ui:SymbolIcon Symbol="ArrowSync24" FontSize="13" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                                                    <ui:SymbolIcon Symbol="ArrowSync24" FontSize="13" Foreground="{DynamicResource NocturneAmberTextBrush}" Margin="0,0,8,0" />
                                                     <TextBlock Text="Catalog Deduplication" FontSize="12" FontWeight="Bold"
                                                                Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,6,0" />
                                                     <TextBlock Text="•" FontSize="12" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,6,0" />
@@ -567,7 +567,7 @@
                                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                                 </StackPanel>
                                                 <TextBlock Text="{Binding GlobalSyncProgressPercent, StringFormat='{}{0:F0}%'}" FontSize="12" FontWeight="Bold"
-                                                           HorizontalAlignment="Right" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                                           HorizontalAlignment="Right" Foreground="{DynamicResource NocturneAmberTextBrush}" />
                                             </DockPanel>
                                             <ProgressBar Height="4" Minimum="0" Maximum="100"
                                                          Value="{Binding GlobalSyncProgressPercent}"

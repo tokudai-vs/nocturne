@@ -440,9 +440,9 @@
                             <ControlTemplate TargetType="Button">
                                 <Border x:Name="b" CornerRadius="22" Background="{DynamicResource NocturneAmberBrush}">
                                     <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="Pause24" FontSize="20" Foreground="#111111"
+                                        <ui:SymbolIcon Symbol="Pause24" FontSize="20" Foreground="{DynamicResource NocturneTextOnAmberBrush}"
                                                        Visibility="{Binding IsPaused, Converter={StaticResource InvertBoolToVisibility}}" />
-                                        <ui:SymbolIcon Symbol="Play24" FontSize="20" Foreground="#111111" Margin="2,0,0,0"
+                                        <ui:SymbolIcon Symbol="Play24" FontSize="20" Foreground="{DynamicResource NocturneTextOnAmberBrush}" Margin="2,0,0,0"
                                                        Visibility="{Binding IsPaused, Converter={StaticResource BoolToVisibility}}" />
                                     </Grid>
                                 </Border>

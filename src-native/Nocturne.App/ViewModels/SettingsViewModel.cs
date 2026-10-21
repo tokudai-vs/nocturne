@@ -1619,6 +1619,7 @@ public class SettingsViewModel : BaseViewModel
                     break;
             }
             UpdateThemeGradients();
+            _themeColors.UpdateAdaptiveTextColors();
         }
         catch { }
     }

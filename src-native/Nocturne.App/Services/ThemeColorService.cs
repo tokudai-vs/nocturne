@@ -105,6 +105,25 @@ public class ThemeColorService
                 (byte)Math.Max(0, color.G - 40),
                 (byte)Math.Max(0, color.B - 40));
 
+            // Dynamic WCAG 2.1 contrast calculation for text on accent backgrounds
+            var rgb = new RgbColor(color.R, color.G, color.B);
+            var fgRgb = ColorContrastUtils.GetContrastingForeground(rgb);
+            var textOnAmberColor = Color.FromRgb(fgRgb.R, fgRgb.G, fgRgb.B);
+            var textOnAmberBrush = new SolidColorBrush(textOnAmberColor);
+            textOnAmberBrush.Freeze();
+
+            bool isLightTheme = false;
+            try
+            {
+                isLightTheme = ApplicationThemeManager.GetAppTheme() == ApplicationTheme.Light;
+            }
+            catch { }
+
+            var accessibleTextRgb = ColorContrastUtils.GetAccessibleTextVariant(rgb, isLightTheme);
+            var accessibleTextColor = Color.FromRgb(accessibleTextRgb.R, accessibleTextRgb.G, accessibleTextRgb.B);
+            var accessibleTextBrush = new SolidColorBrush(accessibleTextColor);
+            accessibleTextBrush.Freeze();
+
             if (Application.Current != null)
             {
                 Application.Current.Dispatcher.Invoke(() =>
@@ -142,6 +161,12 @@ public class ThemeColorService
                     Application.Current.Resources["NocturneSplashGlowColor"] = glowColor;
                     Application.Current.Resources["SplashRadialGlowBrush"] = glowBrush;
 
+                    // Dynamic High-Contrast Text Resources
+                    Application.Current.Resources["NocturneTextOnAmberColor"] = textOnAmberColor;
+                    Application.Current.Resources["NocturneTextOnAmberBrush"] = textOnAmberBrush;
+                    Application.Current.Resources["NocturneAmberTextColor"] = accessibleTextColor;
+                    Application.Current.Resources["NocturneAmberTextBrush"] = accessibleTextBrush;
+
                     // Standard System and Wpf.Ui Accent Brushes
                     Application.Current.Resources["SystemAccentColor"] = color;
                     Application.Current.Resources["SystemAccentColorPrimary"] = color;
@@ -156,7 +181,13 @@ public class ThemeColorService
                     Application.Current.Resources["AccentFillColorDefaultBrush"] = brush;
                     Application.Current.Resources["AccentFillColorSecondaryBrush"] = hoverBrush;
                     Application.Current.Resources["AccentFillColorTertiaryBrush"] = mutedBrush;
-                    Application.Current.Resources["AccentTextFillColorPrimaryBrush"] = brush;
+                    Application.Current.Resources["AccentTextFillColorPrimaryBrush"] = accessibleTextBrush;
+
+                    Application.Current.Resources["TextOnAccentFillColorPrimary"] = textOnAmberColor;
+                    Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"] = textOnAmberBrush;
+                    Application.Current.Resources["TextOnAccentFillColorSecondaryBrush"] = textOnAmberBrush;
+                    Application.Current.Resources["TextOnAccentFillColorDisabledBrush"] = textOnAmberBrush;
+                    Application.Current.Resources["TextOnAccentFillColorSelectedTextBrush"] = textOnAmberBrush;
 
                     // Wpf.Ui ToggleSwitch & Accent Component Overrides
                     Application.Current.Resources["ToggleSwitchFillOn"] = brush;
@@ -165,7 +196,7 @@ public class ThemeColorService
                     Application.Current.Resources["ToggleSwitchStrokeOn"] = brush;
                     Application.Current.Resources["ToggleSwitchStrokeOnPointerOver"] = hoverBrush;
                     Application.Current.Resources["ToggleSwitchStrokeOnPressed"] = mutedBrush;
-                    Application.Current.Resources["ToggleSwitchKnobFillOn"] = new SolidColorBrush(Colors.White);
+                    Application.Current.Resources["ToggleSwitchKnobFillOn"] = textOnAmberBrush;
 
                     // Additional Wpf.Ui Accent Control Overrides
                     Application.Current.Resources["ControlStrongFillColorDefaultBrush"] = brush;
@@ -183,13 +214,23 @@ public class ThemeColorService
                             ApplicationAccentColorManager.Apply(color);
                         }
 
-                        // Re-apply ToggleSwitch after Wpf.Ui manager to ensure Wpf.Ui theme overrides don't revert them
+                        // Re-apply ToggleSwitch & TextOnAccent after Wpf.Ui manager to ensure Wpf.Ui theme overrides don't revert them
                         Application.Current.Resources["ToggleSwitchFillOn"] = brush;
                         Application.Current.Resources["ToggleSwitchFillOnPointerOver"] = hoverBrush;
                         Application.Current.Resources["ToggleSwitchFillOnPressed"] = mutedBrush;
                         Application.Current.Resources["ToggleSwitchStrokeOn"] = brush;
                         Application.Current.Resources["ToggleSwitchStrokeOnPointerOver"] = hoverBrush;
                         Application.Current.Resources["ToggleSwitchStrokeOnPressed"] = mutedBrush;
+                        Application.Current.Resources["ToggleSwitchKnobFillOn"] = textOnAmberBrush;
+
+                        Application.Current.Resources["NocturneTextOnAmberColor"] = textOnAmberColor;
+                        Application.Current.Resources["NocturneTextOnAmberBrush"] = textOnAmberBrush;
+                        Application.Current.Resources["NocturneAmberTextColor"] = accessibleTextColor;
+                        Application.Current.Resources["NocturneAmberTextBrush"] = accessibleTextBrush;
+                        Application.Current.Resources["TextOnAccentFillColorPrimary"] = textOnAmberColor;
+                        Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"] = textOnAmberBrush;
+                        Application.Current.Resources["TextOnAccentFillColorSecondaryBrush"] = textOnAmberBrush;
+                        Application.Current.Resources["AccentTextFillColorPrimaryBrush"] = accessibleTextBrush;
                     }
                     catch { }
                 });
@@ -211,5 +252,10 @@ public class ThemeColorService
         {
             ApplyColor("System");
         }
+    }
+
+    public void UpdateAdaptiveTextColors()
+    {
+        ApplyColor(_settings.Current.AccentColor);
     }
 }
