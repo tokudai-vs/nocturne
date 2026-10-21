@@ -71,9 +71,11 @@ public class EmbyClient
     private readonly string _deviceId;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = null };
 
-    public const string FullItemFields = "Overview,RunTimeTicks,CommunityRating,IndexNumber,ParentIndexNumber,Genres,Studios,MediaSources,Taglines,ImageTags,BackdropImageTags,RemoteTrailers,People,ProviderIds,OfficialRating,UserData,DateCreated,SortName,Chapters";
-    public const string FullSyncItemFields = "Overview,Genres,Studios,MediaSources,ProviderIds,DateCreated,UserData,ImageTags,BackdropImageTags,People,SortName,IndexNumber,ParentIndexNumber,RunTimeTicks,CommunityRating";
-    public const string LightItemFields = "Overview,RunTimeTicks,CommunityRating,IndexNumber,ParentIndexNumber,ImageTags,BackdropImageTags,ProviderIds";
+    // ProductionYear and PremiereDate are only returned when requested (verified against a live server:
+    // without them both come back null), and the year feeds dedup fuzzy keys, dedup_groups.year and the UI.
+    public const string FullItemFields = "Overview,RunTimeTicks,CommunityRating,IndexNumber,ParentIndexNumber,Genres,Studios,MediaSources,Taglines,ImageTags,BackdropImageTags,RemoteTrailers,People,ProviderIds,OfficialRating,UserData,DateCreated,SortName,Chapters,ProductionYear,PremiereDate";
+    public const string FullSyncItemFields = "Overview,Genres,Studios,MediaSources,ProviderIds,DateCreated,UserData,ImageTags,BackdropImageTags,People,SortName,IndexNumber,ParentIndexNumber,RunTimeTicks,CommunityRating,ProductionYear,PremiereDate";
+    public const string LightItemFields = "Overview,RunTimeTicks,CommunityRating,IndexNumber,ParentIndexNumber,ImageTags,BackdropImageTags,ProviderIds,ProductionYear,PremiereDate";
 
     public EmbyClient()
     {

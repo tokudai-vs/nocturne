@@ -60,6 +60,11 @@ public readonly record struct CandidateKey(string Key, bool IsAuthoritative);
 /// </summary>
 public class ConcurrentDedupIndex
 {
+    // migration_state marker: set once the groups in the database were built by this (conflict-guarded) engine.
+    // FeatureFlags.SiblingCascade engages only then. Bump the version when grouping rules change.
+    public const string EngineMarkerKey = "dedup_engine";
+    public const string EngineVersion = "2";
+
     private readonly object _lock = new();
     private readonly Dictionary<string, (int GroupId, bool IsAuthoritative)> _keyToGroup = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, DedupGroupRecord> _groups = new();
@@ -116,6 +121,8 @@ public class ConcurrentDedupIndex
     public void InitializeFromDb(DatabaseService db)
     {
         var loadClock = System.Diagnostics.Stopwatch.StartNew();
+        _seriesProviderIds.Clear();
+        bool loadedEmpty = false;
         lock (_lock)
         {
             _keyToGroup.Clear();
@@ -152,12 +159,16 @@ public class ConcurrentDedupIndex
                 }
 
                 NocturneLogger.Info("ConcurrentDedupIndex", $"Initialized hash index with {_groups.Count} existing groups and {_keyToGroup.Count} keys in {loadClock.ElapsedMilliseconds} ms.");
+                loadedEmpty = _groups.Count == 0;
             }
             catch (Exception ex)
             {
                 NocturneLogger.Warn("ConcurrentDedupIndex", $"Could not initialize existing dedup groups: {ex.Message}");
             }
         }
+
+        // An empty index is populated entirely by this engine. Outside _lock: the rebuild path takes _dbLock first.
+        if (loadedEmpty) db.SetMigrationState(EngineMarkerKey, EngineVersion);
     }
 
     /// <summary>
@@ -171,36 +182,44 @@ public class ConcurrentDedupIndex
 
         if (string.Equals(type, "Episode", StringComparison.OrdinalIgnoreCase))
         {
-            int season = item.ParentIndexNumber ?? 1;
-            int ep = item.IndexNumber ?? 0;
-            string sXee = $"s{season:D2}e{ep:D2}";
+            // Season/episode keys only when both numbers are known: defaulting a missing number (to s01 / e00)
+            // collapses unrelated episodes onto one key, the same failure the S6 guard prevents for null years.
+            string? sXee = item.ParentIndexNumber.HasValue && item.IndexNumber.HasValue
+                ? $"s{item.ParentIndexNumber.Value:D2}e{item.IndexNumber.Value:D2}"
+                : null;
 
-            // 1. Authoritative series provider keys (stable forever across series merges - B2)
-            if (!string.IsNullOrEmpty(item.SeriesTvdbId))
-                keys.Add(new CandidateKey($"ep:tvdb:{item.SeriesTvdbId}:{sXee}", true));
-            if (!string.IsNullOrEmpty(item.SeriesTmdbId))
-                keys.Add(new CandidateKey($"ep:tmdb:{item.SeriesTmdbId}:{sXee}", true));
-            if (!string.IsNullOrEmpty(item.SeriesImdbId))
-                keys.Add(new CandidateKey($"ep:imdb:{item.SeriesImdbId}:{sXee}", true));
+            if (sXee != null)
+            {
+                // 1. Authoritative series provider keys (stable forever across series merges - B2)
+                if (IsValidProviderId("Tvdb", item.SeriesTvdbId))
+                    keys.Add(new CandidateKey($"ep:tvdb:{item.SeriesTvdbId}:{sXee}", true));
+                if (IsValidProviderId("Tmdb", item.SeriesTmdbId))
+                    keys.Add(new CandidateKey($"ep:tmdb:{item.SeriesTmdbId}:{sXee}", true));
+                if (IsValidProviderId("Imdb", item.SeriesImdbId))
+                    keys.Add(new CandidateKey($"ep:imdb:{item.SeriesImdbId}:{sXee}", true));
+            }
 
             // 2. Direct episode provider keys
-            if (!string.IsNullOrEmpty(item.TmdbId))
+            if (IsValidProviderId("Tmdb", item.TmdbId))
                 keys.Add(new CandidateKey($"tmdb:ep:{item.TmdbId}", true));
-            if (!string.IsNullOrEmpty(item.ImdbId))
+            if (IsValidProviderId("Imdb", item.ImdbId))
                 keys.Add(new CandidateKey($"imdb:ep:{item.ImdbId}", true));
-            if (!string.IsNullOrEmpty(item.TvdbId))
+            if (IsValidProviderId("Tvdb", item.TvdbId))
                 keys.Add(new CandidateKey($"tvdb:ep:{item.TvdbId}", true));
 
             // 3. Fallback series/name keys (is_authoritative = false)
-            if (!string.IsNullOrEmpty(item.SeriesId))
-                keys.Add(new CandidateKey($"ep:series:{item.SeriesId}:{sXee}", false));
-
-            if (!string.IsNullOrEmpty(item.SeriesName))
+            if (sXee != null)
             {
-                var normSeries = DedupEngine.NormalizeTitle(item.SeriesName);
-                if (!string.IsNullOrEmpty(normSeries) && !DedupEngine.IsGenericTitle(item.SeriesName))
+                if (!string.IsNullOrEmpty(item.SeriesId))
+                    keys.Add(new CandidateKey($"ep:series:{item.SeriesId}:{sXee}", false));
+
+                if (!string.IsNullOrEmpty(item.SeriesName))
                 {
-                    keys.Add(new CandidateKey($"ep:name:{normSeries}:{sXee}", false));
+                    var normSeries = DedupEngine.NormalizeTitle(item.SeriesName);
+                    if (!string.IsNullOrEmpty(normSeries) && !DedupEngine.IsGenericTitle(item.SeriesName))
+                    {
+                        keys.Add(new CandidateKey($"ep:name:{normSeries}:{sXee}", false));
+                    }
                 }
             }
         }
@@ -209,11 +228,11 @@ public class ConcurrentDedupIndex
             // Movie or Series
             string normType = string.Equals(type, "Series", StringComparison.OrdinalIgnoreCase) ? "series" : "movie";
 
-            if (!string.IsNullOrEmpty(item.TmdbId))
+            if (IsValidProviderId("Tmdb", item.TmdbId))
                 keys.Add(new CandidateKey($"tmdb:{normType}:{item.TmdbId}", true));
-            if (!string.IsNullOrEmpty(item.ImdbId))
+            if (IsValidProviderId("Imdb", item.ImdbId))
                 keys.Add(new CandidateKey($"imdb:{normType}:{item.ImdbId}", true));
-            if (!string.IsNullOrEmpty(item.TvdbId))
+            if (IsValidProviderId("Tvdb", item.TvdbId))
                 keys.Add(new CandidateKey($"tvdb:{normType}:{item.TvdbId}", true));
 
             // Fuzzy key: ONLY if year is valid (> 0) and title is not generic (S6 Guard)
@@ -230,10 +249,258 @@ public class ConcurrentDedupIndex
         return keys;
     }
 
+    // Servers hold malformed ids ("../tv/222031", bare digits in the Imdb slot, URL fragments); keying on them
+    // groups unrelated items, so only well-formed ids become keys.
+    public static bool IsValidProviderId(string provider, string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return false;
+        if (provider == "Imdb")
+            return value.Length > 2 && value.StartsWith("tt", StringComparison.Ordinal) && value.Skip(2).All(char.IsAsciiDigit);
+        return value.All(char.IsAsciiDigit);
+    }
+
+    // Stable key for an item with no usable key: it still gets a (singleton) group, and re-ingesting it finds
+    // that group instead of minting a new one.
+    private static CandidateKey IdentityKey(EmbyItem item) => new($"item:{item.ServerId}:{item.Id}", false);
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string ServerId, string SeriesId), Dictionary<string, string>> _seriesProviderIds = new();
+
+    /// <summary>
+    /// Episodes carry only the server-local SeriesId. Their series' provider ids (for the ep:tvdb/tmdb/imdb keys)
+    /// are taken from the Series row, from this batch or the local cache; no server round-trip.
+    /// </summary>
+    public void ResolveSeriesProviderIds(IEnumerable<EmbyItem> items, DatabaseService db)
+    {
+        var list = items as IList<EmbyItem> ?? items.ToList();
+        foreach (var s in list)
+        {
+            if (s.Type == "Series" && s.ProviderIds is { Count: > 0 } && !string.IsNullOrEmpty(s.Id))
+                _seriesProviderIds[(s.ServerId ?? string.Empty, s.Id)] = s.ProviderIds;
+        }
+
+        foreach (var ep in list)
+        {
+            if (ep.Type != "Episode" || ep.SeriesProviderIds != null || string.IsNullOrEmpty(ep.SeriesId)) continue;
+            var key = (ep.ServerId ?? string.Empty, ep.SeriesId);
+            if (!_seriesProviderIds.TryGetValue(key, out var ids))
+            {
+                // Not cached as a miss: the Series row may arrive later in the same sync.
+                ids = db.GetSeriesProviderIds(key.Item1, key.Item2);
+                if (ids == null) continue;
+                _seriesProviderIds[key] = ids;
+            }
+            ep.SeriesProviderIds = ids;
+        }
+    }
+
+    // Authoritative keys split into provider type ("tmdb:movie", "ep:tvdb", "tvdb:ep", ...) and value.
+    private static (string Type, string Value)? ProviderTypeOf(string key)
+    {
+        var first = key.IndexOf(':');
+        var second = first < 0 ? -1 : key.IndexOf(':', first + 1);
+        return second < 0 ? null : (key[..second], key[(second + 1)..]);
+    }
+
+    // Keys GenerateCandidateKeys emits as authoritative: provider ids, as opposed to fuzzy name/series keys.
+    private static readonly string[] ProviderKeyPrefixes = { "tmdb:", "imdb:", "tvdb:", "ep:tvdb:", "ep:tmdb:", "ep:imdb:" };
+
+    private static bool IsProviderKey(string key) => ProviderKeyPrefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+
+    // The ids a group's items carry: every provider key it owns, demoted ones included (demotion stops a key
+    // from linking, not from being evidence), plus its "{key}@{groupId}" evidence keys (RecordEvidence).
+    private Dictionary<string, HashSet<string>> AuthIdsOf(DedupGroupRecord g)
+    {
+        var ids = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var owned in g.Keys)
+        {
+            if (!_keyToGroup.TryGetValue(owned, out var m) || m.GroupId != g.GroupId) continue;
+            var at = owned.IndexOf('@');
+            var k = at < 0 ? owned : owned[..at];
+            if (!IsProviderKey(k) || ProviderTypeOf(k) is not { } p) continue;
+            if (!ids.TryGetValue(p.Type, out var set)) ids[p.Type] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            set.Add(p.Value);
+        }
+        return ids;
+    }
+
+    private static Dictionary<string, HashSet<string>> AuthIdsOf(IEnumerable<CandidateKey> keys)
+    {
+        var ids = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var k in keys)
+        {
+            if (!k.IsAuthoritative || ProviderTypeOf(k.Key) is not { } p) continue;
+            if (!ids.TryGetValue(p.Type, out var set)) ids[p.Type] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            set.Add(p.Value);
+        }
+        return ids;
+    }
+
+    // C4: two identities conflict when they carry different ids of the same provider type. Agreement on one
+    // provider never outweighs disagreement on another. Returns the conflicting type, or null.
+    private static string? FindConflict(Dictionary<string, HashSet<string>> a, Dictionary<string, HashSet<string>> b)
+    {
+        foreach (var (type, values) in a)
+        {
+            if (b.TryGetValue(type, out var other) && !values.SetEquals(other)) return type;
+        }
+        return null;
+    }
+
+    private int _conflictsRefused;
+    public int ConflictsRefused { get { lock (_lock) return _conflictsRefused; } }
+
+    private void LogRefusal(string message)
+    {
+        // Bounded: a rebuild over a badly-tagged library can refuse thousands of merges.
+        if (++_conflictsRefused <= 100) NocturneLogger.Warn("ConcurrentDedupIndex", message);
+        else if (_conflictsRefused == 101) NocturneLogger.Warn("ConcurrentDedupIndex", "Further merge refusals are counted but not logged.");
+    }
+
+    // A key that led to a group the item conflicts with is suspect: it is demoted to non-authoritative where it
+    // stands, and the item does not take it over.
+    private List<CandidateKey> DropSuspectKeys(List<CandidateKey> candidateKeys, int ownerGroupId, List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave)
+    {
+        var kept = new List<CandidateKey>(candidateKeys.Count);
+        foreach (var ck in candidateKeys)
+        {
+            if (_keyToGroup.TryGetValue(ck.Key, out var m) && m.GroupId == ownerGroupId)
+            {
+                if (m.IsAuthoritative)
+                {
+                    _keyToGroup[ck.Key] = (ownerGroupId, false);
+                    keysToSave.Add((ck.Key, ownerGroupId, false));
+                }
+                continue;
+            }
+            kept.Add(ck);
+        }
+        return kept;
+    }
+
+    // A group takes only keys no live group holds. Taking another group's key erases that group's conflict
+    // evidence, and re-asserting a key this group demoted undoes the suspect flag. Returns false if any was held.
+    private bool ClaimKeys(DedupGroupRecord g, IEnumerable<CandidateKey> keys, List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave)
+    {
+        bool all = true;
+        foreach (var ck in keys)
+        {
+            if (_keyToGroup.TryGetValue(ck.Key, out var owner) && _groups.ContainsKey(owner.GroupId))
+            {
+                if (owner.GroupId != g.GroupId) all = false;
+                continue;
+            }
+            g.Keys.Add(ck.Key);
+            _keyToGroup[ck.Key] = (g.GroupId, ck.IsAuthoritative);
+            keysToSave.Add((ck.Key, g.GroupId, ck.IsAuthoritative));
+        }
+        return all;
+    }
+
+    // A provider id an item carries but its group does not own (another group holds the key: a refused merge,
+    // or a key ClaimKeys would not take) is stored as "{key}@{groupId}". No lookup matches that string, so it
+    // never links; it keeps the id visible to the conflict guard, including after a reload from the database.
+    private void RecordEvidence(DedupGroupRecord g, EmbyItem item, List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave)
+    {
+        foreach (var ck in GenerateCandidateKeys(item))
+        {
+            if (!ck.IsAuthoritative) continue;
+            if (_keyToGroup.TryGetValue(ck.Key, out var owner) && owner.GroupId == g.GroupId) continue;
+            var evidence = $"{ck.Key}@{g.GroupId}";
+            if (_keyToGroup.ContainsKey(evidence)) continue;
+            g.Keys.Add(evidence);
+            _keyToGroup[evidence] = (g.GroupId, false);
+            keysToSave.Add((evidence, g.GroupId, false));
+        }
+    }
+
+    private void CreateGroup(
+        EmbyItem item,
+        List<CandidateKey> candidateKeys,
+        int score,
+        int height,
+        long bitrate,
+        int is4k,
+        string? audio,
+        string? itemTmdbKey,
+        List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave,
+        List<(string ServerId, string ItemId, int GroupId)> itemAssignments,
+        List<DedupGroupRecord> dirtyGroups)
+    {
+        int newGid = _nextGroupId++;
+        var newGroup = new DedupGroupRecord
+        {
+            GroupId = newGid,
+            ItemType = item.Type ?? "Movie",
+            PrimaryItemId = item.Id,
+            PrimaryServerId = item.ServerId ?? string.Empty,
+            PrimaryScore = score,
+            VersionCount = 1,
+            Name = item.Name,
+            SortName = item.SortName,
+            Year = item.ProductionYear,
+            Overview = item.Overview,
+            ImageTag = item.ImageTag,
+            ImageItemId = !string.IsNullOrEmpty(item.ImageTag) ? item.Id : null,
+            ImageServerId = !string.IsNullOrEmpty(item.ImageTag) ? item.ServerId : null,
+            BackdropTag = item.BackdropTag,
+            BackdropItemId = !string.IsNullOrEmpty(item.BackdropTag) ? item.Id : null,
+            BackdropServerId = !string.IsNullOrEmpty(item.BackdropTag) ? item.ServerId : null,
+            TmdbKey = itemTmdbKey,
+            CommunityRating = item.CommunityRating,
+            DateCreated = item.PremiereDate.HasValue ? new DateTimeOffset(item.PremiereDate.Value).ToUnixTimeSeconds() : null,
+            SeasonNumber = item.ParentIndexNumber,
+            EpisodeNumber = item.IndexNumber,
+            MaxHeight = height > 0 ? height : null,
+            Has4k = is4k,
+            MaxBitrate = bitrate > 0 ? bitrate : null,
+            AudioFormats = audio,
+            IsDirty = true
+        };
+        newGroup.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
+        _groups[newGid] = newGroup;
+
+        // An item split off (conflict or cap) whose keys other groups hold gets its identity key, so the next
+        // ingest finds this group instead of minting another.
+        if (!ClaimKeys(newGroup, candidateKeys, keysToSave) || newGroup.Keys.Count == 0)
+            ClaimKeys(newGroup, new[] { IdentityKey(item) }, keysToSave);
+        newGroup.IsProvisional = newGroup.Keys.Any(k => _keyToGroup[k].IsAuthoritative) ? 0 : 1;
+        RecordEvidence(newGroup, item, keysToSave);
+
+        item.DedupGroupId = newGid.ToString();
+        itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, newGid));
+        dirtyGroups.Add(newGroup);
+    }
+
+    // Absorbs each loser into the winner unless their authoritative ids conflict (C4). A refused loser keeps
+    // its identity; the item's keys that point at it become suspect. Returns the item's remaining keys.
+    private List<CandidateKey> MergeInto(
+        DedupGroupRecord winner,
+        IEnumerable<int> loserIds,
+        EmbyItem item,
+        List<CandidateKey> candidateKeys,
+        List<int> deletedGroupIds,
+        List<(int FromGid, int ToGid)> remappedGroups,
+        List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave)
+    {
+        foreach (var loserId in loserIds.Where(id => id != winner.GroupId).Distinct().OrderBy(id => id).ToList())
+        {
+            if (!_groups.TryGetValue(loserId, out var loser)) continue;
+            if (FindConflict(AuthIdsOf(winner), AuthIdsOf(loser)) is { } clash)
+            {
+                LogRefusal($"Merge refused: group {winner.GroupId} '{winner.Name}' and group {loserId} '{loser.Name}' hold different {clash} ids (via '{item.Name}' {item.ServerId}/{item.Id}).");
+                candidateKeys = DropSuspectKeys(candidateKeys, loserId, keysToSave);
+                continue;
+            }
+            _groups.Remove(loserId);
+            AbsorbLoserGroup(winner, loser, deletedGroupIds, remappedGroups, keysToSave);
+        }
+        return candidateKeys;
+    }
+
     /// <summary>
     /// Processes an incoming batch of items in real-time within the single writer thread:
     /// - Checks keys against existing groups.
-    /// - Executes N-Way Merge Matrix (M1/B3) with group size caps (M6).
+    /// - Executes N-Way Merge Matrix (M1/B3) with group size caps (M6) and the conflicting-id guard (C4).
     /// - Assigns DedupGroupId directly on each item before SQLite writes.
     /// - Upserts modified groups and remapped keys to SQLite atomically.
     /// </summary>
@@ -245,23 +512,35 @@ public class ConcurrentDedupIndex
         var keysToSave = new List<(string Key, int GroupId, bool IsAuthoritative)>();
         var itemAssignments = new List<(string ServerId, string ItemId, int GroupId)>();
 
+        var batch = items as IList<EmbyItem> ?? items.ToList();
+        if (db != null) ResolveSeriesProviderIds(batch, db);
+
         lock (_lock)
         {
-            foreach (var item in items)
+            int maxGroupCap = 4 * Math.Max(2, _connectedServerCount);
+
+            foreach (var item in batch)
             {
                 // Movies, Series, and Episodes participate in deduplication (B1 Option A)
                 if (item.Type != "Movie" && item.Type != "Series" && item.Type != "Episode") continue;
 
                 var candidateKeys = GenerateCandidateKeys(item);
-                if (candidateKeys.Count == 0) continue;
 
                 int score = DedupEngine.ScorePrimaryItem(item, _serverPriority);
                 int height = item.Height ?? 0;
                 long bitrate = item.MeasuredBitrate ?? 0;
                 int is4k = (height >= 2160 || (item.Width ?? 0) >= 3800) ? 1 : 0;
                 string? audio = item.AudioCodec;
-                bool isItemAuth = candidateKeys.Any(k => k.IsAuthoritative);
                 string? itemTmdbKey = ExtractTmdbKey(item);
+
+                // An item holding an identity key was split off earlier (or has no usable key): it stays there.
+                // ponytail: a server-side id fix doesn't re-merge it until the next rebuild.
+                if (_keyToGroup.TryGetValue(IdentityKey(item).Key, out var home) && _groups.TryGetValue(home.GroupId, out var homeGroup))
+                {
+                    AttachItemToGroupRecord(homeGroup, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
+                    continue;
+                }
+                if (candidateKeys.Count == 0) candidateKeys.Add(IdentityKey(item));
 
                 // Collect matched groups partitioned into authoritative and provisional
                 var authMatches = new HashSet<int>();
@@ -277,7 +556,7 @@ public class ConcurrentDedupIndex
                             if (g.IsProvisional == 0)
                             {
                                 authMatches.Add(g.GroupId);
-                                if (ck.IsAuthoritative)
+                                if (ck.IsAuthoritative && mapping.IsAuthoritative)
                                 {
                                     authLinkedGroupIds.Add(g.GroupId);
                                 }
@@ -290,72 +569,37 @@ public class ConcurrentDedupIndex
                     }
                 }
 
+                // C4: never join a group that holds a different authoritative id of a provider type the item
+                // carries (The Banker / Bunker shared a bad tvdb:movie id while holding different tmdb ids).
+                var itemIds = AuthIdsOf(candidateKeys);
+                if (itemIds.Count > 0)
+                {
+                    foreach (var gid in authMatches.Concat(provMatches).ToList())
+                    {
+                        var g = _groups[gid];
+                        if (FindConflict(itemIds, AuthIdsOf(g)) is not { } clash) continue;
+                        LogRefusal($"Merge refused: '{item.Name}' ({item.ServerId}/{item.Id}) and group {gid} '{g.Name}' hold different {clash} ids; shared key(s) flagged suspect.");
+                        authMatches.Remove(gid);
+                        provMatches.Remove(gid);
+                        authLinkedGroupIds.Remove(gid);
+                        candidateKeys = DropSuspectKeys(candidateKeys, gid, keysToSave);
+                    }
+                    if (candidateKeys.Count == 0) candidateKeys.Add(IdentityKey(item));
+                }
+                bool isItemAuth = candidateKeys.Any(k => k.IsAuthoritative);
+
                 // ── Case 4: Zero Groups Matched -> CREATE NEW GROUP ──
                 if (authMatches.Count == 0 && provMatches.Count == 0)
                 {
-                    int newGid = _nextGroupId++;
-                    var newGroup = new DedupGroupRecord
-                    {
-                        GroupId = newGid,
-                        ItemType = item.Type ?? "Movie",
-                        PrimaryItemId = item.Id,
-                        PrimaryServerId = item.ServerId ?? string.Empty,
-                        PrimaryScore = score,
-                        IsProvisional = isItemAuth ? 0 : 1,
-                        VersionCount = 1,
-                        Name = item.Name,
-                        SortName = item.SortName,
-                        Year = item.ProductionYear,
-                        Overview = item.Overview,
-                        ImageTag = item.ImageTag,
-                        ImageItemId = !string.IsNullOrEmpty(item.ImageTag) ? item.Id : null,
-                        ImageServerId = !string.IsNullOrEmpty(item.ImageTag) ? item.ServerId : null,
-                        BackdropTag = item.BackdropTag,
-                        BackdropItemId = !string.IsNullOrEmpty(item.BackdropTag) ? item.Id : null,
-                        BackdropServerId = !string.IsNullOrEmpty(item.BackdropTag) ? item.ServerId : null,
-                        TmdbKey = itemTmdbKey,
-                        CommunityRating = item.CommunityRating,
-                        DateCreated = item.PremiereDate.HasValue ? new DateTimeOffset(item.PremiereDate.Value).ToUnixTimeSeconds() : null,
-                        SeasonNumber = item.ParentIndexNumber,
-                        EpisodeNumber = item.IndexNumber,
-                        MaxHeight = height > 0 ? height : null,
-                        Has4k = is4k,
-                        MaxBitrate = bitrate > 0 ? bitrate : null,
-                        AudioFormats = audio,
-                        IsDirty = true
-                    };
-                    newGroup.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
-
-                    _groups[newGid] = newGroup;
-
-                    foreach (var ck in candidateKeys)
-                    {
-                        _keyToGroup[ck.Key] = (newGid, ck.IsAuthoritative);
-                        newGroup.Keys.Add(ck.Key);
-                        keysToSave.Add((ck.Key, newGid, ck.IsAuthoritative));
-                    }
-
-                    item.DedupGroupId = newGid.ToString();
-                    itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, newGid));
-                    dirtyGroups.Add(newGroup);
+                    CreateGroup(item, candidateKeys, score, height, bitrate, is4k, audio, itemTmdbKey, keysToSave, itemAssignments, dirtyGroups);
                     continue;
                 }
 
                 // ── Case 1: Multiple Authoritative Groups Reached Authoritatively (>= 2) -> MERGE ALL ──
                 if (authLinkedGroupIds.Count >= 2)
                 {
-                    int winnerId = authLinkedGroupIds.Min();
-                    var winner = _groups[winnerId];
-                    var loserIds = authMatches.Concat(provMatches).Where(id => id != winnerId).Distinct().ToList();
-
-                    foreach (var loserId in loserIds)
-                    {
-                        if (_groups.Remove(loserId, out var loser))
-                        {
-                            AbsorbLoserGroup(winner, loser, deletedGroupIds, remappedGroups, keysToSave);
-                        }
-                    }
-
+                    var winner = _groups[authLinkedGroupIds.Min()];
+                    candidateKeys = MergeInto(winner, authLinkedGroupIds.Concat(provMatches), item, candidateKeys, deletedGroupIds, remappedGroups, keysToSave);
                     winner.IsProvisional = 0;
                     AttachItemToGroupRecord(winner, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                     continue;
@@ -364,21 +608,11 @@ public class ConcurrentDedupIndex
                 // ── Case 2: One Authoritative Group Reached Authoritatively (== 1) -> ATTACH & ABSORB PROVISIONAL ──
                 if (authLinkedGroupIds.Count == 1)
                 {
-                    int targetId = authLinkedGroupIds.First();
-                    var target = _groups[targetId];
-
-                    // Absorb any matched provisional groups into the authoritative group
-                    foreach (var provId in provMatches)
-                    {
-                        if (_groups.Remove(provId, out var provLoser))
-                        {
-                            AbsorbLoserGroup(target, provLoser, deletedGroupIds, remappedGroups, keysToSave);
-                        }
-                    }
-
+                    var target = _groups[authLinkedGroupIds.First()];
+                    candidateKeys = MergeInto(target, provMatches, item, candidateKeys, deletedGroupIds, remappedGroups, keysToSave);
                     if (isItemAuth) target.IsProvisional = 0;
+                    // Remake protection: other auth groups reached only through fuzzy keys are not merged.
                     AttachItemToGroupRecord(target, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
-                    // Remake protection: Any other auth groups reached strictly via fuzzy keys are refused merge!
                     continue;
                 }
 
@@ -388,74 +622,21 @@ public class ConcurrentDedupIndex
                     if (isItemAuth)
                     {
                         // Inbound item is authoritative: Merge all provisional groups into lowest id
-                        int winnerId = provMatches.Min();
-                        var winner = _groups[winnerId];
-                        var provLosers = provMatches.Where(id => id != winnerId).ToList();
-
-                        foreach (var loserId in provLosers)
-                        {
-                            if (_groups.Remove(loserId, out var loser))
-                            {
-                                AbsorbLoserGroup(winner, loser, deletedGroupIds, remappedGroups, keysToSave);
-                            }
-                        }
-
+                        var winner = _groups[provMatches.Min()];
+                        candidateKeys = MergeInto(winner, provMatches, item, candidateKeys, deletedGroupIds, remappedGroups, keysToSave);
                         winner.IsProvisional = 0; // cleared
                         AttachItemToGroupRecord(winner, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                     }
                     else
                     {
                         // Fuzzy link only: attach to lowest provisional group without merging others
-                        int targetId = provMatches.Min();
-                        var target = _groups[targetId];
+                        var target = _groups[provMatches.Min()];
 
                         // Group Size Cap Guard (M6 & R4.Minor): cap fuzzy attach at 4 * serverCount
-                        int maxGroupCap = 4 * Math.Max(2, _connectedServerCount);
                         if (target.VersionCount >= maxGroupCap)
                         {
-                            NocturneLogger.Warn("ConcurrentDedupIndex", $"Fuzzy attach rejected: group {targetId} reached cap of {target.VersionCount} versions. Creating new group for '{item.Name}'.");
-
-                            int newGid = _nextGroupId++;
-                            var newGroup = new DedupGroupRecord
-                            {
-                                GroupId = newGid,
-                                ItemType = item.Type ?? "Movie",
-                                PrimaryItemId = item.Id,
-                                PrimaryServerId = item.ServerId ?? string.Empty,
-                                PrimaryScore = score,
-                                IsProvisional = 1,
-                                VersionCount = 1,
-                                Name = item.Name,
-                                SortName = item.SortName,
-                                Year = item.ProductionYear,
-                                Overview = item.Overview,
-                                ImageTag = item.ImageTag,
-                                ImageItemId = !string.IsNullOrEmpty(item.ImageTag) ? item.Id : null,
-                                ImageServerId = !string.IsNullOrEmpty(item.ImageTag) ? item.ServerId : null,
-                                BackdropTag = item.BackdropTag,
-                                BackdropItemId = !string.IsNullOrEmpty(item.BackdropTag) ? item.Id : null,
-                                BackdropServerId = !string.IsNullOrEmpty(item.BackdropTag) ? item.ServerId : null,
-                                TmdbKey = itemTmdbKey,
-                                CommunityRating = item.CommunityRating,
-                                MaxHeight = height > 0 ? height : null,
-                                Has4k = is4k,
-                                MaxBitrate = bitrate > 0 ? bitrate : null,
-                                AudioFormats = audio,
-                                IsDirty = true
-                            };
-                            newGroup.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
-                            _groups[newGid] = newGroup;
-
-                            foreach (var ck in candidateKeys)
-                            {
-                                _keyToGroup[ck.Key] = (newGid, ck.IsAuthoritative);
-                                newGroup.Keys.Add(ck.Key);
-                                keysToSave.Add((ck.Key, newGid, ck.IsAuthoritative));
-                            }
-
-                            item.DedupGroupId = newGid.ToString();
-                            itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, newGid));
-                            dirtyGroups.Add(newGroup);
+                            NocturneLogger.Warn("ConcurrentDedupIndex", $"Fuzzy attach rejected: group {target.GroupId} reached cap of {target.VersionCount} versions. Creating new group for '{item.Name}'.");
+                            CreateGroup(item, candidateKeys.Where(k => k.IsAuthoritative).DefaultIfEmpty(IdentityKey(item)).ToList(), score, height, bitrate, is4k, audio, itemTmdbKey, keysToSave, itemAssignments, dirtyGroups);
                         }
                         else
                         {
@@ -465,12 +646,17 @@ public class ConcurrentDedupIndex
                     continue;
                 }
 
-                // If only authMatches exist but none were auth-linked, attach to lowest auth group (remake guard)
-                if (authMatches.Count > 0)
+                // Only authoritative groups matched, all through fuzzy keys. Conflicting groups were already
+                // removed above; the size cap applies here as on the provisional path (C5).
+                var fuzzyTarget = _groups[authMatches.Min()];
+                if (fuzzyTarget.VersionCount >= maxGroupCap)
                 {
-                    int targetId = authMatches.Min();
-                    var target = _groups[targetId];
-                    AttachItemToGroupRecord(target, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
+                    NocturneLogger.Warn("ConcurrentDedupIndex", $"Fuzzy attach rejected: group {fuzzyTarget.GroupId} reached cap of {fuzzyTarget.VersionCount} versions. Creating new group for '{item.Name}'.");
+                    CreateGroup(item, candidateKeys.Where(k => k.IsAuthoritative).DefaultIfEmpty(IdentityKey(item)).ToList(), score, height, bitrate, is4k, audio, itemTmdbKey, keysToSave, itemAssignments, dirtyGroups);
+                }
+                else
+                {
+                    AttachItemToGroupRecord(fuzzyTarget, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                 }
             }
         }
@@ -527,21 +713,20 @@ public class ConcurrentDedupIndex
         var type = item.Type ?? string.Empty;
         if (string.Equals(type, "Movie", StringComparison.OrdinalIgnoreCase))
         {
-            if (!string.IsNullOrEmpty(item.TmdbId)) return $"tmdb:movie:{item.TmdbId}";
+            if (IsValidProviderId("Tmdb", item.TmdbId)) return $"tmdb:movie:{item.TmdbId}";
         }
         else if (string.Equals(type, "Series", StringComparison.OrdinalIgnoreCase))
         {
-            if (!string.IsNullOrEmpty(item.TmdbId)) return $"tmdb:tv:{item.TmdbId}";
+            if (IsValidProviderId("Tmdb", item.TmdbId)) return $"tmdb:tv:{item.TmdbId}";
         }
         else if (string.Equals(type, "Episode", StringComparison.OrdinalIgnoreCase))
         {
-            if (!string.IsNullOrEmpty(item.SeriesTmdbId))
+            if (IsValidProviderId("Tmdb", item.SeriesTmdbId))
             {
-                int season = item.ParentIndexNumber ?? 1;
-                int ep = item.IndexNumber ?? 0;
-                return $"tmdb:tv:{item.SeriesTmdbId}:s{season:D2}e{ep:D2}";
+                if (!item.ParentIndexNumber.HasValue || !item.IndexNumber.HasValue) return null;
+                return $"tmdb:tv:{item.SeriesTmdbId}:s{item.ParentIndexNumber.Value:D2}e{item.IndexNumber.Value:D2}";
             }
-            else if (!string.IsNullOrEmpty(item.TmdbId))
+            else if (IsValidProviderId("Tmdb", item.TmdbId))
             {
                 return $"tmdb:movie:{item.TmdbId}";
             }
@@ -669,12 +854,8 @@ public class ConcurrentDedupIndex
             UpdatePrimary(target, item, score);
         }
 
-        foreach (var ck in candidateKeys)
-        {
-            target.Keys.Add(ck.Key);
-            _keyToGroup[ck.Key] = (target.GroupId, ck.IsAuthoritative);
-            keysToSave.Add((ck.Key, target.GroupId, ck.IsAuthoritative));
-        }
+        ClaimKeys(target, candidateKeys, keysToSave);
+        RecordEvidence(target, item, keysToSave);
 
         item.DedupGroupId = target.GroupId.ToString();
         itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, target.GroupId));

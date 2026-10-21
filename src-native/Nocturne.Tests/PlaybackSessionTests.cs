@@ -222,6 +222,27 @@ public class PlaybackSessionTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultSession_CascadesOnlyOnGroupsBuiltByTheGuardedEngine()
+    {
+        var (a, _) = GroupedAcrossServers();
+
+        var legacy = new PlaybackSession(_db); // groups present, no engine marker: built by the earlier engine
+        legacy.Begin(a, _client, "ms1", 0);
+        legacy.OnPosition(3590);
+        await legacy.FinalizeAsync(PlaybackStopReason.EndOfFile);
+        Assert.False(_db.GetUserData("raptor", "dune_b")!.Played);
+        Assert.Empty(_db.GetPendingSiblingWrites(10));
+
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        var guarded = new PlaybackSession(_db);
+        guarded.Begin(a, _client, "ms1", 0);
+        guarded.OnPosition(3590);
+        await guarded.FinalizeAsync(PlaybackStopReason.EndOfFile);
+        Assert.True(_db.GetUserData("raptor", "dune_b")!.Played);
+        Assert.Single(_db.GetPendingSiblingWrites(10));
+    }
+
+    [Fact]
     public async Task SiblingDrain_KeepsFailedWrites_AndRemovesAcceptedOnes()
     {
         _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 0, markPlayed: true);

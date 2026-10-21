@@ -6,9 +6,11 @@ namespace Nocturne.Core.Services;
 public static class FeatureFlags
 {
     // Sibling cascade: a completion / resume / Remove-from-CW on one version is also written to every other
-    // version in its dedup group (locally and, via sibling_write_queue, on the other servers). Off until the
-    // dedup grouping is trustworthy: with over-merged groups one completion rewrites unrelated titles.
-    public static readonly bool SiblingCascade = false;
+    // version in its dedup group (locally and, via sibling_write_queue, on the other servers). Engaged only once
+    // the groups were built by the conflict-guarded engine (a rebuild, or a cache populated from empty): groups
+    // left by the earlier engine are over-merged, and one completion would rewrite unrelated titles.
+    public static bool SiblingCascade(DatabaseService db) =>
+        db.GetMigrationState(ConcurrentDedupIndex.EngineMarkerKey) == ConcurrentDedupIndex.EngineVersion;
 }
 
 public enum PlaybackStopReason
@@ -30,7 +32,7 @@ public sealed class PlaybackSession
     private static readonly TimeSpan ProgressReportInterval = TimeSpan.FromSeconds(10);
 
     private readonly DatabaseService _db;
-    private readonly bool _siblingCascade;
+    private readonly Func<bool> _siblingCascade;
     private readonly Func<DateTime> _utcNow;
     private readonly object _gate = new();
 
@@ -41,9 +43,11 @@ public sealed class PlaybackSession
     private double _durationSeconds;
     private DateTime _lastProgressReportUtc;
 
-    public PlaybackSession(DatabaseService db) : this(db, FeatureFlags.SiblingCascade, null) { }
+    public PlaybackSession(DatabaseService db) : this(db, () => FeatureFlags.SiblingCascade(db), null) { }
 
-    public PlaybackSession(DatabaseService db, bool siblingCascade, Func<DateTime>? utcNow)
+    public PlaybackSession(DatabaseService db, bool siblingCascade, Func<DateTime>? utcNow) : this(db, () => siblingCascade, utcNow) { }
+
+    private PlaybackSession(DatabaseService db, Func<bool> siblingCascade, Func<DateTime>? utcNow)
     {
         _db = db;
         _siblingCascade = siblingCascade;
@@ -126,6 +130,7 @@ public sealed class PlaybackSession
             NocturneLogger.Warn("PlaybackSession", $"Stop report for {item.Id} was not accepted by '{serverId}'");
 
         var groupId = long.TryParse(item.DedupGroupId, out var gid) && gid > 0 ? gid : 0;
+        var cascade = groupId > 0 && _siblingCascade();
 
         if (completed)
         {
@@ -139,7 +144,7 @@ public sealed class PlaybackSession
             }
 
             _db.MarkLocalItemPlayed(serverId, item.Id);
-            if (_siblingCascade && groupId > 0)
+            if (cascade && groupId > 0)
             {
                 _db.MarkLocalGroupPlayed(groupId);
                 EnqueueOtherServerSiblings(groupId, item.ServerId, 0, markPlayed: true);
@@ -156,7 +161,7 @@ public sealed class PlaybackSession
 
             _db.UpdateLocalPlaybackProgress(serverId, item.Id, positionTicks, false, runtimeTicks > 0 ? runtimeTicks : null);
             _db.UpdatePlaybackProgress(item.Id, serverId, positionTicks);
-            if (_siblingCascade && groupId > 0)
+            if (cascade && groupId > 0)
                 EnqueueOtherServerSiblings(groupId, item.ServerId, positionTicks, markPlayed: false);
         }
 

@@ -211,6 +211,74 @@ public class DatabaseServiceTests : IDisposable
     }
 
     [Fact]
+    public void CachedItemsChunk_PagesByRowIdWithoutGapsOrRepeats()
+    {
+        for (int i = 1; i <= 5; i++)
+            _db.UpsertItem(new EmbyItem { Id = $"m{i}", Name = $"Movie {i}", Type = "Movie" }, "s1");
+        _db.UpsertItem(new EmbyItem { Id = "box", Name = "Box", Type = "BoxSet" }, "s1");
+
+        var seen = new List<string>();
+        long after = 0;
+        while (true)
+        {
+            var (items, last) = _db.GetCachedItemsChunk(after, 2);
+            if (last == after) break;
+            seen.AddRange(items.Select(i => i.Id));
+            after = last;
+        }
+
+        Assert.Equal(new[] { "m1", "m2", "m3", "m4", "m5" }, seen);
+    }
+
+    [Fact]
+    public void RebuildIndex_RemapsLegacyGroupColumn_SoSiblingLookupsStayInTheGroup()
+    {
+        EmbyItem M(string id, string srv, string tmdb) => new() { Id = id, ServerId = srv, Name = "Movie " + tmdb, Type = "Movie", ProviderIds = new() { { "Tmdb", tmdb } } };
+        var a = M("a", "s1", "100"); var b = M("b", "s2", "100");
+        var c = M("c", "s1", "200"); var d = M("d", "s2", "200");
+        foreach (var it in new[] { a, b, c, d }) _db.UpsertItem(it, it.ServerId!);
+
+        // Incremental numbering: c/d get group 1, a/b group 2. The rebuild walks rowid order and flips them.
+        var index = new ConcurrentDedupIndex();
+        index.ProcessBatch(new List<EmbyItem> { c, d }, _db);
+        index.ProcessBatch(new List<EmbyItem> { a, b }, _db);
+        Assert.Equal("1", c.DedupGroupId);
+
+        new DedupEngine().RebuildIndex(_db);
+
+        // Before the fix c/d kept dedup_group_id "1" and joined a/b here.
+        var versions = _db.GetGroupVersions("1").Select(v => v.Id).OrderBy(x => x).ToList();
+        Assert.Equal(new[] { "a", "b" }, versions);
+    }
+
+    [Fact]
+    public void EngineMarker_IsSetByARebuildOrAnEmptyLoad_NotByLoadingExistingGroups()
+    {
+        string? Marker(DatabaseService db) => db.GetMigrationState(ConcurrentDedupIndex.EngineMarkerKey);
+
+        var a = new EmbyItem { Id = "a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
+        _db.UpsertItem(a, "s1");
+        new ConcurrentDedupIndex().ProcessBatch(new List<EmbyItem> { a }, _db); // stands in for groups left by the earlier engine
+        new ConcurrentDedupIndex().InitializeFromDb(_db);
+        Assert.Null(Marker(_db));
+
+        new DedupEngine().RebuildIndex(_db);
+        Assert.Equal(ConcurrentDedupIndex.EngineVersion, Marker(_db));
+
+        var freshPath = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var fresh = new DatabaseService(freshPath);
+            new ConcurrentDedupIndex().InitializeFromDb(fresh);
+            Assert.Equal(ConcurrentDedupIndex.EngineVersion, Marker(fresh));
+        }
+        finally
+        {
+            try { File.Delete(freshPath); } catch { }
+        }
+    }
+
+    [Fact]
     public void SiblingWriteQueue_EnqueueDrainAndRemove_WorksReliably()
     {
         _db.EnqueueSiblingPlaybackWrite("srv_b", "item_999", 500_000_000, false);

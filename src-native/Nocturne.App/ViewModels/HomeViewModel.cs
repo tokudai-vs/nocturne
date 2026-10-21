@@ -398,7 +398,7 @@ public class HomeViewModel : BaseViewModel
             await client.RemoveFromResumeAsync(item.Id);
             _db.ClearResumeProgress(item.Id, item.ServerId);
 
-            if (FeatureFlags.SiblingCascade && long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
+            if (FeatureFlags.SiblingCascade(_db) && long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
             {
                 foreach (var sib in _db.GetGroupVersions(gid.ToString()))
                 {

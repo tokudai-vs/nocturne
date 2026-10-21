@@ -267,14 +267,15 @@ public class DedupEngine
                 ) WITHOUT ROWID;
             ");
 
-            int offset = 0;
+            long afterRowId = 0;
             const int chunkSize = 5000;
             while (true)
             {
-                var batch = db.GetCachedItemsChunk(offset, chunkSize);
-                if (batch.Count == 0) break;
+                var (batch, lastRowId) = db.GetCachedItemsChunk(afterRowId, chunkSize);
+                if (lastRowId == afterRowId) break;
+                dedupIndex.ResolveSeriesProviderIds(batch, db);
                 dedupIndex.ProcessBatch(batch, null);
-                offset += batch.Count;
+                afterRowId = lastRowId;
             }
 
             db.SaveRebuildDedupState(dedupIndex);
@@ -283,6 +284,8 @@ public class DedupEngine
             dedupIndex.ProcessBatch(unmapped, db);
         });
 
+        db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        NocturneLogger.Info("DedupEngine", $"Rebuild complete: {dedupIndex.TotalGroupsCount} groups, {dedupIndex.MultiVersionGroupsCount} multi-version, {dedupIndex.ConflictsRefused} merges refused on conflicting ids.");
         return dedupIndex.MultiVersionGroupsCount;
     }
 }

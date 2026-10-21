@@ -918,6 +918,22 @@ public class DatabaseService : IDisposable
         }
     }
 
+    // ProviderIds of a cached Series row (same server), without deserializing the whole item.
+    public Dictionary<string, string>? GetSeriesProviderIds(string serverId, string seriesId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT json_extract(json_data, '$.ProviderIds') FROM cached_items WHERE id = $id AND server_id = $srv AND type = 'Series';";
+            cmd.Parameters.AddWithValue("$id", seriesId);
+            cmd.Parameters.AddWithValue("$srv", serverId);
+            return cmd.ExecuteScalar() is string json && json.Length > 2
+                ? JsonSerializer.Deserialize<Dictionary<string, string>>(json)
+                : null;
+        }
+    }
+
     public EmbyItem? GetCachedItem(string itemId, string? serverId = null)
     {
         lock (_dbLock)
@@ -2839,6 +2855,31 @@ public class DatabaseService : IDisposable
         }
     }
 
+    public string? GetMigrationState(string key)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT value FROM migration_state WHERE key = $key;";
+            cmd.Parameters.AddWithValue("$key", key);
+            return cmd.ExecuteScalar() as string;
+        }
+    }
+
+    public void SetMigrationState(string key, string value)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "INSERT INTO migration_state (key, value) VALUES ($key, $value) ON CONFLICT(key) DO UPDATE SET value = excluded.value;";
+            cmd.Parameters.AddWithValue("$key", key);
+            cmd.Parameters.AddWithValue("$value", value);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     public void RemoveSiblingWrite(int queueId)
     {
         lock (_dbLock)
@@ -2862,30 +2903,33 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public List<EmbyItem> GetCachedItemsChunk(int offset, int limit)
+    // Keyset paging: the caller passes the last rowid it saw. LIMIT/OFFSET re-read and re-sorted every
+    // preceding row's JSON per chunk (26 s per chunk at offset 600k on the live DB; the rebuild never finished).
+    // NOT INDEXED walks the rowid b-tree in order instead of sorting the type index's matches.
+    public (List<EmbyItem> Items, long LastRowId) GetCachedItemsChunk(long afterRowId, int limit)
     {
         var items = new List<EmbyItem>();
+        long lastRowId = afterRowId;
         lock (_dbLock)
         {
-            if (_connection == null) return items;
+            if (_connection == null) return (items, lastRowId);
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT json_data, server_id FROM cached_items WHERE type IN ('Movie', 'Series', 'Episode') ORDER BY rowid LIMIT $limit OFFSET $offset;";
+            cmd.CommandText = "SELECT rowid, json_data, server_id FROM cached_items NOT INDEXED WHERE rowid > $after AND type IN ('Movie', 'Series', 'Episode') ORDER BY rowid LIMIT $limit;";
             cmd.Parameters.AddWithValue("$limit", limit);
-            cmd.Parameters.AddWithValue("$offset", offset);
+            cmd.Parameters.AddWithValue("$after", afterRowId);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                var json = reader.GetString(0);
-                var sid = reader.GetString(1);
-                var item = JsonSerializer.Deserialize<EmbyItem>(json);
+                lastRowId = reader.GetInt64(0);
+                var item = JsonSerializer.Deserialize<EmbyItem>(reader.GetString(1));
                 if (item != null)
                 {
-                    item.ServerId = sid;
+                    item.ServerId = reader.GetString(2);
                     items.Add(item);
                 }
             }
         }
-        return items;
+        return (items, lastRowId);
     }
 
     public void SaveRebuildDedupState(ConcurrentDedupIndex index)
@@ -3101,9 +3145,15 @@ public class DatabaseService : IDisposable
 
                     -- 3b. Clear unmapped items to NULL so they never hold stale IDs
                     UPDATE cached_items
-                       SET group_id = NULL
+                       SET group_id = NULL, dedup_group_id = NULL
                      WHERE NOT EXISTS (SELECT 1 FROM item_group_rebuild r
                                         WHERE r.id = cached_items.id AND r.server_id = cached_items.server_id);
+
+                    -- 3c. Keep the legacy text column in step: GetGroupVersions and the list queries still match on
+                    -- it, and the rebuild restarts group ids at 1, so a stale value names an unrelated group.
+                    UPDATE cached_items
+                       SET dedup_group_id = CAST(group_id AS TEXT)
+                     WHERE group_id IS NOT NULL;
 
                     DROP TABLE IF EXISTS item_group_rebuild;
 
