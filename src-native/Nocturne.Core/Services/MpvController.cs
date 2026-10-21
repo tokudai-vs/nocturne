@@ -93,6 +93,7 @@ public class MpvController : IDisposable
                 ErrorOccurred?.Invoke("Failed to spawn mpv process.");
                 return;
             }
+            ChildProcessJob.Add(_mpvProcess);
 
             _mpvProcess.EnableRaisingEvents = true;
             _mpvProcess.Exited += (s, e) =>
@@ -247,6 +248,7 @@ public class MpvController : IDisposable
                 ErrorOccurred?.Invoke("Failed to spawn mpv process.");
                 return;
             }
+            ChildProcessJob.Add(_mpvProcess);
 
             _mpvProcess.EnableRaisingEvents = true;
             _mpvProcess.Exited += (s, e) =>

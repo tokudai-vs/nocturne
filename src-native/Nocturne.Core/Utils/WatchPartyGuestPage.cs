@@ -183,7 +183,7 @@ public static class WatchPartyGuestPage
     <p id=""centerMsg"">Reaching the host.</p>
   </div>
 
-  <script src=""https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js""></script>
+  <script src=""/hls.min.js""></script>
   <script>
   (function () {
     var video = document.getElementById('video');
@@ -400,6 +400,12 @@ public static class WatchPartyGuestPage
           lastKnownPosition = msg.position;
           lastHeartbeat = { position: msg.position, localTime: Date.now() };
           break;
+        case 'session_full':
+          // The host's 10-guest cap is met: a terminal state, no reconnect loop.
+          ended = true;
+          showCenter('This watch party is full', ""The host's guest limit has been reached."", false);
+          if (ws) try { ws.close(); } catch (e) {}
+          break;
         case 'session_end':
           ended = true;
           showCenter('Session ended', 'The host has ended this watch party.', false);
@@ -444,6 +450,12 @@ public static class WatchPartyGuestPage
       });
       ws.addEventListener('error', function () {});
     }
+
+    // Report playback position so the host can show how far guests trail it.
+    setInterval(function () {
+      if (sessionState !== 'LIVE' || !ws || ws.readyState !== 1) return;
+      try { ws.send(JSON.stringify({ type: 'position', position: video.currentTime })); } catch (e) {}
+    }, 2000);
 
     showCenter('Connecting…', 'Reaching the host.', true);
     connect();

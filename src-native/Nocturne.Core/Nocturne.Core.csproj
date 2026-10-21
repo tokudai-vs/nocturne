@@ -18,4 +18,9 @@
     <InternalsVisibleTo Include="Nocturne.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- hls.js 1.6.16 (Apache-2.0), copied from node_modules/hls.js/dist: served to Watch Party guests by WatchPartyService. -->
+    <EmbeddedResource Include="Resources\hls.min.js" LogicalName="hls.min.js" />
+  </ItemGroup>
+
 </Project>

@@ -516,6 +516,8 @@
                                             <TextBlock Text="{Binding WatchPartyGuestsText}" Foreground="{DynamicResource NocturneAmberBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                                             <TextBlock Text="•" Margin="8,0" Foreground="#888888" VerticalAlignment="Center" />
                                             <TextBlock Text="{Binding WatchPartyTranscodedText}" Foreground="#AAAAAA" VerticalAlignment="Center" />
+                                            <TextBlock Text="•" Margin="8,0" Foreground="#888888" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding WatchPartyBehindText}" Foreground="#AAAAAA" VerticalAlignment="Center" />
                                         </StackPanel>
 
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">

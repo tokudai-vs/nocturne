@@ -21,8 +21,17 @@ public enum WatchPartySessionState
 
 public class WatchPartyService : IDisposable
 {
+    // The (N+1)th guest is refused at the socket with a session_full frame and close code 1008 (v3.5's rule,
+    // src/main/watchparty-sync-server.ts:86). Fixed, not a setting.
+    public const int MaxGuests = 10;
+
     private readonly WatchPartyBinaryManager _binaryManager;
     private readonly List<WebSocket> _wsClients = new();
+    private readonly Dictionary<WebSocket, double> _guestBehindSec = new();
+    // A WebSocket allows one send at a time. Broadcasts are fire-and-forget from the mpv event thread and the
+    // heartbeat timer; overlapping sends made the server abort the guest's connection (guests dropped and
+    // reconnected every 15-25 s). One gate per socket serialises them.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WebSocket, SemaphoreSlim> SendGates = new();
     private HttpListener? _listener;
     private Process? _ffmpegProcess;
     private Process? _tunnelProcess;
@@ -40,7 +49,10 @@ public class WatchPartyService : IDisposable
     public string? TunnelUrl { get; private set; }
     public double TranscodedSeconds { get; private set; }
     public int GuestCount { get; private set; }
+    // Stream time: seconds into the HLS output, which starts at StartOffsetSec of the movie.
     public double CurrentPosition { get; private set; }
+    // How far the slowest guest trails the host, from the positions guests report every 2 s. 0 with no reports.
+    public double GuestsBehindSec { get; private set; }
     public bool IsPlaying { get; private set; }
     public string? ErrorMessage { get; private set; }
 
@@ -50,6 +62,7 @@ public class WatchPartyService : IDisposable
     public event EventHandler<int>? GuestCountChanged;
     public event EventHandler<double>? TranscodeProgressChanged;
     public event EventHandler<string>? TunnelUrlResolved;
+    public event EventHandler<double>? GuestsBehindChanged;
 
     public WatchPartyService(WatchPartyBinaryManager binaryManager)
     {
@@ -63,13 +76,27 @@ public class WatchPartyService : IDisposable
         return _binaryManager.EnsureBinariesAsync(progress, ct);
     }
 
-    public async Task<string> StartSessionAsync(
+    // publicLink: false = local-only (http://127.0.0.1, this PC), no cloudflared tunnel.
+    public Task<string> StartSessionAsync(
         string title,
         string streamUrl,
         double durationSec,
         double startOffsetSec = 0,
         int targetHeight = 1080,
+        bool publicLink = true,
         CancellationToken ct = default)
+        => StartSessionAsync(title, streamUrl, durationSec, startOffsetSec, targetHeight, publicLink, transcode: true, ct);
+
+    // transcode: false serves only the guest page and sync socket (tests).
+    internal async Task<string> StartSessionAsync(
+        string title,
+        string streamUrl,
+        double durationSec,
+        double startOffsetSec,
+        int targetHeight,
+        bool publicLink,
+        bool transcode,
+        CancellationToken ct)
     {
         if (IsActive)
         {
@@ -82,7 +109,7 @@ public class WatchPartyService : IDisposable
 
         try
         {
-            if (!_binaryManager.IsReady())
+            if ((transcode || publicLink) && !_binaryManager.IsReady())
             {
                 var ready = await _binaryManager.EnsureBinariesAsync(null, ct);
                 if (!ready)
@@ -96,7 +123,8 @@ public class WatchPartyService : IDisposable
             DurationSec = durationSec;
             StartOffsetSec = startOffsetSec;
             StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            CurrentPosition = startOffsetSec;
+            CurrentPosition = 0;
+            GuestsBehindSec = 0;
             IsPlaying = false;
             TranscodedSeconds = 0;
 
@@ -115,35 +143,30 @@ public class WatchPartyService : IDisposable
             // Run listener pump in background
             _ = RunHttpServerAsync(_listener);
 
-            // Spawn FFmpeg transcoder
-            StartTranscoder(streamUrl, targetHeight, startOffsetSec);
+            if (transcode) StartTranscoder(streamUrl, targetHeight, startOffsetSec);
 
-            // Spawn Cloudflared tunnel
-            var tunnelTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            StartTunnel(port, tunnelTcs);
-
-            // Wait for tunnel URL with timeout (30s)
-            var completedTask = await Task.WhenAny(tunnelTcs.Task, Task.Delay(30000, ct));
-            if (completedTask == tunnelTcs.Task)
+            if (publicLink)
             {
+                var tunnelTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                StartTunnel(port, tunnelTcs);
+
+                // A 127.0.0.1 "share link" is useless to remote guests: no tunnel URL is a failed start.
+                var completedTask = await Task.WhenAny(tunnelTcs.Task, Task.Delay(30000, ct));
+                if (completedTask != tunnelTcs.Task)
+                    throw new InvalidOperationException("The public link could not be opened: cloudflared reported no tunnel URL within 30 seconds.");
                 TunnelUrl = await tunnelTcs.Task;
                 TunnelUrlResolved?.Invoke(this, TunnelUrl);
-            }
-            else
-            {
-                NocturneLogger.Warn("WatchPartyService", "Tunnel URL resolution timed out, continuing with LocalUrl fallback");
-                TunnelUrl = LocalUrl;
             }
 
             State = WatchPartySessionState.Waiting;
             StateChanged?.Invoke(this, State);
 
-            // Setup 1-second heartbeat timer
+            // 1-second heartbeat of the last known stream position
             _heartbeatTimer = new Timer(_ =>
             {
                 if (IsActive && _wsClients.Count > 0)
                 {
-                    BroadcastHeartbeat(CurrentPosition, IsPlaying);
+                    SendPosition("heartbeat");
                 }
             }, null, 1000, 1000);
 
@@ -167,57 +190,55 @@ public class WatchPartyService : IDisposable
         {
             State = WatchPartySessionState.Live;
             StateChanged?.Invoke(this, State);
-            BroadcastPlay(CurrentPosition);
+            IsPlaying = true;
+            SendPosition("play");
         }
     }
 
-    public void BroadcastPlay(double position)
+    // The host reports mpv's movie position. ffmpeg seeks with -ss before -i, so the HLS stream's t=0 is
+    // StartOffsetSec of the movie: guests are sent stream time. Sending movie time put every guest of a party
+    // started from a resume point StartOffsetSec ahead, past the transcoded part.
+    internal double ToStreamTime(double moviePosition) => Math.Max(0, moviePosition - StartOffsetSec);
+
+    public void BroadcastPlay(double moviePosition)
     {
         IsPlaying = true;
-        CurrentPosition = position;
-        _ = BroadcastAsync(new
-        {
-            type = "play",
-            position,
-            serverTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-        });
+        CurrentPosition = ToStreamTime(moviePosition);
+        SendPosition("play");
     }
 
-    public void BroadcastPause(double position)
+    public void BroadcastPause(double moviePosition)
     {
         IsPlaying = false;
-        CurrentPosition = position;
-        _ = BroadcastAsync(new
-        {
-            type = "pause",
-            position,
-            serverTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-        });
+        CurrentPosition = ToStreamTime(moviePosition);
+        SendPosition("pause");
     }
 
-    public void BroadcastSeek(double position)
+    public void BroadcastSeek(double moviePosition)
     {
-        CurrentPosition = position;
-        _ = BroadcastAsync(new
-        {
-            type = "seek",
-            position,
-            serverTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-        });
+        CurrentPosition = ToStreamTime(moviePosition);
+        SendPosition("seek");
     }
 
-    public void BroadcastHeartbeat(double position, bool playing)
+    // Called on every mpv position event: records the position; the 1 s timer sends the heartbeat.
+    public void BroadcastHeartbeat(double moviePosition, bool playing)
     {
         IsPlaying = playing;
-        CurrentPosition = position;
+        CurrentPosition = ToStreamTime(moviePosition);
+    }
+
+    private void SendPosition(string type)
+    {
         _ = BroadcastAsync(new
         {
-            type = "heartbeat",
-            position,
+            type,
+            position = CurrentPosition,
             serverTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         });
     }
 
+    // ffmpeg goes first so it stops pulling from Emby whatever happens next; guests get session_end (bounded
+    // wait) while the tunnel still carries it; then cloudflared and the server. ChildProcessJob covers a crash.
     public async Task StopSessionAsync()
     {
         if (State == WatchPartySessionState.Idle && _listener == null && _ffmpegProcess == null) return;
@@ -228,22 +249,32 @@ public class WatchPartyService : IDisposable
         _heartbeatTimer?.Dispose();
         _heartbeatTimer = null;
 
+        Kill(ref _ffmpegProcess, graceful: true);
+
         try
         {
-            await BroadcastAsync(new { type = "session_end" });
+            await Task.WhenAny(BroadcastAsync(new { type = "session_end" }), Task.Delay(1500));
         }
         catch { }
 
+        Kill(ref _tunnelProcess, graceful: false);
+
+        // Snapshot, then dispose outside the lock: disposing runs the socket's receive-loop finally inline, which
+        // removes it from _wsClients ("Collection was modified" stopped the teardown half-way).
+        List<WebSocket> clients;
         lock (_wsClients)
         {
-            foreach (var ws in _wsClients)
-            {
-                try { ws.Dispose(); } catch { }
-            }
+            clients = _wsClients.ToList();
             _wsClients.Clear();
+            _guestBehindSec.Clear();
+        }
+        foreach (var ws in clients)
+        {
+            try { ws.Dispose(); } catch { }
         }
         GuestCount = 0;
         GuestCountChanged?.Invoke(this, 0);
+        GuestsBehindSec = 0;
 
         try
         {
@@ -252,37 +283,6 @@ public class WatchPartyService : IDisposable
         }
         catch { }
         _listener = null;
-
-        // Terminate FFmpeg
-        if (_ffmpegProcess != null && !_ffmpegProcess.HasExited)
-        {
-            try
-            {
-                _ffmpegProcess.StandardInput.WriteLine("q");
-                if (!_ffmpegProcess.WaitForExit(1000))
-                {
-                    _ffmpegProcess.Kill(entireProcessTree: true);
-                }
-            }
-            catch
-            {
-                try { _ffmpegProcess.Kill(entireProcessTree: true); } catch { }
-            }
-            _ffmpegProcess.Dispose();
-            _ffmpegProcess = null;
-        }
-
-        // Terminate Cloudflared
-        if (_tunnelProcess != null && !_tunnelProcess.HasExited)
-        {
-            try
-            {
-                _tunnelProcess.Kill(entireProcessTree: true);
-            }
-            catch { }
-            _tunnelProcess.Dispose();
-            _tunnelProcess = null;
-        }
 
         // Clean up temp session files
         if (!string.IsNullOrEmpty(_sessionDir) && Directory.Exists(_sessionDir))
@@ -301,6 +301,32 @@ public class WatchPartyService : IDisposable
         SessionId = null;
         Title = null;
         StateChanged?.Invoke(this, State);
+    }
+
+    private static void Kill(ref Process? process, bool graceful)
+    {
+        if (process == null) return;
+        try
+        {
+            if (!process.HasExited)
+            {
+                if (graceful)
+                {
+                    try { process.StandardInput.WriteLine("q"); } catch { }
+                    if (!process.WaitForExit(1000)) process.Kill(entireProcessTree: true);
+                }
+                else
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+        }
+        catch
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+        }
+        process.Dispose();
+        process = null;
     }
 
     private void StartTranscoder(string sourceUrl, int targetHeight, double startOffsetSec)
@@ -351,6 +377,7 @@ public class WatchPartyService : IDisposable
         };
 
         _ffmpegProcess.Start();
+        ChildProcessJob.Add(_ffmpegProcess);
         _ffmpegProcess.BeginErrorReadLine();
         NocturneLogger.Info("WatchPartyService", $"FFmpeg transcoder spawned with pid={_ffmpegProcess.Id}");
     }
@@ -385,6 +412,7 @@ public class WatchPartyService : IDisposable
         _tunnelProcess.ErrorDataReceived += (s, e) => { if (e.Data != null) ProcessLine(e.Data); };
 
         _tunnelProcess.Start();
+        ChildProcessJob.Add(_tunnelProcess);
         _tunnelProcess.BeginOutputReadLine();
         _tunnelProcess.BeginErrorReadLine();
         NocturneLogger.Info("WatchPartyService", $"Cloudflared tunnel spawned with pid={_tunnelProcess.Id}");
@@ -431,6 +459,18 @@ public class WatchPartyService : IDisposable
             }
 
             var path = ctx.Request.Url?.AbsolutePath?.TrimStart('/') ?? "";
+            if (path == "hls.min.js")
+            {
+                // Bundled (hls.js 1.6.16, Apache-2.0, the version v3.5 ships) instead of loading it from jsDelivr.
+                using var js = typeof(WatchPartyService).Assembly.GetManifestResourceStream("hls.min.js")!;
+                ctx.Response.ContentType = "application/javascript; charset=utf-8";
+                ctx.Response.Headers.Add("Cache-Control", "max-age=86400");
+                ctx.Response.ContentLength64 = js.Length;
+                await js.CopyToAsync(ctx.Response.OutputStream);
+                ctx.Response.Close();
+                return;
+            }
+
             if (string.IsNullOrEmpty(path) || path == "index.html")
             {
                 var bytes = Encoding.UTF8.GetBytes(WatchPartyGuestPage.Html);
@@ -479,9 +519,27 @@ public class WatchPartyService : IDisposable
 
     private async Task HandleWebSocketClientAsync(WebSocket ws)
     {
-        lock (_wsClients) _wsClients.Add(ws);
-        GuestCount = _wsClients.Count;
+        bool admitted;
+        lock (_wsClients)
+        {
+            admitted = _wsClients.Count < MaxGuests;
+            if (admitted) _wsClients.Add(ws);
+            GuestCount = _wsClients.Count;
+        }
+        if (!admitted)
+        {
+            NocturneLogger.Warn("WatchPartyService", $"Refusing a guest: the {MaxGuests}-guest cap is reached.");
+            try
+            {
+                await SendToSocketAsync(ws, JsonSerializer.Serialize(new { type = "session_full" }));
+                await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, "session_full", CancellationToken.None);
+            }
+            catch { }
+            ws.Dispose();
+            return;
+        }
         GuestCountChanged?.Invoke(this, GuestCount);
+        NocturneLogger.Info("WatchPartyService", $"Guest joined ({GuestCount}/{MaxGuests}).");
 
         try
         {
@@ -491,8 +549,7 @@ public class WatchPartyService : IDisposable
                 type = "session_info",
                 title = Title,
                 durationSec = DurationSec,
-                sessionStartedAt = StartedAtMs,
-                startOffsetSec = StartOffsetSec
+                sessionStartedAt = StartedAtMs
             });
             await SendToSocketAsync(ws, info);
 
@@ -516,16 +573,50 @@ public class WatchPartyService : IDisposable
                     await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
                     break;
                 }
+                if (result.MessageType == WebSocketMessageType.Text && result.EndOfMessage)
+                    OnGuestMessage(ws, Encoding.UTF8.GetString(buffer, 0, result.Count));
             }
         }
         catch { }
         finally
         {
-            lock (_wsClients) _wsClients.Remove(ws);
+            lock (_wsClients)
+            {
+                _wsClients.Remove(ws);
+                _guestBehindSec.Remove(ws);
+                GuestCount = _wsClients.Count;
+            }
             try { ws.Dispose(); } catch { }
-            GuestCount = _wsClients.Count;
             GuestCountChanged?.Invoke(this, GuestCount);
+            UpdateGuestsBehind();
+            NocturneLogger.Info("WatchPartyService", $"Guest left ({GuestCount}/{MaxGuests}).");
         }
+    }
+
+    // Guests report {"type":"position","position":<stream seconds>} every 2 s while live.
+    private void OnGuestMessage(WebSocket ws, string text)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("type", out var type) && type.GetString() == "position"
+                && root.TryGetProperty("position", out var pos) && pos.TryGetDouble(out var guestPos))
+            {
+                lock (_wsClients) _guestBehindSec[ws] = Math.Max(0, CurrentPosition - guestPos);
+                UpdateGuestsBehind();
+            }
+        }
+        catch (JsonException) { }
+    }
+
+    private void UpdateGuestsBehind()
+    {
+        double behind;
+        lock (_wsClients) behind = _guestBehindSec.Count > 0 ? _guestBehindSec.Values.Max() : 0;
+        if (Math.Abs(behind - GuestsBehindSec) < 0.5) return;
+        GuestsBehindSec = behind;
+        GuestsBehindChanged?.Invoke(this, behind);
     }
 
     private async Task BroadcastAsync(object message)
@@ -549,9 +640,18 @@ public class WatchPartyService : IDisposable
 
     private static async Task SendToSocketAsync(WebSocket ws, string json)
     {
-        if (ws.State != WebSocketState.Open) return;
-        var bytes = Encoding.UTF8.GetBytes(json);
-        await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+        var gate = SendGates.GetValue(ws, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
+        try
+        {
+            if (ws.State != WebSocketState.Open) return;
+            var bytes = Encoding.UTF8.GetBytes(json);
+            await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private static int GetAvailablePort()
@@ -563,10 +663,13 @@ public class WatchPartyService : IDisposable
         return port;
     }
 
+    // App exit: the helper processes are killed synchronously before anything else is attempted.
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        Kill(ref _ffmpegProcess, graceful: false);
+        Kill(ref _tunnelProcess, graceful: false);
         _ = StopSessionAsync();
     }
 }

@@ -111,6 +111,14 @@ public class DetailViewModel : BaseViewModel
                 OnPropertyChanged(nameof(WatchPartyTunnelUrl));
             });
         };
+
+        _watchParty.GuestsBehindChanged += (s, sec) =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                WatchPartyBehindText = sec >= 1 ? $"Guests are {sec:F0} s behind" : "Guests in sync";
+            });
+        };
     }
 
     public EmbyItem? Item
@@ -836,6 +844,13 @@ public class DetailViewModel : BaseViewModel
         set => SetProperty(ref _watchPartyGuestsText, value);
     }
 
+    private string _watchPartyBehindText = "Guests in sync";
+    public string WatchPartyBehindText
+    {
+        get => _watchPartyBehindText;
+        set => SetProperty(ref _watchPartyBehindText, value);
+    }
+
     public string WatchPartyTranscodedText
     {
         get => _watchPartyTranscodedText;
@@ -872,7 +887,8 @@ public class DetailViewModel : BaseViewModel
 
         IsWatchPartyModalOpen = true;
 
-        if (!_watchParty.AreBinariesReady())
+        // Hashes ~150 MB of executables against their pinned SHA-256: off the UI thread.
+        if (!await Task.Run(_watchParty.AreBinariesReady))
         {
             IsWatchPartyDownloading = true;
             WatchPartyStatusText = "Downloading FFmpeg and Cloudflared binaries...";
@@ -953,7 +969,12 @@ public class DetailViewModel : BaseViewModel
         }
         catch (Exception ex)
         {
+            // Shown in the modal: a failed start (no tunnel URL, binaries that fail verification) used to only log.
             NocturneLogger.Error("DetailViewModel", "StartWatchPartySessionAsync failed", ex);
+            WatchPartyStatusText = $"Watch Party could not start: {ex.Message}";
+            WatchPartyProgress = 0;
+            IsWatchPartyDownloading = true;
+            IsWatchPartyModalOpen = true;
         }
     }
 

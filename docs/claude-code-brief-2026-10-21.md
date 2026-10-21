@@ -209,7 +209,13 @@ three init tests pass, which proves nothing about the end-to-end path.
 4. Who creates and tears down the Emby transcode/HLS session?
 5. Is the cloudflared tunnel still involved, and is it wired?
 6. **The guest cap: find the line that enforces it.** v3.5's guest cap appeared
-   in the CHANGELOG and the modal and was never enforced anywhere. Do not report
+   in the CHANGELOG and the modal and was never enforced anywhere.
+   *Correction (remediation pass, 2026-10-21): that was true of v3.5.0 only.
+   Current v3.5 enforces the cap at `src/main/watchparty-sync-server.ts:86`
+   (`clients.size >= maxClients` → `session_full`, close 1008), added in commit
+   `2bbfae5`. The unenforced cap is v4's; Stage F adds it
+   (`WatchPartyService.MaxGuests`). No `docs/nocturne-v4-handover.md` exists in
+   the repo; this brief is the only place the claim appeared.* Do not report
    it as present because a limit constant or a modal exists — follow it to the
    code that rejects the (N+1)th guest.
 
