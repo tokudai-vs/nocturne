@@ -115,6 +115,8 @@ public interface ITraktAuthService
     string?                  Username { get; }
     string                   GetActiveClientId();
     string?                  GetAccessToken();
+    string?                  CustomClientId { get; }
+    void                     SetCustomClientId(string? clientId);
     event EventHandler<TraktConnectionState>? StateChanged;
 }
 

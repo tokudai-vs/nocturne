@@ -677,7 +677,6 @@ public class DetailViewModel : BaseViewModel
 
         await _mpv.PlayAsync(streamUrl, playItem.Name, startTicks);
         await clientToUse.ReportPlaybackStartAsync(playItem.Id, mediaSourceId, startTicks);
-        await _trakt.ScrobbleStartAsync(playItem, playItem.ProgressPercentage);
         _db.RecordWatchEvent(playItem.Id, srv?.Url ?? clientToUse.BaseUrl, playItem.Name, playItem.Type, (int)((playItem.RunTimeTicks ?? 0) / 10_000_000), playItem.SeriesName, playItem.Genres);
     }
 

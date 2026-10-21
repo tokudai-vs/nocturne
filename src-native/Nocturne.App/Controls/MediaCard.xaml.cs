@@ -203,25 +203,14 @@ public partial class MediaCard : UserControl
         RaiseEvent(new RoutedEventArgs(CardClickEvent, this));
     }
 
-    private async void OnContextMenuPlayClick(object sender, RoutedEventArgs e)
+    // Through the one playback path (owning server, PlaybackSession progress/stop reporting, Trakt queue). This
+    // used to start mpv directly on the active server's client with no session: no stop report, no resume point.
+    private void OnContextMenuPlayClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is EmbyItem item)
         {
-            var mpv = (Application.Current as App)?.Services.GetService<MpvController>();
-            var emby = (Application.Current as App)?.Services.GetService<EmbyClient>();
-            var db = (Application.Current as App)?.Services.GetService<DatabaseService>();
-            var trakt = (Application.Current as App)?.Services.GetService<TraktService>();
-
-            if (mpv != null && emby != null)
-            {
-                var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
-                var streamUrl = emby.GetStreamUrl(item.Id, mediaSourceId);
-                var startTicks = item.UserData?.PlaybackPositionTicks ?? 0;
-
-                await mpv.PlayAsync(streamUrl, item.Name, startTicks);
-                if (trakt != null) await trakt.ScrobbleStartAsync(item, item.ProgressPercentage);
-                db?.RecordWatchEvent(item.Id, emby.BaseUrl, item.Name, item.Type, (int)((item.RunTimeTicks ?? 0) / 10_000_000), item.SeriesName, item.Genres);
-            }
+            var main = (Application.Current as App)?.Services.GetService<MainViewModel>();
+            if (main != null) _ = main.StartPlaybackAsync(item, item.UserData?.PlaybackPositionTicks ?? 0);
         }
     }
 

@@ -534,7 +534,7 @@ public class SettingsViewModel : BaseViewModel
         _traktAutoScrobble = s.TraktAutoScrobble;
         _traktSyncWatchedState = s.TraktSyncWatchedState;
         _traktShowWatchlistInSidebar = s.TraktShowWatchlistInSidebar;
-        _traktClientId = s.TraktClientIdOverride;
+        _traktClientId = _traktAuth.CustomClientId ?? string.Empty;
 
         LoadServers();
         LoadCombinedGroups();
@@ -1484,9 +1484,13 @@ public class SettingsViewModel : BaseViewModel
         get => _traktClientId;
         set
         {
+            // I2: the auth service that connects and scrobbles uses this ID. It was written to the legacy settings
+            // field, which nothing on the live path read. Changing it invalidates tokens minted with the old ID.
             if (SetProperty(ref _traktClientId, value))
             {
-                _settings.Update(s => s.TraktClientIdOverride = value);
+                _traktAuth.SetCustomClientId(value);
+                OnPropertyChanged(nameof(IsTraktConnected));
+                OnPropertyChanged(nameof(TraktStateText));
             }
         }
     }

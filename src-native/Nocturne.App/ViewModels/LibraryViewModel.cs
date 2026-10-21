@@ -413,7 +413,6 @@ public class LibraryViewModel : BaseViewModel
 
         await _mpv.PlayAsync(streamUrl, item.Name, startTicks);
         await client.ReportPlaybackStartAsync(item.Id, mediaSourceId, startTicks);
-        await _trakt.ScrobbleStartAsync(item, item.ProgressPercentage);
         _db.RecordWatchEvent(item.Id, srv?.Url ?? client.BaseUrl, item.Name, item.Type, (int)((item.RunTimeTicks ?? 0) / 10_000_000), item.SeriesName, item.Genres);
     }
 

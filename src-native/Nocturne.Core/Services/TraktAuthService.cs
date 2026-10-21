@@ -15,7 +15,10 @@ namespace Nocturne.Core.Services;
 public class TraktAuthService : ITraktAuthService
 {
     private const string TraktApiBase = "https://api.trakt.tv";
-    private const string BundledClientId = ""; // Bundled Nocturne public client ID
+    // TODO(client-id): the production Trakt client ID goes here. Empty until it is provided: until then only a
+    // custom client ID (Settings -> Trakt -> Client ID, SetCustomClientId) can connect, and RequestDeviceCodeAsync
+    // says so.
+    private const string BundledClientId = "";
 
     private readonly HttpClient _http;
     private readonly DatabaseService _db;
@@ -63,6 +66,8 @@ public class TraktAuthService : ITraktAuthService
             return null;
         }
     }
+
+    public string? CustomClientId => _state.CustomClientId;
 
     public void SetCustomClientId(string? clientId)
     {
@@ -282,6 +287,7 @@ public class TraktAuthService : ITraktAuthService
             grant_type = "refresh_token"
         };
 
+        HttpStatusCode status;
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, "/oauth/token")
@@ -290,6 +296,7 @@ public class TraktAuthService : ITraktAuthService
             };
 
             using var response = await _http.SendAsync(request, ct);
+            status = response.StatusCode;
             if (response.IsSuccessStatusCode)
             {
                 var tokenDto = await response.Content.ReadFromJsonAsync<TraktTokenApiDto>(cancellationToken: ct);
@@ -313,13 +320,19 @@ public class TraktAuthService : ITraktAuthService
         }
         catch (Exception ex)
         {
-            NocturneLogger.Error("TraktAuthService", "Exception during token refresh", ex);
+            // Network down, DNS, timeout, a malformed body: none of it says the tokens are bad. Keep them.
+            NocturneLogger.Warn("TraktAuthService", $"Token refresh failed transiently ({ex.Message}); keeping the current tokens.");
+            return false;
         }
 
-        // Failed refresh is a visible state (§6.3)
-        ClearTokens();
-        SaveState();
-        SetConnectionState(TraktConnectionState.NeedsReconnection);
+        // Only Trakt rejecting the refresh token (400 invalid_grant / 401) ends the session (§6.3); a 5xx or 429 is
+        // transient. Clearing on any failure signed the user out on every network blip.
+        if (status is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)
+        {
+            ClearTokens();
+            SaveState();
+            SetConnectionState(TraktConnectionState.NeedsReconnection);
+        }
         return false;
     }
 
@@ -417,7 +430,7 @@ public class TraktAuthService : ITraktAuthService
             Username = user,
             AccessTokenDpapi = !string.IsNullOrEmpty(accessHex) ? Convert.FromHexString(accessHex) : null,
             RefreshTokenDpapi = !string.IsNullOrEmpty(refreshHex) ? Convert.FromHexString(refreshHex) : null,
-            ExpiresUtc = long.TryParse(expStr, out var expUnix)
+            ExpiresUtc = long.TryParse(expStr, out var expUnix) && expUnix > 0
                 ? DateTimeOffset.FromUnixTimeSeconds(expUnix).UtcDateTime
                 : DateTime.MinValue
         };
@@ -435,7 +448,11 @@ public class TraktAuthService : ITraktAuthService
 
         _db.SetIntegrationState("trakt", "access_token_dpapi", _state.AccessTokenDpapi != null ? Convert.ToHexString(_state.AccessTokenDpapi) : "");
         _db.SetIntegrationState("trakt", "refresh_token_dpapi", _state.RefreshTokenDpapi != null ? Convert.ToHexString(_state.RefreshTokenDpapi) : "");
-        _db.SetIntegrationState("trakt", "expires_utc", ((DateTimeOffset)_state.ExpiresUtc).ToUnixTimeSeconds().ToString());
+        // DateTime.MinValue (no token) is Kind=Unspecified: casting it to DateTimeOffset applies the local offset and
+        // throws on UTC+ machines. "0" means no expiry.
+        _db.SetIntegrationState("trakt", "expires_utc", _state.ExpiresUtc == DateTime.MinValue
+            ? "0"
+            : new DateTimeOffset(DateTime.SpecifyKind(_state.ExpiresUtc, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString());
         _db.SetIntegrationState("trakt", "client_id_used", _state.ClientIdUsedForToken ?? "");
         _db.SetIntegrationState("trakt", "username", _state.Username ?? "");
     }

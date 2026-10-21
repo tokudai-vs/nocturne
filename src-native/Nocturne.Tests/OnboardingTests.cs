@@ -40,7 +40,7 @@ public class OnboardingTests
             using var db = new DatabaseService(Path.Combine(dir, "a.db"));
             var settings = new SettingsService(Path.Combine(dir, SettingsService.SettingsFileName));
             settings.Update(s => s.Servers.Add(new ServerConfig { Id = "v1", Name = "Valkyrie", Url = "http://127.0.0.1:9", AccessToken = "t", UserId = "u" }));
-            var sync = new SyncEngine(new EmbyClient(), db, new DedupEngine(), new TraktService(settings), settings);
+            var sync = new SyncEngine(new EmbyClient(), db, new DedupEngine(), new TraktService(new TraktAuthService(db)), settings);
             var reports = new List<SyncProgressReport>();
             var completed = false;
             sync.ProgressReported += r => { lock (reports) reports.Add(r); };

@@ -23,6 +23,7 @@ public class MainViewModel : BaseViewModel
     private readonly ITraktSyncService _traktSync;
     private readonly ITmdbEnrichmentService _tmdbEnrichment;
     private readonly TraktQueueDrainWorker _traktDrain;
+    private readonly ITraktAuthService _traktAuth;
     private readonly PlaybackSession _session;
 
     private BaseViewModel _currentViewModel;
@@ -87,7 +88,8 @@ public class MainViewModel : BaseViewModel
         ITraktScrobbleService traktScrobble,
         ITraktSyncService traktSync,
         ITmdbEnrichmentService tmdbEnrichment,
-        TraktQueueDrainWorker traktDrain)
+        TraktQueueDrainWorker traktDrain,
+        ITraktAuthService traktAuth)
     {
         _settings = settings;
         _embyClient = embyClient;
@@ -103,6 +105,7 @@ public class MainViewModel : BaseViewModel
         _traktSync = traktSync;
         _tmdbEnrichment = tmdbEnrichment;
         _traktDrain = traktDrain;
+        _traktAuth = traktAuth;
         _session = new PlaybackSession(db);
 
         HomeVM = homeVM;
@@ -902,7 +905,7 @@ public class MainViewModel : BaseViewModel
             // Kick off background loading immediately (cache renders in 0ms, network fetches in background)
             _ = HomeVM.LoadAsync();
             _ = LibraryVM.LoadViewsAsync();
-            _ = _traktSync.PullWatchedAsync(System.Threading.CancellationToken.None);
+            _ = StartTraktAsync();
 
             // Very brief 80ms yield to allow the initial window frame and controls to lay out, then dismiss splash
             await Task.Delay(80);
@@ -930,6 +933,29 @@ public class MainViewModel : BaseViewModel
             OnboardingVM.LoadSavedServers();
             CurrentViewModel = OnboardingVM;
             IsSplashVisible = false;
+        }
+    }
+
+    // I5: refresh the Trakt token at startup (it was only refreshed before a queue drain, so an expired token
+    // stayed "connected" until the first scrobble), then pull watched state.
+    private async Task StartTraktAsync()
+    {
+        try
+        {
+            // One-time move of the legacy settings Client ID into the auth stack that is actually used.
+            var legacyId = _settings.Current.TraktClientIdOverride;
+            if (string.IsNullOrWhiteSpace(_traktAuth.CustomClientId) && !string.IsNullOrWhiteSpace(legacyId))
+            {
+                _traktAuth.SetCustomClientId(legacyId);
+                _settings.Update(s => s.TraktClientIdOverride = null);
+                NocturneLogger.Info("MainViewModel", "Moved the Trakt Client ID from the legacy settings field to the Trakt auth service.");
+            }
+            await _traktAuth.RefreshIfNeededAsync(System.Threading.CancellationToken.None);
+            await _traktSync.PullWatchedAsync(System.Threading.CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("MainViewModel", $"Trakt startup: {ex.Message}");
         }
     }
 
@@ -1221,7 +1247,6 @@ public class MainViewModel : BaseViewModel
 
         // Report the version that actually started (after failover it differs from the one requested).
         await activeClient.ReportPlaybackStartAsync(activeItem.Id, activeMediaSourceId ?? activeItem.Id, startTicks);
-        await _trakt.ScrobbleStartAsync(item, item.ProgressPercentage);
         if (long.TryParse(item.DedupGroupId, out var startGid) && startGid > 0)
         {
             var dur = (item.RunTimeTicks ?? 0) / 10_000_000.0;
@@ -1325,12 +1350,6 @@ public class MainViewModel : BaseViewModel
         var result = await _session.FinalizeAsync(reason);
         if (result == null) return;
         var item = result.Item;
-
-        try
-        {
-            await _trakt.ScrobbleStopAsync(item, result.ProgressPercent);
-        }
-        catch { }
 
         if (long.TryParse(item.DedupGroupId, out var stopGid) && stopGid > 0)
         {

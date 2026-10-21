@@ -171,7 +171,7 @@ public class SilentFailureTests : IDisposable
         using var db = new DatabaseService(Path.Combine(_dir, "a.db"));
         var dedup = new DedupEngine();
         var settings = new SettingsService(Path.Combine(_dir, SettingsService.SettingsFileName));
-        var sync = new SyncEngine(new EmbyClient(), db, dedup, new TraktService(settings), settings);
+        var sync = new SyncEngine(new EmbyClient(), db, dedup, new TraktService(new TraktAuthService(db)), settings);
 
         dedup.WriterGate.Wait(); // a rebuild (or sync) in progress
         var rebuild = Task.Run(() => dedup.RebuildIndex(db));
