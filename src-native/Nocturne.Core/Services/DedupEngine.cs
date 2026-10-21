@@ -245,7 +245,12 @@ public class DedupEngine
                     max_height       INTEGER,
                     has_4k           INTEGER NOT NULL DEFAULT 0,
                     max_bitrate      INTEGER,
-                    audio_formats    TEXT
+                    audio_formats    TEXT,
+                    image_item_id    TEXT,
+                    image_server_id  TEXT,
+                    backdrop_item_id TEXT,
+                    backdrop_server_id TEXT,
+                    tmdb_key         TEXT
                 );
 
                 CREATE TABLE dedup_keys_rebuild (

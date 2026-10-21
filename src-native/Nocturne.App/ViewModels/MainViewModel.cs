@@ -19,6 +19,10 @@ public class MainViewModel : BaseViewModel
     private readonly WatchPartyService _watchParty;
     private readonly SyncEngine _sync;
     private readonly ThemeColorService _themeColors;
+    private readonly ITraktScrobbleService _traktScrobble;
+    private readonly ITraktSyncService _traktSync;
+    private readonly ITmdbEnrichmentService _tmdbEnrichment;
+    private readonly TraktQueueDrainWorker _traktDrain;
 
     private BaseViewModel _currentViewModel;
     private WindowBackdropType _backdropType = WindowBackdropType.Mica;
@@ -50,6 +54,7 @@ public class MainViewModel : BaseViewModel
     private string _timeString = "00:00 / 00:00";
 
     public HomeViewModel HomeVM { get; }
+    public WatchlistViewModel WatchlistVM { get; }
     public LibraryViewModel LibraryVM { get; }
     public DetailViewModel DetailVM { get; }
     public SearchViewModel SearchVM { get; }
@@ -72,12 +77,17 @@ public class MainViewModel : BaseViewModel
         SyncEngine sync,
         ThemeColorService themeColors,
         HomeViewModel homeVM,
+        WatchlistViewModel watchlistVM,
         LibraryViewModel libraryVM,
         DetailViewModel detailVM,
         SearchViewModel searchVM,
         SettingsViewModel settingsVM,
         AnalyticsViewModel analyticsVM,
-        OnboardingViewModel onboardingVM)
+        OnboardingViewModel onboardingVM,
+        ITraktScrobbleService traktScrobble,
+        ITraktSyncService traktSync,
+        ITmdbEnrichmentService tmdbEnrichment,
+        TraktQueueDrainWorker traktDrain)
     {
         _settings = settings;
         _embyClient = embyClient;
@@ -89,8 +99,13 @@ public class MainViewModel : BaseViewModel
         _sync = sync;
         _themeColors = themeColors;
         _themeColors.ThemeColorChanged += _ => UpdateTopBarColors();
+        _traktScrobble = traktScrobble;
+        _traktSync = traktSync;
+        _tmdbEnrichment = tmdbEnrichment;
+        _traktDrain = traktDrain;
 
         HomeVM = homeVM;
+        WatchlistVM = watchlistVM;
         LibraryVM = libraryVM;
         DetailVM = detailVM;
         SearchVM = searchVM;
@@ -105,6 +120,12 @@ public class MainViewModel : BaseViewModel
         LibraryVM.NavigateToDetail += item => NavigateToDetail(item);
         SearchVM.NavigateToDetail += item => NavigateToDetail(item);
         DetailVM.NavigateBack += () => CurrentViewModel = HomeVM;
+
+        // Wire TMDB fallback enrichment trigger on sync complete (D12)
+        _sync.SyncCompleted += () =>
+        {
+            _ = _tmdbEnrichment.RunAsync(new Progress<EnrichProgress>(), System.Threading.CancellationToken.None);
+        };
 
         // Wire playback requests to embedded player
         HomeVM.PlayRequested += item => _ = StartPlaybackAsync(item, item.UserData?.PlaybackPositionTicks ?? 0);
@@ -202,6 +223,20 @@ public class MainViewModel : BaseViewModel
             {
                 if (paused) _watchParty.BroadcastPause(_mpv.CurrentPositionSeconds);
                 else _watchParty.BroadcastPlay(_mpv.CurrentPositionSeconds);
+            }
+            if (_currentPlayingItem != null && long.TryParse(_currentPlayingItem.DedupGroupId, out var gid) && gid > 0)
+            {
+                var dur = _totalDurationSeconds > 0 ? _totalDurationSeconds : (_currentPlayingItem.RunTimeTicks.HasValue ? _currentPlayingItem.RunTimeTicks.Value / 10_000_000.0 : 0);
+                var prog = dur > 0 ? Math.Clamp(_currentPlaybackSeconds / dur * 100.0, 0, 100) : 0;
+                if (paused)
+                {
+                    _traktScrobble.Pause(gid, prog);
+                }
+                else
+                {
+                    _traktScrobble.Start(gid, prog);
+                }
+                _ = _traktDrain.DrainAsync(System.Threading.CancellationToken.None);
             }
             Application.Current?.Dispatcher?.Invoke(() =>
             {
@@ -306,6 +341,7 @@ public class MainViewModel : BaseViewModel
                 _isScrolledOverContent = false;
                 IsNavigationVisible = value is not OnboardingViewModel;
                 OnPropertyChanged(nameof(IsHomeActive));
+                OnPropertyChanged(nameof(IsWatchlistActive));
                 OnPropertyChanged(nameof(IsLibraryActive));
                 OnPropertyChanged(nameof(IsDetailActive));
                 OnPropertyChanged(nameof(IsSearchActive));
@@ -319,6 +355,7 @@ public class MainViewModel : BaseViewModel
     }
 
     public bool IsHomeActive => CurrentViewModel is HomeViewModel;
+    public bool IsWatchlistActive => CurrentViewModel is WatchlistViewModel;
     public bool IsLibraryActive => CurrentViewModel is LibraryViewModel;
     public bool IsDetailActive => CurrentViewModel is DetailViewModel;
     public bool IsSearchActive => CurrentViewModel is SearchViewModel;
@@ -444,6 +481,10 @@ public class MainViewModel : BaseViewModel
         ? (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange)
         : TopBarSecondaryForeground;
 
+    public Brush WatchlistTabIconBrush => IsWatchlistActive
+        ? (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange)
+        : TopBarSecondaryForeground;
+
     public Brush LibraryTabIconBrush => IsLibraryActive
         ? (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange)
         : TopBarSecondaryForeground;
@@ -461,6 +502,7 @@ public class MainViewModel : BaseViewModel
         OnPropertyChanged(nameof(TopBarSyncIconBrush));
         OnPropertyChanged(nameof(TopBarSyncTextBrush));
         OnPropertyChanged(nameof(HomeTabIconBrush));
+        OnPropertyChanged(nameof(WatchlistTabIconBrush));
         OnPropertyChanged(nameof(LibraryTabIconBrush));
     }
 
@@ -705,6 +747,12 @@ public class MainViewModel : BaseViewModel
         }
     }
 
+    public void NavigateToWatchlist()
+    {
+        CurrentViewModel = WatchlistVM;
+        _ = WatchlistVM.RefreshAsync();
+    }
+
     public void NavigateToLibrary()
     {
         CurrentViewModel = LibraryVM;
@@ -721,6 +769,32 @@ public class MainViewModel : BaseViewModel
     {
         _ = DetailVM.LoadItemAsync(item.Id, item.ServerId, item);
         CurrentViewModel = DetailVM;
+    }
+
+    public void OpenGroupDetail(long groupId)
+    {
+        var group = _db.GetDedupGroup(groupId);
+        if (group != null && !string.IsNullOrEmpty(group.PrimaryItemId))
+        {
+            var cached = _db.GetCachedItem(group.PrimaryItemId, group.PrimaryServerId ?? string.Empty);
+            if (cached != null)
+            {
+                NavigateToDetail(cached);
+                return;
+            }
+        }
+
+        var fallback = new EmbyItem
+        {
+            Id = group?.PrimaryItemId ?? groupId.ToString(),
+            DedupGroupId = groupId.ToString(),
+            ServerId = group?.PrimaryServerId,
+            Name = group?.Name ?? "Item",
+            Type = group?.ItemType ?? "Movie",
+            ProductionYear = group?.Year,
+            Overview = group?.Overview
+        };
+        NavigateToDetail(fallback);
     }
 
     private void UpdateBackdropFromSettings()
@@ -760,6 +834,7 @@ public class MainViewModel : BaseViewModel
             // Kick off background loading immediately (cache renders in 0ms, network fetches in background)
             _ = HomeVM.LoadAsync();
             _ = LibraryVM.LoadViewsAsync();
+            _ = _traktSync.PullWatchedAsync(System.Threading.CancellationToken.None);
 
             // Very brief 80ms yield to allow the initial window frame and controls to lay out, then dismiss splash
             await Task.Delay(80);
@@ -948,6 +1023,9 @@ public class MainViewModel : BaseViewModel
         var candidates = GetOrderedPlaybackCandidates(item);
         bool started = false;
         Exception? lastError = null;
+        EmbyClient? activeClient = null;
+        ServerConfig? activeSrv = null;
+        string? activeMediaSourceId = null;
 
         foreach (var candidate in candidates)
         {
@@ -975,6 +1053,9 @@ public class MainViewModel : BaseViewModel
                     subBg: _settings.Current.SubtitleBackground);
 
                 _currentPlayingItem = candidate;
+                activeClient = client;
+                activeSrv = srv;
+                activeMediaSourceId = mediaSourceId;
                 started = true;
                 break;
             }
@@ -985,7 +1066,7 @@ public class MainViewModel : BaseViewModel
             }
         }
 
-        if (!started)
+        if (!started || activeClient == null)
         {
             NocturneLogger.Error("MainViewModel", "All playback candidates and sibling servers failed to start.", lastError);
             throw lastError ?? new InvalidOperationException("Failed to start playback on any available server.");
@@ -1049,7 +1130,7 @@ public class MainViewModel : BaseViewModel
             {
                 try
                 {
-                    var fullItem = await client.GetItemAsync(item.Id);
+                    var fullItem = await activeClient.GetItemAsync(item.Id);
                     if (fullItem?.Chapters != null && fullItem.Chapters.Count > 0)
                     {
                         item.Chapters = fullItem.Chapters;
@@ -1064,9 +1145,16 @@ public class MainViewModel : BaseViewModel
             Application.Current?.Dispatcher?.Invoke(() => ChaptersUpdated?.Invoke());
         }
 
-        await client.ReportPlaybackStartAsync(item.Id, mediaSourceId, startTicks);
+        await activeClient.ReportPlaybackStartAsync(item.Id, activeMediaSourceId ?? item.Id, startTicks);
         await _trakt.ScrobbleStartAsync(item, item.ProgressPercentage);
-        _db.RecordWatchEvent(item.Id, srv?.Url ?? client.BaseUrl, item.Name, item.Type, (int)((item.RunTimeTicks ?? 0) / 10_000_000), item.SeriesName, item.Genres);
+        if (long.TryParse(item.DedupGroupId, out var startGid) && startGid > 0)
+        {
+            var dur = (item.RunTimeTicks ?? 0) / 10_000_000.0;
+            var prog = dur > 0 ? Math.Clamp((startTicks / 10_000_000.0) / dur * 100.0, 0, 100) : 0;
+            _traktScrobble.Start(startGid, prog);
+            _ = _traktDrain.DrainAsync(System.Threading.CancellationToken.None);
+        }
+        _db.RecordWatchEvent(item.Id, activeSrv?.Url ?? activeClient.BaseUrl, item.Name, item.Type, (int)((item.RunTimeTicks ?? 0) / 10_000_000), item.SeriesName, item.Genres);
 
         if (item.Type == "Episode")
         {
@@ -1081,7 +1169,7 @@ public class MainViewModel : BaseViewModel
                         imdbId = cachedSeries?.ImdbId ?? string.Empty;
                         if (string.IsNullOrEmpty(imdbId))
                         {
-                            var seriesItem = await client.GetItemAsync(item.SeriesId);
+                            var seriesItem = await activeClient.GetItemAsync(item.SeriesId);
                             imdbId = seriesItem?.ImdbId ?? string.Empty;
                         }
                     }
@@ -1182,6 +1270,12 @@ public class MainViewModel : BaseViewModel
             await _trakt.ScrobbleStopAsync(item, progress);
         }
         catch { }
+
+        if (long.TryParse(item.DedupGroupId, out var stopGid) && stopGid > 0)
+        {
+            _traktScrobble.Stop(stopGid, progress);
+            _ = _traktDrain.DrainAsync(System.Threading.CancellationToken.None);
+        }
 
         try
         {

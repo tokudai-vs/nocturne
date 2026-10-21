@@ -17,6 +17,7 @@ public class DetailViewModel : BaseViewModel
     private readonly SettingsService _settings;
     private readonly WatchPartyService _watchParty;
     private readonly TrailerService _trailerService;
+    private readonly IWatchlistService _watchlistService;
 
     private ServerConfig? _currentServer;
     private EmbyClient _currentClient;
@@ -60,7 +61,8 @@ public class DetailViewModel : BaseViewModel
         IntroDbService introDb,
         SettingsService settings,
         WatchPartyService watchParty,
-        TrailerService trailerService)
+        TrailerService trailerService,
+        IWatchlistService watchlistService)
     {
         _embyClient = embyClient;
         _mpv = mpv;
@@ -70,6 +72,7 @@ public class DetailViewModel : BaseViewModel
         _settings = settings;
         _watchParty = watchParty;
         _trailerService = trailerService;
+        _watchlistService = watchlistService;
         _currentClient = embyClient;
 
         _introDb.PromptChanged += prompt => ActiveSkipPrompt = prompt;
@@ -469,15 +472,12 @@ public class DetailViewModel : BaseViewModel
             OnPropertyChanged(nameof(HasEpisodes));
         }
 
-        // Trakt watchlist
-        if (_trakt.IsConnected)
-        {
-            var watchlist = _db.GetTraktWatchlist();
-            IsInWatchlist = watchlist.Any(w =>
-                (!string.IsNullOrEmpty(item.TmdbId) && w.TmdbId == item.TmdbId) ||
-                (!string.IsNullOrEmpty(item.ImdbId) && w.ImdbId == item.ImdbId) ||
-                w.Title.Equals(item.Name, StringComparison.OrdinalIgnoreCase));
-        }
+        // Watchlist status check (§9.2, §12.5)
+        long.TryParse(item.DedupGroupId, out var gid);
+        string? tmdbKey = !string.IsNullOrEmpty(item.TmdbId)
+            ? $"tmdb:{(string.Equals(item.Type, "Series", StringComparison.OrdinalIgnoreCase) ? "tv" : "movie")}:{item.TmdbId}"
+            : null;
+        IsInWatchlist = _db.IsInWatchlist(gid, tmdbKey);
 
         // Non-blocking background trailer detection
         StartBackgroundTrailerResolve(item, parentSeries, client);
@@ -761,12 +761,23 @@ public class DetailViewModel : BaseViewModel
 
     public async Task ToggleWatchlistAsync()
     {
-        if (Item == null || !_trakt.IsConnected) return;
+        if (Item == null) return;
         var newWatchlist = !IsInWatchlist;
-        var success = await _trakt.ToggleWatchlistAsync(Item, newWatchlist);
-        if (success)
+        IsInWatchlist = newWatchlist; // Optimistic toggle (§9.3, §12.5)
+
+        long.TryParse(Item.DedupGroupId, out var gid);
+        if (gid > 0)
         {
-            IsInWatchlist = newWatchlist;
+            if (newWatchlist)
+                await _watchlistService.AddAsync(gid, CancellationToken.None);
+            else
+                await _watchlistService.RemoveAsync(gid, CancellationToken.None);
+        }
+        else if (!string.IsNullOrEmpty(Item.TmdbId))
+        {
+            string tmdbKey = $"tmdb:{(string.Equals(Item.Type, "Series", StringComparison.OrdinalIgnoreCase) ? "tv" : "movie")}:{Item.TmdbId}";
+            if (newWatchlist)
+                await _watchlistService.AddUnownedAsync(tmdbKey, Item.Name, Item.ProductionYear, Item.Type ?? "Movie", CancellationToken.None);
         }
     }
 

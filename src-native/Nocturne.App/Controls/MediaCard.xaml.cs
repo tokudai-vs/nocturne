@@ -75,29 +75,41 @@ public partial class MediaCard : UserControl
             PosterImage.Source = null;
             FallbackTile.Visibility = Visibility.Visible;
 
-            // Image URL
+            // ── Artwork Resolution Order (§3.3) ──
             var emby = (Application.Current as App)?.Services.GetService<EmbyClient>();
             var settings = (Application.Current as App)?.Services.GetService<SettingsService>();
-            if (emby != null)
+            string? finalImageUrl = null;
+
+            if (emby != null && settings != null)
             {
-                ServerConfig? server = null;
-                if (!string.IsNullOrEmpty(item.ServerId) && settings != null)
+                // Order 1: Owning server (§3.3)
+                string imageServer = !string.IsNullOrEmpty(item.ImageServerId) ? item.ImageServerId : (item.ServerId ?? string.Empty);
+                string imageItem = !string.IsNullOrEmpty(item.ImageItemId) ? item.ImageItemId : item.Id;
+                var server = settings.Current.Servers.FirstOrDefault(s => s.Id == imageServer);
+                var tag = item.ImageTags?.GetValueOrDefault("Primary");
+
+                if (!string.IsNullOrEmpty(item.PrimaryImageUrl))
                 {
-                    server = settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId);
+                    finalImageUrl = item.PrimaryImageUrl;
+                }
+                else if (server != null && !string.IsNullOrEmpty(imageItem))
+                {
+                    finalImageUrl = emby.BuildImageUrl(imageItem, "Primary", 320, tag, server.Url, server.AccessToken);
                 }
 
-                var tag = item.ImageTags?.GetValueOrDefault("Primary");
-                var url = !string.IsNullOrEmpty(item.PrimaryImageUrl)
-                    ? item.PrimaryImageUrl
-                    : emby.BuildImageUrl(item.Id, "Primary", 320, tag, server?.Url, server?.AccessToken);
+                // Order 2: TMDB fallback poster (§3.3)
+                if (string.IsNullOrEmpty(finalImageUrl) && !string.IsNullOrEmpty(item.TmdbPosterPath))
+                {
+                    finalImageUrl = $"https://image.tmdb.org/t/p/w342{item.TmdbPosterPath}";
+                }
 
-                if (!string.IsNullOrEmpty(url))
+                if (!string.IsNullOrEmpty(finalImageUrl))
                 {
                     try
                     {
                         var bmp = new BitmapImage();
                         bmp.BeginInit();
-                        bmp.UriSource = new Uri(url);
+                        bmp.UriSource = new Uri(finalImageUrl);
                         bmp.DecodePixelWidth = 220;
                         bmp.CacheOption = BitmapCacheOption.OnLoad;
                         bmp.EndInit();
@@ -112,11 +124,49 @@ public partial class MediaCard : UserControl
                     }
                 }
             }
+
+            // Watchlist status check
+            UpdateWatchlistUi(item);
+        }
+    }
+
+    private void UpdateWatchlistUi(EmbyItem item)
+    {
+        if (item.IsInWatchlist)
+        {
+            WatchlistButton.Visibility = Visibility.Visible;
+            WatchlistIcon.Foreground = Application.Current?.Resources["NocturneAmberBrush"] as Brush
+                ?? new SolidColorBrush(Color.FromRgb(229, 160, 13));
+        }
+        else
+        {
+            WatchlistButton.Visibility = Visibility.Collapsed;
+            WatchlistIcon.Foreground = Application.Current?.TryFindResource("TextFillColorSecondaryBrush") as Brush
+                ?? new SolidColorBrush(Color.FromArgb(180, 255, 255, 255));
+        }
+    }
+
+    private async void OnWatchlistButtonClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (DataContext is EmbyItem item)
+        {
+            var watchlist = (Application.Current as App)?.Services.GetService<IWatchlistService>();
+            if (watchlist != null && long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
+            {
+                item.IsInWatchlist = !item.IsInWatchlist;
+                UpdateWatchlistUi(item);
+                if (item.IsInWatchlist)
+                    await watchlist.AddAsync(gid, System.Threading.CancellationToken.None);
+                else
+                    await watchlist.RemoveAsync(gid, System.Threading.CancellationToken.None);
+            }
         }
     }
 
     private void OnCardMouseEnter(object sender, MouseEventArgs e)
     {
+        WatchlistButton.Visibility = Visibility.Visible;
         CardBorder.BorderThickness = new Thickness(2);
         CardBorder.BorderBrush = Application.Current?.Resources["NocturneAmberBrush"] as Brush
             ?? new SolidColorBrush(Color.FromRgb(229, 160, 13));
@@ -131,6 +181,11 @@ public partial class MediaCard : UserControl
 
     private void OnCardMouseLeave(object sender, MouseEventArgs e)
     {
+        if (DataContext is EmbyItem item && !item.IsInWatchlist)
+        {
+            WatchlistButton.Visibility = Visibility.Collapsed;
+        }
+
         CardBorder.BorderThickness = new Thickness(1);
         CardBorder.BorderBrush = Application.Current?.TryFindResource("CardStrokeColorDefaultBrush") as Brush
             ?? new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));

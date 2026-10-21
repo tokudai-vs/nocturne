@@ -35,6 +35,13 @@ public class DedupGroupRecord
     public long? MaxBitrate { get; set; }
     public string? AudioFormats { get; set; }
 
+    // Artwork election & TMDB key (v4.3 Trakt/TMDB spec §3)
+    public string? ImageItemId { get; set; }
+    public string? ImageServerId { get; set; }
+    public string? BackdropItemId { get; set; }
+    public string? BackdropServerId { get; set; }
+    public string? TmdbKey { get; set; }
+
     // Sibling item tracking: (ServerId, ItemId)
     public HashSet<(string ServerId, string ItemId)> ItemIds { get; } = new();
     public HashSet<string> Keys { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -253,6 +260,7 @@ public class ConcurrentDedupIndex
                 int is4k = (height >= 2160 || (item.Width ?? 0) >= 3800) ? 1 : 0;
                 string? audio = item.AudioCodec;
                 bool isItemAuth = candidateKeys.Any(k => k.IsAuthoritative);
+                string? itemTmdbKey = ExtractTmdbKey(item);
 
                 // Collect matched groups partitioned into authoritative and provisional
                 var authMatches = new HashSet<int>();
@@ -299,7 +307,12 @@ public class ConcurrentDedupIndex
                         Year = item.ProductionYear,
                         Overview = item.Overview,
                         ImageTag = item.ImageTag,
+                        ImageItemId = !string.IsNullOrEmpty(item.ImageTag) ? item.Id : null,
+                        ImageServerId = !string.IsNullOrEmpty(item.ImageTag) ? item.ServerId : null,
                         BackdropTag = item.BackdropTag,
+                        BackdropItemId = !string.IsNullOrEmpty(item.BackdropTag) ? item.Id : null,
+                        BackdropServerId = !string.IsNullOrEmpty(item.BackdropTag) ? item.ServerId : null,
+                        TmdbKey = itemTmdbKey,
                         CommunityRating = item.CommunityRating,
                         DateCreated = item.PremiereDate.HasValue ? new DateTimeOffset(item.PremiereDate.Value).ToUnixTimeSeconds() : null,
                         SeasonNumber = item.ParentIndexNumber,
@@ -338,47 +351,12 @@ public class ConcurrentDedupIndex
                     {
                         if (_groups.Remove(loserId, out var loser))
                         {
-                            deletedGroupIds.Add(loserId);
-                            remappedGroups.Add((loserId, winnerId));
-                            foreach (var itm in loser.ItemIds) winner.ItemIds.Add(itm);
-                            foreach (var k in loser.Keys)
-                            {
-                                winner.Keys.Add(k);
-                                bool isAuthKey = _keyToGroup.TryGetValue(k, out var km) ? km.IsAuthoritative : true;
-                                _keyToGroup[k] = (winnerId, isAuthKey);
-                                keysToSave.Add((k, winnerId, isAuthKey));
-                            }
-                            winner.MaxHeight = Math.Max(winner.MaxHeight ?? 0, loser.MaxHeight ?? 0);
-                            winner.MaxBitrate = Math.Max(winner.MaxBitrate ?? 0, loser.MaxBitrate ?? 0);
-                            winner.Has4k = Math.Max(winner.Has4k, loser.Has4k);
-                            AppendAudioCodec(winner, loser.AudioFormats);
+                            AbsorbLoserGroup(winner, loser, deletedGroupIds, remappedGroups, keysToSave);
                         }
                     }
 
-                    winner.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
-                    winner.VersionCount = winner.ItemIds.Count;
-                    winner.MaxHeight = Math.Max(winner.MaxHeight ?? 0, height);
-                    winner.MaxBitrate = Math.Max(winner.MaxBitrate ?? 0, bitrate);
-                    winner.Has4k = Math.Max(winner.Has4k, is4k);
-                    AppendAudioCodec(winner, audio);
                     winner.IsProvisional = 0;
-
-                    if (score > winner.PrimaryScore)
-                    {
-                        UpdatePrimary(winner, item, score);
-                    }
-
-                    foreach (var ck in candidateKeys)
-                    {
-                        winner.Keys.Add(ck.Key);
-                        _keyToGroup[ck.Key] = (winnerId, ck.IsAuthoritative);
-                        keysToSave.Add((ck.Key, winnerId, ck.IsAuthoritative));
-                    }
-
-                    item.DedupGroupId = winnerId.ToString();
-                    itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, winnerId));
-                    winner.IsDirty = true;
-                    if (!dirtyGroups.Contains(winner)) dirtyGroups.Add(winner);
+                    AttachItemToGroupRecord(winner, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                     continue;
                 }
 
@@ -393,47 +371,12 @@ public class ConcurrentDedupIndex
                     {
                         if (_groups.Remove(provId, out var provLoser))
                         {
-                            deletedGroupIds.Add(provId);
-                            remappedGroups.Add((provId, targetId));
-                            foreach (var itm in provLoser.ItemIds) target.ItemIds.Add(itm);
-                            foreach (var k in provLoser.Keys)
-                            {
-                                target.Keys.Add(k);
-                                bool isAuthKey = _keyToGroup.TryGetValue(k, out var km) ? km.IsAuthoritative : true;
-                                _keyToGroup[k] = (targetId, isAuthKey);
-                                keysToSave.Add((k, targetId, isAuthKey));
-                            }
-                            target.MaxHeight = Math.Max(target.MaxHeight ?? 0, provLoser.MaxHeight ?? 0);
-                            target.MaxBitrate = Math.Max(target.MaxBitrate ?? 0, provLoser.MaxBitrate ?? 0);
-                            target.Has4k = Math.Max(target.Has4k, provLoser.Has4k);
-                            AppendAudioCodec(target, provLoser.AudioFormats);
+                            AbsorbLoserGroup(target, provLoser, deletedGroupIds, remappedGroups, keysToSave);
                         }
                     }
 
-                    target.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
-                    target.VersionCount = target.ItemIds.Count;
-                    target.MaxHeight = Math.Max(target.MaxHeight ?? 0, height);
-                    target.MaxBitrate = Math.Max(target.MaxBitrate ?? 0, bitrate);
-                    target.Has4k = Math.Max(target.Has4k, is4k);
-                    AppendAudioCodec(target, audio);
                     if (isItemAuth) target.IsProvisional = 0;
-
-                    if (score > target.PrimaryScore)
-                    {
-                        UpdatePrimary(target, item, score);
-                    }
-
-                    foreach (var ck in candidateKeys)
-                    {
-                        target.Keys.Add(ck.Key);
-                        _keyToGroup[ck.Key] = (targetId, ck.IsAuthoritative);
-                        keysToSave.Add((ck.Key, targetId, ck.IsAuthoritative));
-                    }
-
-                    item.DedupGroupId = targetId.ToString();
-                    itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, targetId));
-                    target.IsDirty = true;
-                    if (!dirtyGroups.Contains(target)) dirtyGroups.Add(target);
+                    AttachItemToGroupRecord(target, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                     // Remake protection: Any other auth groups reached strictly via fuzzy keys are refused merge!
                     continue;
                 }
@@ -452,47 +395,12 @@ public class ConcurrentDedupIndex
                         {
                             if (_groups.Remove(loserId, out var loser))
                             {
-                                deletedGroupIds.Add(loserId);
-                                remappedGroups.Add((loserId, winnerId));
-                                foreach (var itm in loser.ItemIds) winner.ItemIds.Add(itm);
-                                foreach (var k in loser.Keys)
-                                {
-                                    winner.Keys.Add(k);
-                                    bool isAuthKey = _keyToGroup.TryGetValue(k, out var km) ? km.IsAuthoritative : true;
-                                    _keyToGroup[k] = (winnerId, isAuthKey);
-                                    keysToSave.Add((k, winnerId, isAuthKey));
-                                }
-                                winner.MaxHeight = Math.Max(winner.MaxHeight ?? 0, loser.MaxHeight ?? 0);
-                                winner.MaxBitrate = Math.Max(winner.MaxBitrate ?? 0, loser.MaxBitrate ?? 0);
-                                winner.Has4k = Math.Max(winner.Has4k, loser.Has4k);
-                                AppendAudioCodec(winner, loser.AudioFormats);
+                                AbsorbLoserGroup(winner, loser, deletedGroupIds, remappedGroups, keysToSave);
                             }
                         }
 
-                        winner.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
-                        winner.VersionCount = winner.ItemIds.Count;
-                        winner.MaxHeight = Math.Max(winner.MaxHeight ?? 0, height);
-                        winner.MaxBitrate = Math.Max(winner.MaxBitrate ?? 0, bitrate);
-                        winner.Has4k = Math.Max(winner.Has4k, is4k);
-                        AppendAudioCodec(winner, audio);
                         winner.IsProvisional = 0; // cleared
-
-                        if (score > winner.PrimaryScore)
-                        {
-                            UpdatePrimary(winner, item, score);
-                        }
-
-                        foreach (var ck in candidateKeys)
-                        {
-                            winner.Keys.Add(ck.Key);
-                            _keyToGroup[ck.Key] = (winnerId, ck.IsAuthoritative);
-                            keysToSave.Add((ck.Key, winnerId, ck.IsAuthoritative));
-                        }
-
-                        item.DedupGroupId = winnerId.ToString();
-                        itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, winnerId));
-                        winner.IsDirty = true;
-                        if (!dirtyGroups.Contains(winner)) dirtyGroups.Add(winner);
+                        AttachItemToGroupRecord(winner, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                     }
                     else
                     {
@@ -521,7 +429,12 @@ public class ConcurrentDedupIndex
                                 Year = item.ProductionYear,
                                 Overview = item.Overview,
                                 ImageTag = item.ImageTag,
+                                ImageItemId = !string.IsNullOrEmpty(item.ImageTag) ? item.Id : null,
+                                ImageServerId = !string.IsNullOrEmpty(item.ImageTag) ? item.ServerId : null,
                                 BackdropTag = item.BackdropTag,
+                                BackdropItemId = !string.IsNullOrEmpty(item.BackdropTag) ? item.Id : null,
+                                BackdropServerId = !string.IsNullOrEmpty(item.BackdropTag) ? item.ServerId : null,
+                                TmdbKey = itemTmdbKey,
                                 CommunityRating = item.CommunityRating,
                                 MaxHeight = height > 0 ? height : null,
                                 Has4k = is4k,
@@ -545,29 +458,7 @@ public class ConcurrentDedupIndex
                         }
                         else
                         {
-                            target.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
-                            target.VersionCount = target.ItemIds.Count;
-                            target.MaxHeight = Math.Max(target.MaxHeight ?? 0, height);
-                            target.MaxBitrate = Math.Max(target.MaxBitrate ?? 0, bitrate);
-                            target.Has4k = Math.Max(target.Has4k, is4k);
-                            AppendAudioCodec(target, audio);
-
-                            if (score > target.PrimaryScore)
-                            {
-                                UpdatePrimary(target, item, score);
-                            }
-
-                            foreach (var ck in candidateKeys)
-                            {
-                                target.Keys.Add(ck.Key);
-                                _keyToGroup[ck.Key] = (targetId, ck.IsAuthoritative);
-                                keysToSave.Add((ck.Key, targetId, ck.IsAuthoritative));
-                            }
-
-                            item.DedupGroupId = targetId.ToString();
-                            itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, targetId));
-                            target.IsDirty = true;
-                            if (!dirtyGroups.Contains(target)) dirtyGroups.Add(target);
+                            AttachItemToGroupRecord(target, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                         }
                     }
                     continue;
@@ -578,30 +469,7 @@ public class ConcurrentDedupIndex
                 {
                     int targetId = authMatches.Min();
                     var target = _groups[targetId];
-
-                    target.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
-                    target.VersionCount = target.ItemIds.Count;
-                    target.MaxHeight = Math.Max(target.MaxHeight ?? 0, height);
-                    target.MaxBitrate = Math.Max(target.MaxBitrate ?? 0, bitrate);
-                    target.Has4k = Math.Max(target.Has4k, is4k);
-                    AppendAudioCodec(target, audio);
-
-                    if (score > target.PrimaryScore)
-                    {
-                        UpdatePrimary(target, item, score);
-                    }
-
-                    foreach (var ck in candidateKeys)
-                    {
-                        target.Keys.Add(ck.Key);
-                        _keyToGroup[ck.Key] = (targetId, ck.IsAuthoritative);
-                        keysToSave.Add((ck.Key, targetId, ck.IsAuthoritative));
-                    }
-
-                    item.DedupGroupId = targetId.ToString();
-                    itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, targetId));
-                    target.IsDirty = true;
-                    if (!dirtyGroups.Contains(target)) dirtyGroups.Add(target);
+                    AttachItemToGroupRecord(target, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                 }
             }
         }
@@ -653,6 +521,166 @@ public class ConcurrentDedupIndex
         }
     }
 
+    public static string? ExtractTmdbKey(EmbyItem item)
+    {
+        var type = item.Type ?? string.Empty;
+        if (string.Equals(type, "Movie", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrEmpty(item.TmdbId)) return $"tmdb:movie:{item.TmdbId}";
+        }
+        else if (string.Equals(type, "Series", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrEmpty(item.TmdbId)) return $"tmdb:tv:{item.TmdbId}";
+        }
+        else if (string.Equals(type, "Episode", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrEmpty(item.SeriesTmdbId))
+            {
+                int season = item.ParentIndexNumber ?? 1;
+                int ep = item.IndexNumber ?? 0;
+                return $"tmdb:tv:{item.SeriesTmdbId}:s{season:D2}e{ep:D2}";
+            }
+            else if (!string.IsNullOrEmpty(item.TmdbId))
+            {
+                return $"tmdb:movie:{item.TmdbId}";
+            }
+        }
+        return null;
+    }
+
+    private int GetServerPriorityRank(string? serverId)
+    {
+        if (string.IsNullOrEmpty(serverId) || _serverPriority == null) return 999;
+        var idx = _serverPriority.IndexOf(serverId);
+        return idx >= 0 ? idx : 999;
+    }
+
+    private bool ShouldElectImage(DedupGroupRecord g, string? serverId, string itemId, string? imageTag)
+    {
+        if (string.IsNullOrEmpty(imageTag)) return false;
+        if (string.IsNullOrEmpty(g.ImageTag) || string.IsNullOrEmpty(g.ImageServerId)) return true;
+
+        int newRank = GetServerPriorityRank(serverId);
+        int curRank = GetServerPriorityRank(g.ImageServerId);
+        if (newRank < curRank) return true;
+        if (newRank > curRank) return false;
+
+        var newKey = $"{serverId}:{itemId}";
+        var curKey = $"{g.ImageServerId}:{g.ImageItemId}";
+        return string.Compare(newKey, curKey, StringComparison.Ordinal) < 0;
+    }
+
+    private bool ShouldElectBackdrop(DedupGroupRecord g, string? serverId, string itemId, string? backdropTag)
+    {
+        if (string.IsNullOrEmpty(backdropTag)) return false;
+        if (string.IsNullOrEmpty(g.BackdropTag) || string.IsNullOrEmpty(g.BackdropServerId)) return true;
+
+        int newRank = GetServerPriorityRank(serverId);
+        int curRank = GetServerPriorityRank(g.BackdropServerId);
+        if (newRank < curRank) return true;
+        if (newRank > curRank) return false;
+
+        var newKey = $"{serverId}:{itemId}";
+        var curKey = $"{g.BackdropServerId}:{g.BackdropItemId}";
+        return string.Compare(newKey, curKey, StringComparison.Ordinal) < 0;
+    }
+
+    private void AbsorbLoserGroup(
+        DedupGroupRecord winner,
+        DedupGroupRecord loser,
+        List<int> deletedGroupIds,
+        List<(int FromGid, int ToGid)> remappedGroups,
+        List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave)
+    {
+        deletedGroupIds.Add(loser.GroupId);
+        remappedGroups.Add((loser.GroupId, winner.GroupId));
+        foreach (var itm in loser.ItemIds) winner.ItemIds.Add(itm);
+        foreach (var k in loser.Keys)
+        {
+            winner.Keys.Add(k);
+            bool isAuthKey = _keyToGroup.TryGetValue(k, out var km) ? km.IsAuthoritative : true;
+            _keyToGroup[k] = (winner.GroupId, isAuthKey);
+            keysToSave.Add((k, winner.GroupId, isAuthKey));
+        }
+        winner.MaxHeight = Math.Max(winner.MaxHeight ?? 0, loser.MaxHeight ?? 0);
+        winner.MaxBitrate = Math.Max(winner.MaxBitrate ?? 0, loser.MaxBitrate ?? 0);
+        winner.Has4k = Math.Max(winner.Has4k, loser.Has4k);
+        AppendAudioCodec(winner, loser.AudioFormats);
+
+        if (ShouldElectImage(winner, loser.ImageServerId, loser.ImageItemId ?? string.Empty, loser.ImageTag))
+        {
+            winner.ImageTag = loser.ImageTag;
+            winner.ImageItemId = loser.ImageItemId;
+            winner.ImageServerId = loser.ImageServerId;
+        }
+        if (ShouldElectBackdrop(winner, loser.BackdropServerId, loser.BackdropItemId ?? string.Empty, loser.BackdropTag))
+        {
+            winner.BackdropTag = loser.BackdropTag;
+            winner.BackdropItemId = loser.BackdropItemId;
+            winner.BackdropServerId = loser.BackdropServerId;
+        }
+        if (string.IsNullOrEmpty(winner.TmdbKey) && !string.IsNullOrEmpty(loser.TmdbKey))
+        {
+            winner.TmdbKey = loser.TmdbKey;
+        }
+    }
+
+    private void AttachItemToGroupRecord(
+        DedupGroupRecord target,
+        EmbyItem item,
+        int height,
+        long bitrate,
+        int is4k,
+        string? audio,
+        int score,
+        string? itemTmdbKey,
+        List<CandidateKey> candidateKeys,
+        List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave,
+        List<(string ServerId, string ItemId, int GroupId)> itemAssignments,
+        List<DedupGroupRecord> dirtyGroups)
+    {
+        target.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
+        target.VersionCount = target.ItemIds.Count;
+        target.MaxHeight = Math.Max(target.MaxHeight ?? 0, height);
+        target.MaxBitrate = Math.Max(target.MaxBitrate ?? 0, bitrate);
+        target.Has4k = Math.Max(target.Has4k, is4k);
+        AppendAudioCodec(target, audio);
+
+        if (ShouldElectImage(target, item.ServerId, item.Id, item.ImageTag))
+        {
+            target.ImageTag = item.ImageTag;
+            target.ImageItemId = item.Id;
+            target.ImageServerId = item.ServerId;
+        }
+        if (ShouldElectBackdrop(target, item.ServerId, item.Id, item.BackdropTag))
+        {
+            target.BackdropTag = item.BackdropTag;
+            target.BackdropItemId = item.Id;
+            target.BackdropServerId = item.ServerId;
+        }
+        if (string.IsNullOrEmpty(target.TmdbKey) && !string.IsNullOrEmpty(itemTmdbKey))
+        {
+            target.TmdbKey = itemTmdbKey;
+        }
+
+        if (score > target.PrimaryScore)
+        {
+            UpdatePrimary(target, item, score);
+        }
+
+        foreach (var ck in candidateKeys)
+        {
+            target.Keys.Add(ck.Key);
+            _keyToGroup[ck.Key] = (target.GroupId, ck.IsAuthoritative);
+            keysToSave.Add((ck.Key, target.GroupId, ck.IsAuthoritative));
+        }
+
+        item.DedupGroupId = target.GroupId.ToString();
+        itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, target.GroupId));
+        target.IsDirty = true;
+        if (!dirtyGroups.Contains(target)) dirtyGroups.Add(target);
+    }
+
     private static void AppendAudioCodec(DedupGroupRecord g, string? audio)
     {
         if (string.IsNullOrWhiteSpace(audio)) return;
@@ -677,8 +705,6 @@ public class ConcurrentDedupIndex
         g.SortName = item.SortName;
         g.Year = item.ProductionYear ?? g.Year;
         g.Overview = item.Overview ?? g.Overview;
-        g.ImageTag = item.ImageTag ?? g.ImageTag;
-        g.BackdropTag = item.BackdropTag ?? g.BackdropTag;
         g.CommunityRating = item.CommunityRating ?? g.CommunityRating;
     }
 }

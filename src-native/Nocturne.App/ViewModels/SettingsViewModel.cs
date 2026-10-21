@@ -238,6 +238,10 @@ public class SettingsViewModel : BaseViewModel
     private readonly TraktService _trakt;
     private readonly ThemeColorService _themeColors;
     private readonly EmbyConnectService _connect;
+    private readonly ITraktAuthService _traktAuth;
+    private readonly ITraktSyncService _traktSync;
+    private readonly ITmdbEnrichmentService _tmdbEnrichment;
+    private readonly TraktQueueDrainWorker _traktDrain;
 
     // Categorized Tabs Navigation
     private string _selectedCategory = "servers";
@@ -338,7 +342,6 @@ public class SettingsViewModel : BaseViewModel
     private bool _traktSyncWatchedState = true;
     private bool _traktShowWatchlistInSidebar = true;
     private string _traktClientId = string.Empty;
-    private string _traktClientSecret = string.Empty;
 
     public ObservableCollection<ServerPriorityItem> Servers { get; } = new();
     public ObservableCollection<CombinedMapping> CombinedGroups { get; } = new();
@@ -351,7 +354,11 @@ public class SettingsViewModel : BaseViewModel
         SyncEngine sync,
         TraktService trakt,
         ThemeColorService themeColors,
-        EmbyConnectService connect)
+        EmbyConnectService connect,
+        ITraktAuthService traktAuth,
+        ITraktSyncService traktSync,
+        ITmdbEnrichmentService tmdbEnrichment,
+        TraktQueueDrainWorker traktDrain)
     {
         _settings = settings;
         _embyClient = embyClient;
@@ -361,6 +368,21 @@ public class SettingsViewModel : BaseViewModel
         _trakt = trakt;
         _themeColors = themeColors;
         _connect = connect;
+        _traktAuth = traktAuth;
+        _traktSync = traktSync;
+        _tmdbEnrichment = tmdbEnrichment;
+        _traktDrain = traktDrain;
+
+        _traktAuth.StateChanged += (s, e) =>
+        {
+            System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                OnPropertyChanged(nameof(IsTraktConnected));
+                OnPropertyChanged(nameof(TraktStateText));
+                OnPropertyChanged(nameof(TraktUsername));
+                OnPropertyChanged(nameof(TraktQueueDepth));
+            });
+        };
 
         LoadFromSettings();
 
@@ -501,7 +523,6 @@ public class SettingsViewModel : BaseViewModel
         _traktSyncWatchedState = s.TraktSyncWatchedState;
         _traktShowWatchlistInSidebar = s.TraktShowWatchlistInSidebar;
         _traktClientId = s.TraktClientIdOverride;
-        _traktClientSecret = s.TraktClientSecretOverride;
 
         LoadServers();
         LoadCombinedGroups();
@@ -1393,9 +1414,10 @@ public class SettingsViewModel : BaseViewModel
     }
 
     // Trakt Properties
-    public bool IsTraktConnected => _trakt.IsConnected;
-
-    public string? TraktUsername => _settings.Current.TraktUsername;
+    public bool IsTraktConnected => _traktAuth.State == TraktConnectionState.Connected;
+    public string TraktStateText => _traktAuth.State.ToString();
+    public string? TraktUsername => _traktAuth.Username ?? _settings.Current.TraktUsername;
+    public int TraktQueueDepth => _traktDrain.PendingQueueDepth;
 
     public string? TraktAuthCode
     {
@@ -1457,18 +1479,6 @@ public class SettingsViewModel : BaseViewModel
         }
     }
 
-    public string TraktClientSecret
-    {
-        get => _traktClientSecret;
-        set
-        {
-            if (SetProperty(ref _traktClientSecret, value))
-            {
-                _settings.Update(s => s.TraktClientSecretOverride = value);
-            }
-        }
-    }
-
     private string? _traktStatusMessage;
     public string? TraktStatusMessage
     {
@@ -1518,9 +1528,9 @@ public class SettingsViewModel : BaseViewModel
     public async Task StartTraktAuthAsync()
     {
         TraktStatusMessage = "Connecting to Trakt.tv...";
-        var (dc, err) = await _trakt.GetDeviceCodeAsync();
-        if (dc != null)
+        try
         {
+            var dc = await _traktAuth.RequestDeviceCodeAsync(CancellationToken.None);
             TraktAuthCode = dc.UserCode;
             TraktAuthUrl = dc.VerificationUrl;
             TraktStatusMessage = $"Code generated: {dc.UserCode}. Opening trakt.tv/activate...";
@@ -1541,39 +1551,41 @@ public class SettingsViewModel : BaseViewModel
                 while (DateTime.UtcNow < deadline)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(dc.Interval > 0 ? dc.Interval : 5));
-                    var (success, expired, pollErr) = await _trakt.PollTokenAsync(dc.DeviceCode);
-                    if (success)
+                    var res = await _traktAuth.PollForTokenAsync(dc, CancellationToken.None);
+                    if (res.Status == TraktAuthStatus.Authorized)
                     {
                         await Application.Current.Dispatcher.InvokeAsync(async () =>
                         {
                             OnPropertyChanged(nameof(IsTraktConnected));
+                            OnPropertyChanged(nameof(TraktStateText));
                             OnPropertyChanged(nameof(TraktUsername));
                             TraktAuthCode = null;
-                            TraktStatusMessage = $"Connected successfully as @{_settings.Current.TraktUsername}!";
+                            TraktStatusMessage = $"Connected successfully as @{_traktAuth.Username}!";
                             _ = _sync.RunFullSyncAsync();
                         });
                         break;
                     }
-                    if (expired)
+                    if (res.Status == TraktAuthStatus.Expired || res.Status == TraktAuthStatus.Denied || res.Status == TraktAuthStatus.AlreadyUsed)
                     {
                         await Application.Current.Dispatcher.InvokeAsync(() =>
                         {
                             TraktAuthCode = null;
-                            TraktStatusMessage = pollErr ?? "Device code expired. Please click Connect Trakt again.";
+                            TraktStatusMessage = res.ErrorMessage ?? $"Authorization {res.Status}. Please click Connect Trakt again.";
                         });
                         break;
                     }
                 }
             });
         }
-        else
+        catch (Exception ex)
         {
-            TraktStatusMessage = err ?? "Failed to initiate Trakt authorization. Please check credentials.";
+            TraktStatusMessage = $"Failed to initiate Trakt authorization: {ex.Message}";
         }
     }
 
-    public void DisconnectTrakt()
+    public async Task DisconnectTraktAsync()
     {
+        await _traktAuth.DisconnectAsync(CancellationToken.None);
         _settings.Update(s =>
         {
             s.TraktAccessToken = null;
@@ -1583,7 +1595,103 @@ public class SettingsViewModel : BaseViewModel
         });
         TraktStatusMessage = "Disconnected from Trakt.tv.";
         OnPropertyChanged(nameof(IsTraktConnected));
+        OnPropertyChanged(nameof(TraktStateText));
         OnPropertyChanged(nameof(TraktUsername));
+    }
+
+    public void DisconnectTrakt()
+    {
+        _ = DisconnectTraktAsync();
+    }
+
+    private bool _isTraktReconciling;
+    public bool IsTraktReconciling
+    {
+        get => _isTraktReconciling;
+        set => SetProperty(ref _isTraktReconciling, value);
+    }
+
+    public async Task RunTraktFullReconcileAsync()
+    {
+        if (IsTraktReconciling) return;
+        IsTraktReconciling = true;
+        TraktStatusMessage = "Running full reconcile with Trakt.tv...";
+        try
+        {
+            var p = new Progress<int>(pct =>
+            {
+                TraktStatusMessage = $"Reconciling with Trakt: {pct}%";
+            });
+            await _traktSync.FullReconcileAsync(p, CancellationToken.None);
+            TraktStatusMessage = "Trakt full reconcile complete.";
+        }
+        catch (Exception ex)
+        {
+            TraktStatusMessage = $"Full reconcile error: {ex.Message}";
+        }
+        finally
+        {
+            IsTraktReconciling = false;
+        }
+    }
+
+    // TMDB Properties
+    public int TmdbEnrichedCount => _tmdbEnrichment.EnrichedCount;
+    public int TmdbPendingCount => _tmdbEnrichment.PendingCount;
+    public int TmdbNotFoundCount => _tmdbEnrichment.NotFoundCount;
+
+    public string TmdbApiKey
+    {
+        get => _tmdbEnrichment.GetActiveApiKey();
+        set
+        {
+            _tmdbEnrichment.SetCustomApiKey(value);
+            OnPropertyChanged(nameof(TmdbApiKey));
+        }
+    }
+
+    private bool _isTmdbEnriching;
+    public bool IsTmdbEnriching
+    {
+        get => _isTmdbEnriching;
+        set => SetProperty(ref _isTmdbEnriching, value);
+    }
+
+    private string _tmdbEnrichStatus = string.Empty;
+    public string TmdbEnrichStatus
+    {
+        get => _tmdbEnrichStatus;
+        set => SetProperty(ref _tmdbEnrichStatus, value);
+    }
+
+    public async Task RunTmdbEnrichmentAsync()
+    {
+        if (IsTmdbEnriching) return;
+        IsTmdbEnriching = true;
+        TmdbEnrichStatus = "Starting TMDB enrichment...";
+        try
+        {
+            var p = new Progress<EnrichProgress>(prog =>
+            {
+                TmdbEnrichStatus = $"Enriched {prog.Enriched}/{prog.Total} items ({prog.CurrentTitle})...";
+                OnPropertyChanged(nameof(TmdbEnrichedCount));
+                OnPropertyChanged(nameof(TmdbPendingCount));
+                OnPropertyChanged(nameof(TmdbNotFoundCount));
+            });
+            await _tmdbEnrichment.RunAsync(p, CancellationToken.None);
+            TmdbEnrichStatus = "TMDB enrichment finished.";
+        }
+        catch (Exception ex)
+        {
+            TmdbEnrichStatus = $"TMDB enrichment error: {ex.Message}";
+        }
+        finally
+        {
+            IsTmdbEnriching = false;
+            OnPropertyChanged(nameof(TmdbEnrichedCount));
+            OnPropertyChanged(nameof(TmdbPendingCount));
+            OnPropertyChanged(nameof(TmdbNotFoundCount));
+        }
     }
 
     public async Task AutoMapCombinedGroupsAsync()

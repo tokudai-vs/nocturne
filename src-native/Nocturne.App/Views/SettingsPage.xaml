@@ -1037,9 +1037,16 @@
                                 <Border Background="#332EA043" CornerRadius="4" Padding="8,4" Margin="0,0,8,0">
                                     <TextBlock Text="{Binding TraktUsername, StringFormat='Connected (@{0})'}" Foreground="#2EA043" FontWeight="SemiBold" FontSize="12" />
                                 </Border>
+                                <Button Content="Full Reconcile" Click="OnTraktFullReconcileClick" IsEnabled="{Binding IsTraktReconciling, Converter={StaticResource InverseBool}}" Padding="8,4" Margin="0,0,8,0" />
                                 <Button Content="Disconnect" Click="OnDisconnectTraktClick" Padding="8,4" />
                             </StackPanel>
                         </DockPanel>
+
+                        <!-- Trakt Queue Depth & Connection State -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10" Visibility="{Binding IsTraktConnected, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="{Binding TraktQueueDepth, StringFormat='Event Queue: {0} pending'}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,16,0" />
+                            <TextBlock Text="{Binding TraktStateText, StringFormat='Status: {0}'}" FontSize="12" Foreground="{DynamicResource NocturneAmberBrush}" />
+                        </StackPanel>
 
                         <!-- Trakt Code Display & Activate Button -->
                         <Border Margin="0,6,0,14" Padding="14,12" Background="#20E5A00D" BorderBrush="{DynamicResource NocturneAmberBrush}"
@@ -1087,15 +1094,6 @@
                                     <TextBlock Grid.Column="0" Text="Client ID" VerticalAlignment="Center" FontWeight="SemiBold" />
                                     <ui:TextBox Grid.Column="1" Text="{Binding TraktClientId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Paste 64-character Client ID from Trakt.tv" />
                                 </Grid>
-
-                                <Grid Margin="0,0,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="130" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Client Secret" VerticalAlignment="Center" FontWeight="SemiBold" />
-                                    <ui:TextBox Grid.Column="1" Text="{Binding TraktClientSecret, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Paste 64-character Client Secret from Trakt.tv" />
-                                </Grid>
                             </StackPanel>
                         </Expander>
 
@@ -1118,6 +1116,69 @@
                                             IsChecked="{Binding TraktShowWatchlistInSidebar, Mode=TwoWay}" />
                             <TextBlock Text="Show Trakt Watchlist in Navigation" VerticalAlignment="Center" FontWeight="SemiBold" />
                         </DockPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Section 8: TMDB Metadata & Artwork Fallback -->
+                <TextBlock Text="The Movie Database (TMDB) Fallback Enrichment" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,12" />
+
+                <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="20,16" Margin="0,0,0,24">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,12">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="TMDB Artwork Fallback" FontWeight="SemiBold" />
+                                <TextBlock Text="Provides high-resolution posters, backdrops, and episode stills when servers lack artwork"
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <Button DockPanel.Dock="Right" Content="Enrich Missing Artwork Now" Click="OnRunTmdbEnrichClick"
+                                    IsEnabled="{Binding IsTmdbEnriching, Converter={StaticResource InverseBool}}"
+                                    Style="{StaticResource AmberPrimaryButton}" Padding="12,6" />
+                        </DockPanel>
+
+                        <!-- Enrichment Statistics -->
+                        <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}" CornerRadius="8" Padding="14,10" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="ENRICHED" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding TmdbEnrichedCount}" FontSize="18" FontWeight="Bold" Foreground="#2EA043" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="PENDING ENRICHMENT" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding TmdbPendingCount}" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="NOT FOUND" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding TmdbNotFoundCount}" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Text="{Binding TmdbEnrichStatus}" FontSize="12" Foreground="{DynamicResource NocturneAmberBrush}"
+                                   Margin="0,0,0,10" Visibility="{Binding TmdbEnrichStatus, Converter={StaticResource NullToVisibility}}" />
+
+                        <!-- Custom API Key Setup -->
+                        <Expander Header="Custom TMDB API Key (Optional)" Margin="0,0,0,4" IsExpanded="False">
+                            <StackPanel Margin="0,8,0,4">
+                                <TextBlock Text="Nocturne includes a bundled rate-limited TMDB configuration. You may supply your personal TMDB API Read Token or v3 API Key for independent quota."
+                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" LineHeight="16" Margin="0,0,0,8" />
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="130" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="TMDB API Key" VerticalAlignment="Center" FontWeight="SemiBold" />
+                                    <ui:TextBox Grid.Column="1" Text="{Binding TmdbApiKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Paste TMDB API Key (Leave empty to use default)" />
+                                </Grid>
+                            </StackPanel>
+                        </Expander>
                     </StackPanel>
                 </Border>
             </StackPanel>
@@ -1143,6 +1204,15 @@
                         </DockPanel>
                         <TextBlock Text="Pure .NET 8 WPF-UI native desktop client with zero Chromium or web engine overhead, hardware-accelerated libmpv direct rendering, multi-server library support, smart version grouping, TheIntroDB skip segments, and Trakt.tv scrobbling."
                                    FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="18" />
+
+                        <!-- Mandatory TMDB Attribution (§10.4) -->
+                        <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}" CornerRadius="6" Padding="12,10" Margin="0,12,0,0">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="TMDB" FontWeight="Bold" FontSize="14" Foreground="#01B4E4" Margin="0,0,12,0" VerticalAlignment="Center" />
+                                <TextBlock Text="This product uses the TMDB API but is not endorsed or certified by TMDB."
+                                           FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </Border>
 

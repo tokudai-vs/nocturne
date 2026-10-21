@@ -97,6 +97,26 @@
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
 
+                    <!-- Watchlist Bookmark Button (§12.5: revealed on hover and keyboard focus) -->
+                    <Button x:Name="WatchlistButton"
+                            Width="26" Height="26" Padding="0"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Margin="6,32,6,0" Panel.ZIndex="15"
+                            Background="#D9141414" BorderThickness="1"
+                            BorderBrush="{DynamicResource NocturneAmberBrush}"
+                            Click="OnWatchlistButtonClick"
+                            Visibility="Collapsed"
+                            ToolTip="Toggle Watchlist">
+                        <Button.Resources>
+                            <Style TargetType="Border">
+                                <Setter Property="CornerRadius" Value="13" />
+                            </Style>
+                        </Button.Resources>
+                        <ui:SymbolIcon x:Name="WatchlistIcon" Symbol="Bookmark16" FontSize="12"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+
                     <!-- Progress Bar (Inset from edges so border remains crisp) -->
                     <ProgressBar x:Name="ProgressBar" Height="4" VerticalAlignment="Bottom"
                                  Margin="6,0,6,6"

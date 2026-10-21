@@ -21,6 +21,9 @@
         <DataTemplate DataType="{x:Type vm:HomeViewModel}">
             <views:HomePage />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:WatchlistViewModel}">
+            <views:WatchlistPage />
+        </DataTemplate>
         <DataTemplate DataType="{x:Type vm:LibraryViewModel}">
             <views:LibraryPage />
         </DataTemplate>
@@ -150,6 +153,27 @@
                             <ui:SymbolIcon Symbol="Home24" FontSize="16" Margin="0,0,8,0"
                                            Foreground="{Binding HomeTabIconBrush}" />
                             <TextBlock Text="Home" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{Binding TopBarForeground}" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Watchlist Button (§12.3: Home | Watchlist | Libraries) -->
+                    <Button Click="OnWatchlistTabClick" Margin="0,0,6,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TopNavButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsWatchlistActive}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource NocturneAmberBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Bookmark24" FontSize="16" Margin="0,0,8,0"
+                                           Foreground="{Binding WatchlistTabIconBrush}" />
+                            <TextBlock Text="Watchlist" FontSize="13" FontWeight="SemiBold"
                                        Foreground="{Binding TopBarForeground}" />
                         </StackPanel>
                     </Button>

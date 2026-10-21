@@ -226,7 +226,12 @@ public class DatabaseService : IDisposable
                 max_height       INTEGER,
                 has_4k           INTEGER NOT NULL DEFAULT 0,
                 max_bitrate      INTEGER,
-                audio_formats    TEXT
+                audio_formats    TEXT,
+                image_item_id    TEXT,
+                image_server_id  TEXT,
+                backdrop_item_id TEXT,
+                backdrop_server_id TEXT,
+                tmdb_key         TEXT
             );
 
             -- 2. Union-Find Alias Table (WITHOUT ROWID)
@@ -244,6 +249,7 @@ public class DatabaseService : IDisposable
                 runtime_ticks   INTEGER,
                 played          INTEGER NOT NULL DEFAULT 0,
                 last_played_utc INTEGER,
+                origin          TEXT NOT NULL DEFAULT 'local',
                 updated_locally INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (server_id, item_id)
             ) WITHOUT ROWID;
@@ -263,6 +269,50 @@ public class DatabaseService : IDisposable
                 attempts       INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(server_id, item_id)
             );
+
+            -- 5. Merged Watchlist (Emby Favorites + Trakt Watchlist, D10)
+            CREATE TABLE IF NOT EXISTS watchlist_entries (
+                source     TEXT NOT NULL,
+                ref        TEXT NOT NULL,
+                item_type  TEXT NOT NULL,
+                added_utc  INTEGER NOT NULL,
+                title      TEXT,
+                year       INTEGER,
+                tmdb_key   TEXT,
+                pending_op TEXT,
+                PRIMARY KEY (source, ref)
+            ) WITHOUT ROWID;
+
+            -- 6. TMDB Fallback Metadata Cache (D9, D11)
+            CREATE TABLE IF NOT EXISTS tmdb_metadata (
+                provider_key  TEXT PRIMARY KEY,
+                poster_path   TEXT,
+                backdrop_path TEXT,
+                still_path    TEXT,
+                overview      TEXT,
+                vote_average  REAL,
+                fetched_utc   INTEGER NOT NULL,
+                not_found     INTEGER NOT NULL DEFAULT 0
+            ) WITHOUT ROWID;
+
+            -- 7. Trakt Scrobble & Sync Queue (Ordered Event Stream, D6, §4.4)
+            CREATE TABLE IF NOT EXISTS trakt_queue (
+                queue_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id   INTEGER NOT NULL,
+                action     TEXT NOT NULL,
+                progress   REAL NOT NULL DEFAULT 0,
+                payload    TEXT,
+                queued_utc INTEGER NOT NULL,
+                attempts   INTEGER NOT NULL DEFAULT 0
+            );
+
+            -- 8. Integration State (Trakt & TMDB Sync Markers, §4.5)
+            CREATE TABLE IF NOT EXISTS integration_state (
+                name       TEXT NOT NULL,
+                key        TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                PRIMARY KEY (name, key)
+            ) WITHOUT ROWID;
         ";
         initCmd.ExecuteNonQuery();
 
@@ -285,14 +335,31 @@ public class DatabaseService : IDisposable
             { "edition", "TEXT" }
         });
 
-        // 6. watch_events migration
+        // 6. dedup_groups column migration (§3.1)
+        MigrateTableColumns(conn, "dedup_groups", new Dictionary<string, string>
+        {
+            { "image_item_id", "TEXT" },
+            { "image_server_id", "TEXT" },
+            { "backdrop_item_id", "TEXT" },
+            { "backdrop_server_id", "TEXT" },
+            { "tmdb_key", "TEXT" }
+        });
+
+        // 7. user_data column migration (D7, §4.1)
+        MigrateTableColumns(conn, "user_data", new Dictionary<string, string>
+        {
+            { "origin", "TEXT NOT NULL DEFAULT 'local'" },
+            { "updated_locally", "INTEGER NOT NULL DEFAULT 0" }
+        });
+
+        // 8. watch_events migration
         MigrateTableColumns(conn, "watch_events", new Dictionary<string, string>
         {
             { "series_name", "TEXT" },
             { "genres", "TEXT" }
         });
 
-        // 7. Indexes
+        // 9. Indexes
         using var idxCmd = conn.CreateCommand();
         idxCmd.CommandText = @"
             CREATE INDEX IF NOT EXISTS idx_cached_items_type ON cached_items(type);
@@ -308,6 +375,9 @@ public class DatabaseService : IDisposable
             CREATE INDEX IF NOT EXISTS ix_dedup_groups_primary ON dedup_groups(primary_item_id, primary_server);
             CREATE INDEX IF NOT EXISTS ix_dedup_groups_series ON dedup_groups(series_group_id, season_number, episode_number);
             CREATE INDEX IF NOT EXISTS ix_dedup_groups_sort ON dedup_groups(item_type, sort_name);
+            CREATE INDEX IF NOT EXISTS ix_groups_needs_art ON dedup_groups(group_id) WHERE image_tag IS NULL AND tmdb_key IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_trakt_queue_order ON trakt_queue(queued_utc ASC);
+            CREATE INDEX IF NOT EXISTS ix_watchlist_entries_added ON watchlist_entries(added_utc DESC);
             CREATE INDEX IF NOT EXISTS idx_watch_events_time ON watch_events(watched_at);
             CREATE INDEX IF NOT EXISTS idx_watch_events_source ON watch_events(source);
         ";
@@ -613,6 +683,25 @@ public class DatabaseService : IDisposable
                 var puPlayed = userCmd.Parameters.Add("$u_played", SqliteType.Integer);
                 var puLast = userCmd.Parameters.Add("$u_last", SqliteType.Integer);
 
+                using var wlCmd = _connection.CreateCommand();
+                wlCmd.Transaction = tx;
+                wlCmd.CommandText = @"
+                    INSERT INTO watchlist_entries (source, ref, item_type, added_utc, title, year, tmdb_key)
+                    VALUES ($w_src, $w_ref, $w_type, $w_added, $w_title, $w_year, $w_tmdb)
+                    ON CONFLICT(source, ref) DO UPDATE SET
+                        item_type = excluded.item_type,
+                        title = COALESCE(excluded.title, watchlist_entries.title),
+                        year = COALESCE(excluded.year, watchlist_entries.year),
+                        tmdb_key = COALESCE(excluded.tmdb_key, watchlist_entries.tmdb_key);
+                ";
+                var pwSrc = wlCmd.Parameters.Add("$w_src", SqliteType.Text);
+                var pwRef = wlCmd.Parameters.Add("$w_ref", SqliteType.Text);
+                var pwType = wlCmd.Parameters.Add("$w_type", SqliteType.Text);
+                var pwAdded = wlCmd.Parameters.Add("$w_added", SqliteType.Integer);
+                var pwTitle = wlCmd.Parameters.Add("$w_title", SqliteType.Text);
+                var pwYear = wlCmd.Parameters.Add("$w_year", SqliteType.Integer);
+                var pwTmdb = wlCmd.Parameters.Add("$w_tmdb", SqliteType.Text);
+
                 var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
                 foreach (var item in chunk)
@@ -665,6 +754,21 @@ public class DatabaseService : IDisposable
                         puPlayed.Value = item.UserData.Played ? 1 : 0;
                         puLast.Value = lastPlayed;
                         userCmd.ExecuteNonQuery();
+                    }
+
+                    if (item.UserData != null && item.UserData.IsFavorite)
+                    {
+                        string? tmdbKey = !string.IsNullOrEmpty(item.TmdbId)
+                            ? $"tmdb:{(string.Equals(item.Type, "Series", StringComparison.OrdinalIgnoreCase) ? "tv" : "movie")}:{item.TmdbId}"
+                            : null;
+                        pwSrc.Value = serverId;
+                        pwRef.Value = item.Id;
+                        pwType.Value = item.Type ?? "Movie";
+                        pwAdded.Value = now;
+                        pwTitle.Value = item.Name;
+                        pwYear.Value = (object?)item.ProductionYear ?? DBNull.Value;
+                        pwTmdb.Value = (object?)tmdbKey ?? DBNull.Value;
+                        wlCmd.ExecuteNonQuery();
                     }
                 }
 
@@ -1867,12 +1971,14 @@ public class DatabaseService : IDisposable
                             group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
                             name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
                             date_created, series_group_id, season_number, episode_number,
-                            max_height, has_4k, max_bitrate, audio_formats
+                            max_height, has_4k, max_bitrate, audio_formats,
+                            image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
                         ) VALUES (
                             $group_id, $item_type, $primary_item_id, $primary_server, $is_provisional, $version_count,
                             $name, $sort_name, $year, $overview, $image_tag, $backdrop_tag, $community_rating,
                             $date_created, $series_group_id, $season_number, $episode_number,
-                            $max_height, $has_4k, $max_bitrate, $audio_formats
+                            $max_height, $has_4k, $max_bitrate, $audio_formats,
+                            $image_item_id, $image_server_id, $backdrop_item_id, $backdrop_server_id, $tmdb_key
                         )
                         ON CONFLICT(group_id) DO UPDATE SET
                             item_type = excluded.item_type,
@@ -1894,7 +2000,12 @@ public class DatabaseService : IDisposable
                             max_height = excluded.max_height,
                             has_4k = excluded.has_4k,
                             max_bitrate = excluded.max_bitrate,
-                            audio_formats = excluded.audio_formats;
+                            audio_formats = excluded.audio_formats,
+                            image_item_id = excluded.image_item_id,
+                            image_server_id = excluded.image_server_id,
+                            backdrop_item_id = excluded.backdrop_item_id,
+                            backdrop_server_id = excluded.backdrop_server_id,
+                            tmdb_key = excluded.tmdb_key;
                     ";
 
                     var pGroupId = grpCmd.Parameters.Add("$group_id", SqliteType.Integer);
@@ -1918,6 +2029,11 @@ public class DatabaseService : IDisposable
                     var pHas4k = grpCmd.Parameters.Add("$has_4k", SqliteType.Integer);
                     var pMaxBitrate = grpCmd.Parameters.Add("$max_bitrate", SqliteType.Integer);
                     var pAudioFormats = grpCmd.Parameters.Add("$audio_formats", SqliteType.Text);
+                    var pImageItemId = grpCmd.Parameters.Add("$image_item_id", SqliteType.Text);
+                    var pImageServerId = grpCmd.Parameters.Add("$image_server_id", SqliteType.Text);
+                    var pBackdropItemId = grpCmd.Parameters.Add("$backdrop_item_id", SqliteType.Text);
+                    var pBackdropServerId = grpCmd.Parameters.Add("$backdrop_server_id", SqliteType.Text);
+                    var pTmdbKey = grpCmd.Parameters.Add("$tmdb_key", SqliteType.Text);
 
                     foreach (var g in dirtyGroups)
                     {
@@ -1942,6 +2058,11 @@ public class DatabaseService : IDisposable
                         pHas4k.Value = g.Has4k;
                         pMaxBitrate.Value = (object?)g.MaxBitrate ?? DBNull.Value;
                         pAudioFormats.Value = (object?)g.AudioFormats ?? DBNull.Value;
+                        pImageItemId.Value = (object?)g.ImageItemId ?? DBNull.Value;
+                        pImageServerId.Value = (object?)g.ImageServerId ?? DBNull.Value;
+                        pBackdropItemId.Value = (object?)g.BackdropItemId ?? DBNull.Value;
+                        pBackdropServerId.Value = (object?)g.BackdropServerId ?? DBNull.Value;
+                        pTmdbKey.Value = (object?)g.TmdbKey ?? DBNull.Value;
 
                         grpCmd.ExecuteNonQuery();
                         g.IsDirty = false;
@@ -1997,7 +2118,8 @@ public class DatabaseService : IDisposable
                     SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
                            name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
                            date_created, series_group_id, season_number, episode_number,
-                           max_height, has_4k, max_bitrate, audio_formats
+                           max_height, has_4k, max_bitrate, audio_formats,
+                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
                     FROM dedup_groups;
                 ";
                 using var reader = cmd.ExecuteReader();
@@ -2026,6 +2148,11 @@ public class DatabaseService : IDisposable
                         Has4k = reader.GetInt32(18),
                         MaxBitrate = reader.IsDBNull(19) ? null : reader.GetInt64(19),
                         AudioFormats = reader.IsDBNull(20) ? null : reader.GetString(20),
+                        ImageItemId = reader.IsDBNull(21) ? null : reader.GetString(21),
+                        ImageServerId = reader.IsDBNull(22) ? null : reader.GetString(22),
+                        BackdropItemId = reader.IsDBNull(23) ? null : reader.GetString(23),
+                        BackdropServerId = reader.IsDBNull(24) ? null : reader.GetString(24),
+                        TmdbKey = reader.IsDBNull(25) ? null : reader.GetString(25),
                         IsDirty = false
                     };
                     groups.Add(g);
@@ -2419,7 +2546,19 @@ public class DatabaseService : IDisposable
                   WHERE u.position_ticks > 0 AND u.played = 0
                   GROUP BY g.group_id
                   ORDER BY latest_played DESC
-                  LIMIT 20;"
+                  LIMIT 20;",
+                "SELECT queue_id, group_id, action, progress, payload, queued_utc, attempts FROM trakt_queue ORDER BY queued_utc ASC LIMIT 50;",
+                "SELECT source, ref, item_type, added_utc, title, year, tmdb_key, pending_op FROM watchlist_entries;",
+                "SELECT provider_key, poster_path, backdrop_path, still_path, overview, vote_average, fetched_utc, not_found FROM tmdb_metadata WHERE provider_key = $key;",
+                "SELECT name, key, value FROM integration_state WHERE name = $name;",
+                @"SELECT g.group_id, g.name, g.year, g.image_tag, g.image_server_id, g.image_item_id, g.tmdb_key,
+                         MIN(w.added_utc) AS added, 1 AS in_lib, w.source, w.ref, g.item_type, t.poster_path
+                  FROM watchlist_entries w
+                  JOIN cached_items c ON c.server_id = w.source AND c.id = w.ref
+                  JOIN dedup_groups g ON g.group_id = c.group_id
+                  LEFT JOIN tmdb_metadata t ON t.provider_key = g.tmdb_key
+                  WHERE w.source <> 'trakt' AND COALESCE(w.pending_op, '') <> 'remove'
+                  GROUP BY g.group_id;"
             };
 
             foreach (var sql in queriesToCheck)
@@ -2432,7 +2571,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public void UpdateLocalPlaybackProgress(string serverId, string itemId, long positionTicks, long? runtimeTicks = null)
+    public void UpdateLocalPlaybackProgress(string serverId, string itemId, long positionTicks, bool played, long? runtimeTicks = null)
     {
         lock (_dbLock)
         {
@@ -2440,11 +2579,11 @@ public class DatabaseService : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = @"
                 INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
-                VALUES ($server_id, $item_id, $position_ticks, $runtime_ticks, 0, $last_played_utc, 1)
+                VALUES ($server_id, $item_id, $position_ticks, $runtime_ticks, $played, $last_played_utc, 1)
                 ON CONFLICT(server_id, item_id) DO UPDATE SET
                     position_ticks = excluded.position_ticks,
                     runtime_ticks = COALESCE(excluded.runtime_ticks, user_data.runtime_ticks),
-                    played = 0,
+                    played = excluded.played,
                     last_played_utc = excluded.last_played_utc,
                     updated_locally = 1;
             ";
@@ -2452,12 +2591,18 @@ public class DatabaseService : IDisposable
             cmd.Parameters.AddWithValue("$item_id", itemId);
             cmd.Parameters.AddWithValue("$position_ticks", positionTicks);
             cmd.Parameters.AddWithValue("$runtime_ticks", (object?)runtimeTicks ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$played", played ? 1 : 0);
             cmd.Parameters.AddWithValue("$last_played_utc", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             cmd.ExecuteNonQuery();
         }
     }
 
-    public void MarkLocalGroupPlayed(int groupId)
+    public void UpdateLocalPlaybackProgress(string serverId, string itemId, long positionTicks, long? runtimeTicks = null)
+    {
+        UpdateLocalPlaybackProgress(serverId, itemId, positionTicks, false, runtimeTicks);
+    }
+
+    public void MarkLocalGroupPlayed(long groupId)
     {
         lock (_dbLock)
         {
@@ -2498,6 +2643,39 @@ public class DatabaseService : IDisposable
             cmd.Parameters.AddWithValue("$now", now);
             cmd.ExecuteNonQuery();
         }
+    }
+
+    public void UpdateUserDataState(string serverId, string itemId, long positionTicks, long? runtimeTicks, bool played, long lastPlayedUtc, string origin = "local")
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, origin, updated_locally)
+                VALUES ($server_id, $item_id, $position_ticks, $runtime_ticks, $played, $last_played_utc, $origin, 1)
+                ON CONFLICT(server_id, item_id) DO UPDATE SET
+                    position_ticks = excluded.position_ticks,
+                    runtime_ticks = COALESCE(excluded.runtime_ticks, user_data.runtime_ticks),
+                    played = excluded.played,
+                    last_played_utc = excluded.last_played_utc,
+                    origin = excluded.origin,
+                    updated_locally = 1;
+            ";
+            cmd.Parameters.AddWithValue("$server_id", serverId);
+            cmd.Parameters.AddWithValue("$item_id", itemId);
+            cmd.Parameters.AddWithValue("$position_ticks", positionTicks);
+            cmd.Parameters.AddWithValue("$runtime_ticks", (object?)runtimeTicks ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$played", played ? 1 : 0);
+            cmd.Parameters.AddWithValue("$last_played_utc", lastPlayedUtc);
+            cmd.Parameters.AddWithValue("$origin", origin);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public void EnqueueSiblingWrite(string serverId, string itemId, long? positionTicks, bool markPlayed)
+    {
+        EnqueueSiblingPlaybackWrite(serverId, itemId, positionTicks, markPlayed);
     }
 
     public List<EmbyItem> GetContinueWatchingItems()
@@ -2675,12 +2853,14 @@ public class DatabaseService : IDisposable
                         group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
                         name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
                         date_created, series_group_id, season_number, episode_number,
-                        max_height, has_4k, max_bitrate, audio_formats
+                        max_height, has_4k, max_bitrate, audio_formats,
+                        image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
                     ) VALUES (
                         $group_id, $item_type, $primary_item_id, $primary_server, $is_provisional, $version_count,
                         $name, $sort_name, $year, $overview, $image_tag, $backdrop_tag, $community_rating,
                         $date_created, $series_group_id, $season_number, $episode_number,
-                        $max_height, $has_4k, $max_bitrate, $audio_formats
+                        $max_height, $has_4k, $max_bitrate, $audio_formats,
+                        $image_item_id, $image_server_id, $backdrop_item_id, $backdrop_server_id, $tmdb_key
                     );
                 ";
                 var pGroupId = grpCmd.Parameters.Add("$group_id", SqliteType.Integer);
@@ -2704,6 +2884,11 @@ public class DatabaseService : IDisposable
                 var pHas4k = grpCmd.Parameters.Add("$has_4k", SqliteType.Integer);
                 var pMaxBitrate = grpCmd.Parameters.Add("$max_bitrate", SqliteType.Integer);
                 var pAudioFormats = grpCmd.Parameters.Add("$audio_formats", SqliteType.Text);
+                var pImageItemId = grpCmd.Parameters.Add("$image_item_id", SqliteType.Text);
+                var pImageServerId = grpCmd.Parameters.Add("$image_server_id", SqliteType.Text);
+                var pBackdropItemId = grpCmd.Parameters.Add("$backdrop_item_id", SqliteType.Text);
+                var pBackdropServerId = grpCmd.Parameters.Add("$backdrop_server_id", SqliteType.Text);
+                var pTmdbKey = grpCmd.Parameters.Add("$tmdb_key", SqliteType.Text);
 
                 foreach (var g in groups)
                 {
@@ -2728,6 +2913,11 @@ public class DatabaseService : IDisposable
                     pHas4k.Value = g.Has4k;
                     pMaxBitrate.Value = (object?)g.MaxBitrate ?? DBNull.Value;
                     pAudioFormats.Value = (object?)g.AudioFormats ?? DBNull.Value;
+                    pImageItemId.Value = (object?)g.ImageItemId ?? DBNull.Value;
+                    pImageServerId.Value = (object?)g.ImageServerId ?? DBNull.Value;
+                    pBackdropItemId.Value = (object?)g.BackdropItemId ?? DBNull.Value;
+                    pBackdropServerId.Value = (object?)g.BackdropServerId ?? DBNull.Value;
+                    pTmdbKey.Value = (object?)g.TmdbKey ?? DBNull.Value;
                     grpCmd.ExecuteNonQuery();
                 }
 
@@ -2888,6 +3078,721 @@ public class DatabaseService : IDisposable
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // Trakt Scrobble Queue (§4.4, §7)
+    // =========================================================================
+
+    public void EnqueueTraktEvent(long groupId, string action, double progress, string? payload)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    INSERT INTO trakt_queue (group_id, action, progress, payload, queued_utc, attempts)
+                    VALUES ($group_id, $action, $progress, $payload, $queued_utc, 0);
+                ";
+                cmd.Parameters.AddWithValue("$group_id", groupId);
+                cmd.Parameters.AddWithValue("$action", action);
+                cmd.Parameters.AddWithValue("$progress", progress);
+                cmd.Parameters.AddWithValue("$payload", (object?)payload ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$queued_utc", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", $"Failed to enqueue Trakt event ({action})", ex);
+            }
+        }
+    }
+
+    public List<TraktQueueItem> GetPendingTraktEvents(int limit = 50)
+    {
+        var list = new List<TraktQueueItem>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT queue_id, group_id, action, progress, payload, queued_utc, attempts
+                    FROM trakt_queue
+                    ORDER BY queued_utc ASC
+                    LIMIT $limit;
+                ";
+                cmd.Parameters.AddWithValue("$limit", limit);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    list.Add(new TraktQueueItem(
+                        reader.GetInt64(0),
+                        reader.GetInt64(1),
+                        reader.GetString(2),
+                        reader.GetDouble(3),
+                        reader.IsDBNull(4) ? null : reader.GetString(4),
+                        reader.GetInt64(5),
+                        reader.GetInt32(6)
+                    ));
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", "Failed to get pending Trakt events", ex);
+            }
+        }
+        return list;
+    }
+
+    public void RemoveTraktEvent(long queueId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM trakt_queue WHERE queue_id = $id;";
+                cmd.Parameters.AddWithValue("$id", queueId);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", $"Failed to delete Trakt queue event {queueId}", ex);
+            }
+        }
+    }
+
+    public void IncrementTraktEventAttempts(long queueId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "UPDATE trakt_queue SET attempts = attempts + 1 WHERE queue_id = $id;";
+                cmd.Parameters.AddWithValue("$id", queueId);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("DatabaseService", $"Failed to increment Trakt event attempts: {ex.Message}");
+            }
+        }
+    }
+
+    public int GetTraktQueueCount()
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return 0;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM trakt_queue;";
+                return Convert.ToInt32(cmd.ExecuteScalar());
+            }
+            catch { return 0; }
+        }
+    }
+
+    // =========================================================================
+    // Watchlist Entries (§4.2, §9)
+    // =========================================================================
+
+    public void UpsertWatchlistEntry(string source, string @ref, string itemType, long addedUtc, string? title = null, int? year = null, string? tmdbKey = null, string? pendingOp = null)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    INSERT INTO watchlist_entries (source, ref, item_type, added_utc, title, year, tmdb_key, pending_op)
+                    VALUES ($source, $ref, $item_type, $added_utc, $title, $year, $tmdb_key, $pending_op)
+                    ON CONFLICT(source, ref) DO UPDATE SET
+                        item_type = excluded.item_type,
+                        added_utc = excluded.added_utc,
+                        title = COALESCE(excluded.title, watchlist_entries.title),
+                        year = COALESCE(excluded.year, watchlist_entries.year),
+                        tmdb_key = COALESCE(excluded.tmdb_key, watchlist_entries.tmdb_key),
+                        pending_op = excluded.pending_op;
+                ";
+                cmd.Parameters.AddWithValue("$source", source);
+                cmd.Parameters.AddWithValue("$ref", @ref);
+                cmd.Parameters.AddWithValue("$item_type", itemType);
+                cmd.Parameters.AddWithValue("$added_utc", addedUtc);
+                cmd.Parameters.AddWithValue("$title", (object?)title ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$year", (object?)year ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$tmdb_key", (object?)tmdbKey ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$pending_op", (object?)pendingOp ?? DBNull.Value);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", $"Failed to upsert watchlist entry ({source}:{@ref})", ex);
+            }
+        }
+    }
+
+    public void RemoveWatchlistEntry(string source, string @ref)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "DELETE FROM watchlist_entries WHERE source = $source AND ref = $ref;";
+                cmd.Parameters.AddWithValue("$source", source);
+                cmd.Parameters.AddWithValue("$ref", @ref);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", $"Failed to remove watchlist entry ({source}:{@ref})", ex);
+            }
+        }
+    }
+
+    public void SetWatchlistPendingOp(string source, string @ref, string? pendingOp)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "UPDATE watchlist_entries SET pending_op = $pending_op WHERE source = $source AND ref = $ref;";
+                cmd.Parameters.AddWithValue("$source", source);
+                cmd.Parameters.AddWithValue("$ref", @ref);
+                cmd.Parameters.AddWithValue("$pending_op", (object?)pendingOp ?? DBNull.Value);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", $"Failed to set pending_op for ({source}:{@ref})", ex);
+            }
+        }
+    }
+
+    public List<WatchlistCard> GetMergedWatchlist()
+    {
+        var list = new List<WatchlistCard>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT g.group_id, g.name, g.year, g.image_tag, g.image_server_id, g.image_item_id, g.tmdb_key,
+                           MIN(w.added_utc) AS added, 1 AS in_lib, w.source, w.ref, g.item_type, t.poster_path
+                    FROM watchlist_entries w
+                    JOIN cached_items c ON c.server_id = w.source AND c.id = w.ref
+                    JOIN dedup_groups g ON g.group_id = c.group_id
+                    LEFT JOIN tmdb_metadata t ON t.provider_key = g.tmdb_key
+                    WHERE w.source <> 'trakt' AND COALESCE(w.pending_op, '') <> 'remove'
+                    GROUP BY g.group_id
+
+                    UNION
+
+                    SELECT g.group_id, g.name, g.year, g.image_tag, g.image_server_id, g.image_item_id, g.tmdb_key,
+                           w.added_utc AS added, 1 AS in_lib, w.source, w.ref, g.item_type, t.poster_path
+                    FROM watchlist_entries w
+                    JOIN dedup_keys k ON k.key = w.ref
+                    JOIN dedup_groups g ON g.group_id = k.group_id
+                    LEFT JOIN tmdb_metadata t ON t.provider_key = g.tmdb_key
+                    WHERE w.source = 'trakt' AND COALESCE(w.pending_op, '') <> 'remove'
+
+                    UNION
+
+                    SELECT 0 AS group_id, w.title, w.year, NULL AS image_tag, NULL AS image_server_id, NULL AS image_item_id, w.tmdb_key,
+                           w.added_utc AS added, 0 AS in_lib, w.source, w.ref, w.item_type, t.poster_path
+                    FROM watchlist_entries w
+                    LEFT JOIN tmdb_metadata t ON t.provider_key = w.tmdb_key
+                    WHERE w.source = 'trakt' AND COALESCE(w.pending_op, '') <> 'remove'
+                      AND NOT EXISTS (SELECT 1 FROM dedup_keys k WHERE k.key = w.ref)
+                    ORDER BY added DESC;
+                ";
+                using var reader = cmd.ExecuteReader();
+                var seenGroups = new HashSet<long>();
+                var seenRefs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                while (reader.Read())
+                {
+                    long gid = reader.GetInt64(0);
+                    string title = reader.IsDBNull(1) ? "Unknown" : reader.GetString(1);
+                    int? year = reader.IsDBNull(2) ? null : reader.GetInt32(2);
+                    string? imgTag = reader.IsDBNull(3) ? null : reader.GetString(3);
+                    string? imgSrv = reader.IsDBNull(4) ? null : reader.GetString(4);
+                    string? imgItem = reader.IsDBNull(5) ? null : reader.GetString(5);
+                    string? tmdbKey = reader.IsDBNull(6) ? null : reader.GetString(6);
+                    long added = reader.GetInt64(7);
+                    bool inLib = reader.GetInt32(8) == 1;
+                    string source = reader.GetString(9);
+                    string @ref = reader.GetString(10);
+                    string itemType = reader.IsDBNull(11) ? "Movie" : reader.GetString(11);
+                    string? tmdbPoster = reader.IsDBNull(12) ? null : reader.GetString(12);
+
+                    if (inLib && gid > 0)
+                    {
+                        if (!seenGroups.Add(gid)) continue;
+                    }
+                    else
+                    {
+                        if (!seenRefs.Add(@ref)) continue;
+                    }
+
+                    list.Add(new WatchlistCard
+                    {
+                        GroupId = gid,
+                        Title = title,
+                        Year = year,
+                        ImageTag = imgTag,
+                        ImageServerId = imgSrv,
+                        ImageItemId = imgItem,
+                        TmdbKey = tmdbKey,
+                        TmdbPosterPath = tmdbPoster,
+                        Source = source,
+                        Ref = @ref,
+                        ItemType = itemType,
+                        AddedUtc = added,
+                        IsInLibrary = inLib
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", "Failed to get merged watchlist", ex);
+            }
+        }
+        return list;
+    }
+
+    public bool IsInWatchlist(long groupId, string? tmdbKey = null)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return false;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT 1 FROM watchlist_entries w
+                    JOIN cached_items c ON c.server_id = w.source AND c.id = w.ref
+                    WHERE c.group_id = $gid AND COALESCE(w.pending_op, '') <> 'remove'
+                    LIMIT 1;
+                ";
+                cmd.Parameters.AddWithValue("$gid", groupId);
+                var res = cmd.ExecuteScalar();
+                if (res != null) return true;
+
+                if (!string.IsNullOrEmpty(tmdbKey))
+                {
+                    using var cmd2 = _connection.CreateCommand();
+                    cmd2.CommandText = "SELECT 1 FROM watchlist_entries WHERE tmdb_key = $key AND COALESCE(pending_op, '') <> 'remove' LIMIT 1;";
+                    cmd2.Parameters.AddWithValue("$key", tmdbKey);
+                    return cmd2.ExecuteScalar() != null;
+                }
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    // =========================================================================
+    // TMDB Fallback Metadata (§4.3, §10)
+    // =========================================================================
+
+    public void UpsertTmdbMetadata(TmdbMetadata metadata)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    INSERT INTO tmdb_metadata (
+                        provider_key, poster_path, backdrop_path, still_path, overview, vote_average, fetched_utc, not_found
+                    ) VALUES (
+                        $provider_key, $poster_path, $backdrop_path, $still_path, $overview, $vote_average, $fetched_utc, $not_found
+                    )
+                    ON CONFLICT(provider_key) DO UPDATE SET
+                        poster_path = excluded.poster_path,
+                        backdrop_path = excluded.backdrop_path,
+                        still_path = excluded.still_path,
+                        overview = excluded.overview,
+                        vote_average = excluded.vote_average,
+                        fetched_utc = excluded.fetched_utc,
+                        not_found = excluded.not_found;
+                ";
+                cmd.Parameters.AddWithValue("$provider_key", metadata.ProviderKey);
+                cmd.Parameters.AddWithValue("$poster_path", (object?)metadata.PosterPath ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$backdrop_path", (object?)metadata.BackdropPath ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$still_path", (object?)metadata.StillPath ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$overview", (object?)metadata.Overview ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$vote_average", (object?)metadata.VoteAverage ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$fetched_utc", metadata.FetchedUtc);
+                cmd.Parameters.AddWithValue("$not_found", metadata.NotFound ? 1 : 0);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", $"Failed to upsert TMDB metadata for {metadata.ProviderKey}", ex);
+            }
+        }
+    }
+
+    public TmdbMetadata? GetTmdbMetadata(string providerKey)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT provider_key, poster_path, backdrop_path, still_path, overview, vote_average, fetched_utc, not_found
+                    FROM tmdb_metadata
+                    WHERE provider_key = $key;
+                ";
+                cmd.Parameters.AddWithValue("$key", providerKey);
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    return new TmdbMetadata
+                    {
+                        ProviderKey = reader.GetString(0),
+                        PosterPath = reader.IsDBNull(1) ? null : reader.GetString(1),
+                        BackdropPath = reader.IsDBNull(2) ? null : reader.GetString(2),
+                        StillPath = reader.IsDBNull(3) ? null : reader.GetString(3),
+                        Overview = reader.IsDBNull(4) ? null : reader.GetString(4),
+                        VoteAverage = reader.IsDBNull(5) ? null : reader.GetDouble(5),
+                        FetchedUtc = reader.GetInt64(6),
+                        NotFound = reader.GetInt32(7) == 1
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Warn("DatabaseService", $"GetTmdbMetadata failed for {providerKey}: {ex.Message}");
+            }
+        }
+        return null;
+    }
+
+    public List<(int GroupId, string ItemType, string TmdbKey, string? Title, int? Year, int? SeasonNumber, int? EpisodeNumber)> GetGroupsNeedingTmdbArt(int limit = 1000)
+    {
+        var list = new List<(int GroupId, string ItemType, string TmdbKey, string? Title, int? Year, int? SeasonNumber, int? EpisodeNumber)>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            try
+            {
+                long staleCutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (30 * 86400); // 30 days
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT g.group_id, g.item_type, g.tmdb_key, g.name, g.year, g.season_number, g.episode_number
+                    FROM dedup_groups g
+                    WHERE g.image_tag IS NULL
+                      AND g.tmdb_key IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM tmdb_metadata t
+                          WHERE t.provider_key = g.tmdb_key
+                            AND (t.not_found = 1 OR t.fetched_utc > $staleCutoff)
+                      )
+                    LIMIT $limit;
+                ";
+                cmd.Parameters.AddWithValue("$staleCutoff", staleCutoff);
+                cmd.Parameters.AddWithValue("$limit", limit);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    list.Add((
+                        reader.GetInt32(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3),
+                        reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                        reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                        reader.IsDBNull(6) ? null : reader.GetInt32(6)
+                    ));
+                }
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", "GetGroupsNeedingTmdbArt failed", ex);
+            }
+        }
+        return list;
+    }
+
+    public (int EnrichedCount, int PendingCount, int NotFoundCount) GetTmdbEnrichmentStats()
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return (0, 0, 0);
+            try
+            {
+                int enriched = 0;
+                int notFound = 0;
+                using (var cmd = _connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 0;";
+                    enriched = Convert.ToInt32(cmd.ExecuteScalar());
+                }
+                using (var cmd = _connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 1;";
+                    notFound = Convert.ToInt32(cmd.ExecuteScalar());
+                }
+                int pending = 0;
+                using (var cmd = _connection.CreateCommand())
+                {
+                    cmd.CommandText = @"
+                        SELECT COUNT(*)
+                        FROM dedup_groups g
+                        WHERE g.image_tag IS NULL
+                          AND g.tmdb_key IS NOT NULL
+                          AND NOT EXISTS (SELECT 1 FROM tmdb_metadata t WHERE t.provider_key = g.tmdb_key);
+                    ";
+                    pending = Convert.ToInt32(cmd.ExecuteScalar());
+                }
+                return (enriched, pending, notFound);
+            }
+            catch { return (0, 0, 0); }
+        }
+    }
+
+    // =========================================================================
+    // Integration State (§4.5)
+    // =========================================================================
+
+    public void SetIntegrationState(string name, string key, string value)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    INSERT INTO integration_state (name, key, value)
+                    VALUES ($name, $key, $value)
+                    ON CONFLICT(name, key) DO UPDATE SET value = excluded.value;
+                ";
+                cmd.Parameters.AddWithValue("$name", name);
+                cmd.Parameters.AddWithValue("$key", key);
+                cmd.Parameters.AddWithValue("$value", value);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                NocturneLogger.Error("DatabaseService", $"SetIntegrationState failed for {name}:{key}", ex);
+            }
+        }
+    }
+
+    public string? GetIntegrationState(string name, string key)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "SELECT value FROM integration_state WHERE name = $name AND key = $key;";
+                cmd.Parameters.AddWithValue("$name", name);
+                cmd.Parameters.AddWithValue("$key", key);
+                var res = cmd.ExecuteScalar();
+                return res as string;
+            }
+            catch { return null; }
+        }
+    }
+
+    public Dictionary<string, string> GetAllIntegrationState(string name)
+    {
+        var dict = new Dictionary<string, string>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return dict;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "SELECT key, value FROM integration_state WHERE name = $name;";
+                cmd.Parameters.AddWithValue("$name", name);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    dict[reader.GetString(0)] = reader.GetString(1);
+                }
+            }
+            catch { }
+        }
+        return dict;
+    }
+
+    // =========================================================================
+    // User Data & Group Identity Helpers (§7, §8)
+    // =========================================================================
+
+    public UserItemData? GetUserData(string serverId, string itemId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT position_ticks, runtime_ticks, played, last_played_utc, origin
+                    FROM user_data
+                    WHERE server_id = $srv AND item_id = $id;
+                ";
+                cmd.Parameters.AddWithValue("$srv", serverId);
+                cmd.Parameters.AddWithValue("$id", itemId);
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    return new UserItemData
+                    {
+                        PlaybackPositionTicks = reader.GetInt64(0),
+                        Played = reader.GetInt32(2) == 1,
+                        LastPlayedDate = reader.IsDBNull(3) ? null : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(3)).UtcDateTime
+                    };
+                }
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    public string? GetUserDataOrigin(string serverId, string itemId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "SELECT origin FROM user_data WHERE server_id = $srv AND item_id = $id;";
+                cmd.Parameters.AddWithValue("$srv", serverId);
+                cmd.Parameters.AddWithValue("$id", itemId);
+                return cmd.ExecuteScalar() as string;
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    public List<(string ServerId, string ItemId)> GetGroupItemIds(int groupId)
+    {
+        var list = new List<(string ServerId, string ItemId)>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "SELECT server_id, id FROM cached_items WHERE group_id = $gid;";
+                cmd.Parameters.AddWithValue("$gid", groupId);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    list.Add((reader.GetString(0), reader.GetString(1)));
+                }
+            }
+            catch { }
+        }
+        return list;
+    }
+
+    public int? GetGroupIdForDedupKey(string key)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = "SELECT group_id FROM dedup_keys WHERE key = $key;";
+                cmd.Parameters.AddWithValue("$key", key);
+                var res = cmd.ExecuteScalar();
+                if (res != null && res != DBNull.Value)
+                {
+                    return Convert.ToInt32(res);
+                }
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    public DedupGroupRecord? GetDedupGroup(long groupId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
+                           name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
+                           date_created, series_group_id, season_number, episode_number,
+                           max_height, has_4k, max_bitrate, audio_formats,
+                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
+                    FROM dedup_groups
+                    WHERE group_id = $gid;
+                ";
+                cmd.Parameters.AddWithValue("$gid", groupId);
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    return new DedupGroupRecord
+                    {
+                        GroupId = reader.GetInt32(0),
+                        ItemType = reader.GetString(1),
+                        PrimaryItemId = reader.GetString(2),
+                        PrimaryServerId = reader.GetString(3),
+                        IsProvisional = reader.GetInt32(4),
+                        VersionCount = reader.GetInt32(5),
+                        Name = reader.GetString(6),
+                        SortName = reader.IsDBNull(7) ? null : reader.GetString(7),
+                        Year = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                        Overview = reader.IsDBNull(9) ? null : reader.GetString(9),
+                        ImageTag = reader.IsDBNull(10) ? null : reader.GetString(10),
+                        BackdropTag = reader.IsDBNull(11) ? null : reader.GetString(11),
+                        CommunityRating = reader.IsDBNull(12) ? null : reader.GetFloat(12),
+                        DateCreated = reader.IsDBNull(13) ? null : reader.GetInt64(13),
+                        SeriesGroupId = reader.IsDBNull(14) ? null : reader.GetInt32(14),
+                        SeasonNumber = reader.IsDBNull(15) ? null : reader.GetInt32(15),
+                        EpisodeNumber = reader.IsDBNull(16) ? null : reader.GetInt32(16),
+                        MaxHeight = reader.IsDBNull(17) ? null : reader.GetInt32(17),
+                        Has4k = reader.GetInt32(18),
+                        MaxBitrate = reader.IsDBNull(19) ? null : reader.GetInt64(19),
+                        AudioFormats = reader.IsDBNull(20) ? null : reader.GetString(20),
+                        ImageItemId = reader.IsDBNull(21) ? null : reader.GetString(21),
+                        ImageServerId = reader.IsDBNull(22) ? null : reader.GetString(22),
+                        BackdropItemId = reader.IsDBNull(23) ? null : reader.GetString(23),
+                        BackdropServerId = reader.IsDBNull(24) ? null : reader.GetString(24),
+                        TmdbKey = reader.IsDBNull(25) ? null : reader.GetString(25),
+                        IsDirty = false
+                    };
+                }
+            }
+            catch { }
+        }
+        return null;
     }
 
     public void Dispose()

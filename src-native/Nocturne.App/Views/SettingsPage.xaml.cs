@@ -241,6 +241,22 @@ public partial class SettingsPage : UserControl
         ViewModel?.DisconnectTrakt();
     }
 
+    private async void OnTraktFullReconcileClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.RunTraktFullReconcileAsync();
+        }
+    }
+
+    private async void OnRunTmdbEnrichClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.RunTmdbEnrichmentAsync();
+        }
+    }
+
     private async void OnSyncNowClick(object sender, RoutedEventArgs e)
     {
         if (ViewModel != null)

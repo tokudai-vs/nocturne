@@ -506,6 +506,7 @@ public partial class MainWindow : FluentWindow
     }
 
     private void OnHomeTabClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToHome();
+    private void OnWatchlistTabClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToWatchlist();
     private void OnLibraryTabClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToLibrary();
     private void OnSettingsMenuClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToSettings();
     private void OnAnalyticsMenuClick(object sender, RoutedEventArgs e) => _viewModel.NavigateToAnalytics();

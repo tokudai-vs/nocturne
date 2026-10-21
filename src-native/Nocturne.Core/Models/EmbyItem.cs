@@ -119,6 +119,18 @@ public class EmbyItem : INotifyPropertyChanged
     public string? ImageTag => ImageTags?.GetValueOrDefault("Primary");
 
     [JsonIgnore]
+    public string? ImageServerId { get; set; }
+
+    [JsonIgnore]
+    public string? ImageItemId { get; set; }
+
+    [JsonIgnore]
+    public string? TmdbPosterPath { get; set; }
+
+    [JsonIgnore]
+    public bool IsInWatchlist { get; set; }
+
+    [JsonIgnore]
     public string? BackdropTag => BackdropImageTags?.FirstOrDefault();
 
     [JsonIgnore]

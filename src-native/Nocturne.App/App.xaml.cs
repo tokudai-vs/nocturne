@@ -129,6 +129,12 @@ public partial class App : Application
         services.AddSingleton<SyncEngine>();
         services.AddSingleton<MpvController>();
         services.AddSingleton<TraktService>();
+        services.AddSingleton<ITraktAuthService, TraktAuthService>();
+        services.AddSingleton<ITraktScrobbleService, TraktScrobbleService>();
+        services.AddSingleton<ITraktSyncService, TraktSyncService>();
+        services.AddSingleton<IWatchlistService, WatchlistService>();
+        services.AddSingleton<ITmdbEnrichmentService, TmdbEnrichmentService>();
+        services.AddSingleton<TraktQueueDrainWorker>();
         services.AddSingleton<IntroDbService>();
         services.AddSingleton<ThemeColorService>();
         services.AddSingleton<TrailerService>();
@@ -139,6 +145,7 @@ public partial class App : Application
         // ViewModels
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<HomeViewModel>();
+        services.AddSingleton<WatchlistViewModel>();
         services.AddSingleton<LibraryViewModel>();
         services.AddSingleton<DetailViewModel>();
         services.AddSingleton<SearchViewModel>();
