@@ -18,6 +18,7 @@ public class EmbyItem : INotifyPropertyChanged
     [JsonConverter(typeof(FlexibleStringConverter))]
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public string? SortName { get; set; }
     public string? OriginalTitle { get; set; }
     public string Type { get; set; } = string.Empty; // Movie, Series, Season, Episode, BoxSet, Folder
     public string? CollectionType { get; set; } // movies, tvshows, music, etc.
@@ -37,6 +38,7 @@ public class EmbyItem : INotifyPropertyChanged
     public DateTime? PremiereDate { get; set; }
 
     public Dictionary<string, string>? ProviderIds { get; set; }
+    public Dictionary<string, string>? SeriesProviderIds { get; set; }
     public Dictionary<string, string>? ImageTags { get; set; }
     public List<string>? BackdropImageTags { get; set; }
     [JsonConverter(typeof(FlexibleStringListConverter))]
@@ -75,7 +77,18 @@ public class EmbyItem : INotifyPropertyChanged
     [JsonIgnore]
     public string? DedupGroupId { get; set; }
     [JsonIgnore]
-    public string? SeriesImdbId { get; set; }
+    public string? SeriesTmdbId => SeriesProviderIds?.GetValueOrDefault("Tmdb") ?? SeriesProviderIds?.GetValueOrDefault("TheMovieDb");
+
+    [JsonIgnore]
+    public string? SeriesTvdbId => SeriesProviderIds?.GetValueOrDefault("Tvdb") ?? SeriesProviderIds?.GetValueOrDefault("TheTVDB");
+
+    private string? _seriesImdbId;
+    [JsonIgnore]
+    public string? SeriesImdbId
+    {
+        get => _seriesImdbId ?? SeriesProviderIds?.GetValueOrDefault("Imdb");
+        set => _seriesImdbId = value;
+    }
     [JsonIgnore]
     public int VersionCount { get; set; } = 1;
 
@@ -103,6 +116,12 @@ public class EmbyItem : INotifyPropertyChanged
     public bool IsPlayed => UserData?.Played ?? false;
 
     [JsonIgnore]
+    public string? ImageTag => ImageTags?.GetValueOrDefault("Primary");
+
+    [JsonIgnore]
+    public string? BackdropTag => BackdropImageTags?.FirstOrDefault();
+
+    [JsonIgnore]
     public string? FirstTagline => Taglines?.FirstOrDefault();
 
     [JsonIgnore]
@@ -121,14 +140,174 @@ public class EmbyItem : INotifyPropertyChanged
     {
         get
         {
-            var vid = MediaSources?.FirstOrDefault()?.MediaStreams?.FirstOrDefault(s => s.Type == "Video");
-            if (vid == null) return string.Empty;
-            if (vid.Width >= 3800 || vid.Height >= 2100) return "4K UHD";
-            if (vid.Width >= 1900 || vid.Height >= 1000) return "1080p";
-            if (vid.Width >= 1200 || vid.Height >= 700) return "720p";
+            var w = Width;
+            var h = Height;
+            if (w == null && h == null)
+            {
+                var vid = MediaSources?.FirstOrDefault()?.MediaStreams?.FirstOrDefault(s => s.Type == "Video");
+                if (vid != null)
+                {
+                    w = vid.Width;
+                    h = vid.Height;
+                }
+            }
+            if (w == null && h == null) return string.Empty;
+            if ((w.HasValue && w.Value >= 3800) || (h.HasValue && h.Value >= 2100)) return "4K UHD";
+            if ((w.HasValue && w.Value >= 1900) || (h.HasValue && h.Value >= 1000)) return "1080p";
+            if ((w.HasValue && w.Value >= 1200) || (h.HasValue && h.Value >= 700)) return "720p";
             return "SD";
         }
     }
+
+    private int? _height;
+    [JsonIgnore]
+    public int? Height
+    {
+        get => _height ?? MediaSources?.FirstOrDefault()?.MediaStreams?.FirstOrDefault(s => s.Type == "Video")?.Height;
+        set => _height = value;
+    }
+
+    private int? _width;
+    [JsonIgnore]
+    public int? Width
+    {
+        get => _width ?? MediaSources?.FirstOrDefault()?.MediaStreams?.FirstOrDefault(s => s.Type == "Video")?.Width;
+        set => _width = value;
+    }
+
+    private string? _videoCodec;
+    [JsonIgnore]
+    public string? VideoCodec
+    {
+        get => _videoCodec ?? MediaSources?.FirstOrDefault()?.MediaStreams?.FirstOrDefault(s => s.Type == "Video")?.Codec;
+        set => _videoCodec = value;
+    }
+
+    private string? _audioCodec;
+    [JsonIgnore]
+    public string? AudioCodec
+    {
+        get => _audioCodec ?? MediaSources?.FirstOrDefault()?.MediaStreams?.FirstOrDefault(s => s.Type == "Audio")?.Codec;
+        set => _audioCodec = value;
+    }
+
+    private long? _sizeBytes;
+    [JsonIgnore]
+    public long? SizeBytes
+    {
+        get => _sizeBytes ?? MediaSources?.FirstOrDefault()?.Size;
+        set => _sizeBytes = value;
+    }
+
+    private long? _bitrate;
+    [JsonIgnore]
+    public long? Bitrate
+    {
+        get => _bitrate ?? MediaSources?.FirstOrDefault()?.Bitrate;
+        set => _bitrate = value;
+    }
+
+    [JsonIgnore]
+    public int? RuntimeSeconds => RunTimeTicks.HasValue && RunTimeTicks.Value > 0 ? (int)(RunTimeTicks.Value / 10_000_000L) : null;
+
+    [JsonIgnore]
+    public long? MeasuredBitrate
+    {
+        get
+        {
+            if (_bitrate.HasValue && _bitrate.Value > 0)
+                return _bitrate.Value;
+            var src = MediaSources?.FirstOrDefault();
+            if (src?.Bitrate.HasValue == true && src.Bitrate.Value > 0)
+                return src.Bitrate.Value;
+            if (src?.Size.HasValue == true && src.Size.Value > 0 && RuntimeSeconds.HasValue && RuntimeSeconds.Value > 0)
+                return (src.Size.Value * 8L) / RuntimeSeconds.Value;
+            if (SizeBytes.HasValue && SizeBytes.Value > 0 && RuntimeSeconds.HasValue && RuntimeSeconds.Value > 0)
+                return (SizeBytes.Value * 8L) / RuntimeSeconds.Value;
+            return null;
+        }
+    }
+
+    [JsonIgnore]
+    public string BitrateBadge
+    {
+        get
+        {
+            var br = MeasuredBitrate;
+            if (!br.HasValue || br.Value <= 0) return string.Empty;
+            double mbps = br.Value / 1_000_000.0;
+            return mbps >= 1.0 ? $"{mbps:0.#} Mbps" : $"{br.Value / 1_000:N0} kbps";
+        }
+    }
+
+    [JsonIgnore]
+    public string Edition
+    {
+        get
+        {
+            var path = MediaSources?.FirstOrDefault()?.Path ?? Name ?? string.Empty;
+            var upper = path.ToUpperInvariant();
+            if (upper.Contains("IMAX")) return "IMAX";
+            if (upper.Contains("REMUX")) return "Remux";
+            if (upper.Contains("BLURAY") || upper.Contains("BLU-RAY") || upper.Contains("BDMV")) return "BluRay";
+            if (upper.Contains("WEB-DL") || upper.Contains("WEBDL") || upper.Contains("WEBRIP")) return "WEB-DL";
+            if (upper.Contains("HDTV")) return "HDTV";
+            return string.Empty;
+        }
+    }
+
+    [JsonIgnore]
+    public string HdrType
+    {
+        get
+        {
+            var path = (MediaSources?.FirstOrDefault()?.Path ?? string.Empty) + " " + (Name ?? string.Empty);
+            var upper = path.ToUpperInvariant();
+            if (upper.Contains("DOVI") || upper.Contains("DOLBY VISION") || upper.Contains(".DV.")) return "DV";
+            if (upper.Contains("HDR10+") || upper.Contains("HDR10PLUS")) return "HDR10+";
+            if (upper.Contains("HDR10") || upper.Contains("HDR")) return "HDR10";
+            return "SDR";
+        }
+    }
+
+    [JsonIgnore]
+    public string TechnicalBadge
+    {
+        get
+        {
+            var res = ResolutionBadge; // "4K UHD", "1080p", "720p", "SD"
+            var ed = Edition; // "IMAX", "Remux", "BluRay", "WEB-DL"
+            var hdr = HdrType; // "DV", "HDR10", "SDR"
+
+            string resPart = res switch
+            {
+                "4K UHD" => "4K",
+                "1080p" => "1080p",
+                "720p" => "720p",
+                _ => "SD"
+            };
+
+            string edPart = !string.IsNullOrEmpty(ed) ? ed : (resPart == "4K" ? "UHD" : "HD");
+            if (ed == "IMAX") edPart = "IMAX Enhanced";
+
+            string badge = $"{resPart} {edPart}";
+            if (hdr == "DV") badge += " • Dolby Vision";
+            else if (hdr == "HDR10+" || hdr == "HDR10") badge += " • HDR";
+
+            var audio = AudioCodec;
+            if (!string.IsNullOrEmpty(audio))
+            {
+                var audioUpper = audio.ToUpperInvariant();
+                if (audioUpper.Contains("TRUEHD") || audioUpper.Contains("ATMOS")) badge += " • Atmos";
+                else if (audioUpper.Contains("DTS-HD") || audioUpper.Contains("DTS")) badge += " • DTS";
+            }
+
+            return badge.Trim();
+        }
+    }
+
+    [JsonIgnore]
+    public List<EmbyItem> FallbackCopies { get; set; } = new();
 
     [JsonIgnore]
     public string CodecBadge

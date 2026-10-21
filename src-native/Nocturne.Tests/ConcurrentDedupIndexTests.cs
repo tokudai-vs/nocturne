@@ -59,7 +59,7 @@ public class ConcurrentDedupIndexTests
         };
 
         index.ProcessBatch(batch1);
-        Assert.Null(batch1[0].DedupGroupId); // Single item so far
+        Assert.NotNull(batch1[0].DedupGroupId); // In v4.2 every synced item has a group ID
         Assert.Equal(0, index.MultiVersionGroupsCount);
 
         index.ProcessBatch(batch2);
@@ -157,21 +157,118 @@ public class ConcurrentDedupIndexTests
         index.ProcessBatch(new[] { item2 });
 
         Assert.Equal(0, index.MultiVersionGroupsCount);
-        Assert.Null(item1.DedupGroupId);
-        Assert.Null(item2.DedupGroupId);
+        Assert.NotNull(item1.DedupGroupId);
+        Assert.NotNull(item2.DedupGroupId);
+        Assert.NotEqual(item1.DedupGroupId, item2.DedupGroupId);
     }
 
     [Fact]
-    public void ProcessBatch_EpisodesAndNonVideoTypesIgnored()
+    public void ProcessBatch_EpisodeStableProviderKeys_MatchesEpisodesAcrossServers()
     {
         var index = new ConcurrentDedupIndex();
 
-        var ep1 = new EmbyItem { Id = "ep1", Name = "Pilot", Type = "Episode", ProductionYear = 2008 };
-        var ep2 = new EmbyItem { Id = "ep2", Name = "Pilot", Type = "Episode", ProductionYear = 2008 };
+        // Episode on server 1 with TVDb series ID
+        var ep1 = new EmbyItem
+        {
+            Id = "srv1_ep101",
+            ServerId = "srv1",
+            Name = "Fly",
+            Type = "Episode",
+            SeriesName = "Breaking Bad",
+            ParentIndexNumber = 3,
+            IndexNumber = 10,
+            SeriesProviderIds = new Dictionary<string, string> { { "Tvdb", "81189" } },
+            Height = 1080
+        };
 
-        index.ProcessBatch(new[] { ep1, ep2 });
+        // Episode on server 2 with TVDb series ID
+        var ep2 = new EmbyItem
+        {
+            Id = "srv2_ep101",
+            ServerId = "srv2",
+            Name = "Fly (Remux)",
+            Type = "Episode",
+            SeriesName = "Breaking Bad",
+            ParentIndexNumber = 3,
+            IndexNumber = 10,
+            SeriesProviderIds = new Dictionary<string, string> { { "Tvdb", "81189" } },
+            Height = 2160
+        };
+
+        index.ProcessBatch(new[] { ep1 });
+        Assert.NotNull(ep1.DedupGroupId);
         Assert.Equal(0, index.MultiVersionGroupsCount);
-        Assert.Null(ep1.DedupGroupId);
-        Assert.Null(ep2.DedupGroupId);
+
+        index.ProcessBatch(new[] { ep2 });
+        Assert.NotNull(ep2.DedupGroupId);
+        Assert.Equal(1, index.MultiVersionGroupsCount);
+        Assert.Equal(ep1.DedupGroupId, ep2.DedupGroupId);
+    }
+
+    [Fact]
+    public void ProcessBatch_NWayMerge_AbsorbsProvisionalWhenAuthoritativeItemArrives()
+    {
+        var index = new ConcurrentDedupIndex();
+
+        // Item A: matched fuzzily on name + year (no provider IDs)
+        var itemA = new EmbyItem
+        {
+            Id = "srv1_dune",
+            ServerId = "srv1",
+            Name = "Dune",
+            Type = "Movie",
+            ProductionYear = 2021
+        };
+
+        // Item B: also matched fuzzily
+        var itemB = new EmbyItem
+        {
+            Id = "srv2_dune",
+            ServerId = "srv2",
+            Name = "Dune Part One",
+            Type = "Movie",
+            ProductionYear = 2021,
+            ProviderIds = new Dictionary<string, string> { { "Tmdb", "438631" } }
+        };
+
+        index.ProcessBatch(new[] { itemA });
+        Assert.NotNull(itemA.DedupGroupId);
+
+        index.ProcessBatch(new[] { itemB });
+        Assert.NotNull(itemB.DedupGroupId);
+    }
+
+    [Fact]
+    public void ProcessBatch_RemakeProtection_DoesNotMergeDifferentAuthGroupsOnFuzzyMatch()
+    {
+        var index = new ConcurrentDedupIndex();
+
+        // 1982 movie with IMDb tt0084787
+        var original = new EmbyItem
+        {
+            Id = "the_thing_1982",
+            ServerId = "srv1",
+            Name = "The Thing",
+            Type = "Movie",
+            ProductionYear = 1982,
+            ProviderIds = new Dictionary<string, string> { { "Imdb", "tt0084787" } }
+        };
+
+        // 2011 prequel with IMDb tt0905372
+        var prequel = new EmbyItem
+        {
+            Id = "the_thing_2011",
+            ServerId = "srv2",
+            Name = "The Thing",
+            Type = "Movie",
+            ProductionYear = 2011,
+            ProviderIds = new Dictionary<string, string> { { "Imdb", "tt0905372" } }
+        };
+
+        index.ProcessBatch(new[] { original });
+        index.ProcessBatch(new[] { prequel });
+
+        Assert.Equal(0, index.MultiVersionGroupsCount);
+        Assert.NotEqual(original.DedupGroupId, prequel.DedupGroupId);
     }
 }

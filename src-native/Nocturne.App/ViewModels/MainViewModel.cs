@@ -897,9 +897,47 @@ public class MainViewModel : BaseViewModel
         }
     }
 
+    public List<EmbyItem> GetOrderedPlaybackCandidates(EmbyItem item)
+    {
+        var candidates = new List<EmbyItem>();
+
+        // 1. If item has explicit FallbackCopies pre-populated from user selection, respect that tier first
+        if (item.FallbackCopies != null && item.FallbackCopies.Count > 0)
+        {
+            candidates.Add(item);
+            candidates.AddRange(item.FallbackCopies);
+        }
+
+        // 2. Fetch all sibling copies across all servers from SQLite
+        var siblings = _db.GetSiblingVersions(item);
+        if (siblings.Count == 0) siblings.Add(item);
+
+        var priorityList = _settings.Current.PreferredServerPriority ?? new List<string>();
+
+        // Order siblings by Playback Decision Matrix:
+        // Quality Rank (4K > 1080p > 720p > SD, edition, HDR) > Bitrate > Server Priority
+        var ordered = siblings
+            .OrderByDescending(s => DetailViewModel.GetQualityRank(s))
+            .ThenByDescending(s => s.MeasuredBitrate ?? 0)
+            .ThenBy(s =>
+            {
+                var idx = priorityList.IndexOf(s.ServerId ?? string.Empty);
+                return idx >= 0 ? idx : int.MaxValue;
+            });
+
+        foreach (var s in ordered)
+        {
+            if (!candidates.Any(c => c.Id == s.Id && c.ServerId == s.ServerId))
+            {
+                candidates.Add(s);
+            }
+        }
+
+        return candidates;
+    }
+
     public async Task ExecuteEmbeddedPlaybackAsync(IntPtr hwnd, EmbyItem item, long startTicks)
     {
-        _currentPlayingItem = item;
         _currentSubtitleTrackId = null;
         _currentAudioTrackId = null;
         OnPropertyChanged(nameof(CurrentSubtitleTrackId));
@@ -907,26 +945,51 @@ public class MainViewModel : BaseViewModel
         OnPropertyChanged(nameof(AvailableSubtitleStreams));
         OnPropertyChanged(nameof(AvailableAudioStreams));
 
-        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
-               ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
-        var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
-            ? _embyClient
-            : EmbyClient.CreateForServer(srv);
+        var candidates = GetOrderedPlaybackCandidates(item);
+        bool started = false;
+        Exception? lastError = null;
 
-        var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
-        var streamUrl = client.GetStreamUrl(item.Id, mediaSourceId, srv?.Url, srv?.AccessToken);
+        foreach (var candidate in candidates)
+        {
+            var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == candidate.ServerId)
+                   ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
+            var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
+                ? _embyClient
+                : EmbyClient.CreateForServer(srv);
 
-        NocturneLogger.Info("MainViewModel", $"Starting embedded mpv: {item.Name} ({item.Id}) on server '{srv?.Name}' at tick {startTicks} in HWND {hwnd}");
-        await _mpv.PlayEmbeddedAsync(
-            hwnd,
-            streamUrl,
-            item.Name,
-            startTicks,
-            subFont: _settings.Current.SubtitleFont,
-            subSize: _settings.Current.SubtitleSize,
-            subColor: _settings.Current.SubtitleColor,
-            subBorder: _settings.Current.SubtitleBorder,
-            subBg: _settings.Current.SubtitleBackground);
+            var mediaSourceId = candidate.MediaSources?.FirstOrDefault()?.Id ?? candidate.Id;
+            var streamUrl = client.GetStreamUrl(candidate.Id, mediaSourceId, srv?.Url, srv?.AccessToken);
+
+            try
+            {
+                NocturneLogger.Info("MainViewModel", $"Starting embedded mpv: {candidate.Name} ({candidate.Id}) on server '{srv?.Name}' (Quality: {candidate.TechnicalBadge}) at tick {startTicks} in HWND {hwnd}");
+                await _mpv.PlayEmbeddedAsync(
+                    hwnd,
+                    streamUrl,
+                    candidate.Name,
+                    startTicks,
+                    subFont: _settings.Current.SubtitleFont,
+                    subSize: _settings.Current.SubtitleSize,
+                    subColor: _settings.Current.SubtitleColor,
+                    subBorder: _settings.Current.SubtitleBorder,
+                    subBg: _settings.Current.SubtitleBackground);
+
+                _currentPlayingItem = candidate;
+                started = true;
+                break;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                NocturneLogger.Warn("MainViewModel", $"Playback failed on server '{srv?.Name}' for item '{candidate.Name}': {ex.Message}. Attempting automatic failover to sibling server...");
+            }
+        }
+
+        if (!started)
+        {
+            NocturneLogger.Error("MainViewModel", "All playback candidates and sibling servers failed to start.", lastError);
+            throw lastError ?? new InvalidOperationException("Failed to start playback on any available server.");
+        }
 
         // Restore user track preferences for series / movie
         var mediaKey = GetMediaKey(item);
@@ -1139,15 +1202,50 @@ public class MainViewModel : BaseViewModel
                 item.UserData.Played = true;
                 item.UserData.PlaybackPositionTicks = 0;
             }
+
+            if (long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
+            {
+                _db.MarkLocalGroupPlayed(gid);
+                var siblings = _db.GetGroupVersions(gid.ToString());
+                foreach (var sib in siblings)
+                {
+                    if (sib.ServerId != item.ServerId)
+                    {
+                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, 0, markPlayed: true);
+                    }
+                }
+            }
+            else
+            {
+                _db.MarkLocalItemPlayed(item.ServerId ?? string.Empty, item.Id);
+            }
+
             _db.RemoveFromContinueWatchingCache(item.Id);
             _db.ClearResumeProgress(item.Id);
+            _ = DrainSiblingWriteQueueAsync();
         }
         else if (_lastPlaybackSeconds > 5)
         {
             item.UserData ??= new UserItemData();
             item.UserData.PlaybackPositionTicks = positionTicks;
             item.UserData.Played = false;
+
+            _db.UpdateLocalPlaybackProgress(item.ServerId ?? string.Empty, item.Id, positionTicks, false);
+
+            if (long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
+            {
+                var siblings = _db.GetGroupVersions(gid.ToString());
+                foreach (var sib in siblings)
+                {
+                    if (sib.ServerId != item.ServerId)
+                    {
+                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, positionTicks, markPlayed: false);
+                    }
+                }
+            }
+
             _db.UpdatePlaybackProgress(item.Id, item.ServerId ?? string.Empty, positionTicks);
+            _ = DrainSiblingWriteQueueAsync();
         }
 
         try
@@ -1155,6 +1253,47 @@ public class MainViewModel : BaseViewModel
             _db.RecordWatchEvent(item.Id, srv?.Url ?? client.BaseUrl, item.Name, item.Type, (int)_lastPlaybackSeconds, item.SeriesName, item.Genres);
         }
         catch { }
+    }
+
+    private async Task DrainSiblingWriteQueueAsync()
+    {
+        try
+        {
+            var pending = _db.GetPendingSiblingWrites(limit: 50);
+            if (pending.Count == 0) return;
+
+            foreach (var write in pending)
+            {
+                var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == write.ServerId);
+                if (srv == null)
+                {
+                    _db.RemoveSiblingWrite(write.QueueId);
+                    continue;
+                }
+
+                try
+                {
+                    var client = EmbyClient.CreateForServer(srv);
+                    if (write.MarkPlayed)
+                    {
+                        await client.MarkPlayedAsync(write.ItemId);
+                    }
+                    else if (write.PositionTicks.HasValue)
+                    {
+                        await client.ReportPlaybackStoppedAsync(write.ItemId, write.ItemId, write.PositionTicks.Value);
+                    }
+                    _db.RemoveSiblingWrite(write.QueueId);
+                }
+                catch (Exception ex)
+                {
+                    NocturneLogger.Warn("MainViewModel", $"Sibling write failed for server {srv.Name} item {write.ItemId}: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Error("MainViewModel", "Error draining sibling write queue", ex);
+        }
     }
 
     public async Task StopPlaybackAsync(bool isEof = false)

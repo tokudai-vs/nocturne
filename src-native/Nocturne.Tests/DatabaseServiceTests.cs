@@ -159,4 +159,115 @@ public class DatabaseServiceTests : IDisposable
         Assert.Equal(150_000_000, restored[0].UserData!.PlaybackPositionTicks);
         Assert.False(restored[0].UserData!.Played);
     }
+
+    [Fact]
+    public void TechnicalBadge_FormatsAccuratelyWithoutServerInfo()
+    {
+        var item1 = new EmbyItem
+        {
+            Id = "mov1",
+            Name = "Dune Part Two 2024 IMAX 2160p UHD BluRay DoVi TrueHD Atmos",
+            Height = 2160,
+            Width = 3840,
+            AudioCodec = "TrueHD Atmos",
+            Bitrate = 52_000_000,
+            RunTimeTicks = 9_900_000_000L
+        };
+
+        Assert.Equal("4K IMAX Enhanced • Dolby Vision • Atmos", item1.TechnicalBadge);
+        Assert.Equal("52 Mbps", item1.BitrateBadge);
+
+        var item2 = new EmbyItem
+        {
+            Id = "mov2",
+            Name = "Inception 2010 1080p BluRay DTS",
+            Height = 1080,
+            Width = 1920,
+            AudioCodec = "DTS-HD",
+            Bitrate = 14_500_000,
+            RunTimeTicks = 8_800_000_000L
+        };
+
+        Assert.Equal("1080p BluRay • DTS", item2.TechnicalBadge);
+        Assert.Equal("14.5 Mbps", item2.BitrateBadge);
+    }
+
+    [Fact]
+    public void SiblingWriteQueue_EnqueueDrainAndRemove_WorksReliably()
+    {
+        _db.EnqueueSiblingPlaybackWrite("srv_b", "item_999", 500_000_000, false);
+        _db.EnqueueSiblingPlaybackWrite("srv_c", "item_888", 0, true);
+
+        var pending = _db.GetPendingSiblingWrites(limit: 10);
+        Assert.Equal(2, pending.Count);
+
+        var itemB = pending.FirstOrDefault(p => p.ServerId == "srv_b");
+        Assert.Equal(500_000_000, itemB.PositionTicks);
+        Assert.False(itemB.MarkPlayed);
+
+        var itemC = pending.FirstOrDefault(p => p.ServerId == "srv_c");
+        Assert.True(itemC.MarkPlayed);
+
+        // Remove itemB
+        _db.RemoveSiblingWrite(itemB.QueueId);
+        var remaining = _db.GetPendingSiblingWrites(limit: 10);
+        Assert.Single(remaining);
+        Assert.Equal("srv_c", remaining[0].ServerId);
+    }
+
+    [Fact]
+    public void GetContinueWatchingItems_RollsUpMultiQualityAndMultiServer_UsingSingleAggregate()
+    {
+        // Insert two versions of the same movie on different servers
+        var itemA = new EmbyItem
+        {
+            Id = "dune_4k",
+            ServerId = "server_alpha",
+            Name = "Dune: Part Two",
+            Type = "Movie",
+            Height = 2160,
+            Width = 3840,
+            ProviderIds = new Dictionary<string, string> { { "Tmdb", "693134" } },
+            ProductionYear = 2024,
+            RunTimeTicks = 9_900_000_000L,
+            UserData = new UserItemData { PlaybackPositionTicks = 3_000_000_000L, Played = false }
+        };
+
+        var itemB = new EmbyItem
+        {
+            Id = "dune_1080p",
+            ServerId = "server_beta",
+            Name = "Dune: Part Two",
+            Type = "Movie",
+            Height = 1080,
+            Width = 1920,
+            ProviderIds = new Dictionary<string, string> { { "Tmdb", "693134" } },
+            ProductionYear = 2024,
+            RunTimeTicks = 9_900_000_000L,
+            UserData = new UserItemData { PlaybackPositionTicks = 2_000_000_000L, Played = false }
+        };
+
+        _db.UpsertItem(itemA, "server_alpha");
+        _db.UpsertItem(itemB, "server_beta");
+
+        // Run index to group them into a single dedup group
+        var index = new ConcurrentDedupIndex();
+        index.SetConnectedServerCount(2);
+        index.SetServerPriority(new List<string> { "server_alpha", "server_beta" });
+        index.ProcessBatch(new List<EmbyItem> { itemA, itemB }, _db);
+
+        // Update playback progress on item A to position 45s (more recent)
+        _db.UpdateLocalPlaybackProgress("server_alpha", "dune_4k", 450_000_000L);
+
+        var cwItems = _db.GetContinueWatchingItems();
+        Assert.Single(cwItems);
+        Assert.Equal(450_000_000L, cwItems[0].UserData?.PlaybackPositionTicks);
+        Assert.Equal("server_alpha", cwItems[0].ServerId);
+
+        // Mark group played using the resolved group ID
+        int gid = int.Parse(cwItems[0].DedupGroupId!);
+        _db.MarkLocalGroupPlayed(gid);
+        var cwAfterPlayed = _db.GetContinueWatchingItems();
+        Assert.Empty(cwAfterPlayed);
+    }
 }

@@ -5,7 +5,7 @@ Unicode True
 
 # ── General Configuration ──────────────────────────────
 Name "Nocturne"
-OutFile "../dist/Nocturne-v4.1.0-Setup.exe"
+OutFile "../dist/Nocturne-v4.2.0-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Nocturne"
 InstallDirRegKey HKCU "Software\Nocturne" "InstallDir"
 RequestExecutionLevel user
@@ -43,7 +43,7 @@ Section "Nocturne Core" SecCore
     # Write registry keys
     WriteRegStr HKCU "Software\Nocturne" "InstallDir" "$INSTDIR"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Nocturne" "DisplayName" "Nocturne"
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Nocturne" "DisplayVersion" "4.1.0"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Nocturne" "DisplayVersion" "4.2.0"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Nocturne" "Publisher" "Vishal"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Nocturne" "DisplayIcon" "$INSTDIR\Nocturne.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Nocturne" "UninstallString" '"$INSTDIR\Uninstall Nocturne.exe"'

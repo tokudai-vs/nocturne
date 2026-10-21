@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using Nocturne.App.ViewModels;
 
 namespace Nocturne.App.Views;
@@ -7,10 +9,104 @@ namespace Nocturne.App.Views;
 public partial class SettingsPage : UserControl
 {
     private SettingsViewModel? ViewModel => DataContext as SettingsViewModel;
+    private Point _dragStartPoint;
+    private ServerPriorityItem? _draggedItem;
 
     public SettingsPage()
     {
         InitializeComponent();
+    }
+
+    private void OnMoveServerUpClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string serverId } && ViewModel != null)
+        {
+            ViewModel.MoveServerUp(serverId);
+        }
+    }
+
+    private void OnMoveServerDownClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string serverId } && ViewModel != null)
+        {
+            ViewModel.MoveServerDown(serverId);
+        }
+    }
+
+    private void OnServerItemPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject dep)
+        {
+            var btn = FindVisualParent<Button>(dep);
+            if (btn != null) return;
+        }
+
+        if (sender is FrameworkElement fe && fe.DataContext is ServerPriorityItem item)
+        {
+            _dragStartPoint = e.GetPosition(null);
+            _draggedItem = item;
+        }
+    }
+
+    private void OnServerItemMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _draggedItem == null)
+            return;
+
+        Point currentPos = e.GetPosition(null);
+        Vector diff = _dragStartPoint - currentPos;
+
+        if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
+        {
+            if (sender is FrameworkElement fe)
+            {
+                DragDrop.DoDragDrop(fe, _draggedItem, DragDropEffects.Move);
+                _draggedItem = null;
+            }
+        }
+    }
+
+    private void OnServerItemDragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(typeof(ServerPriorityItem)))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+    }
+
+    private void OnServerItemDrop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(typeof(ServerPriorityItem)) &&
+            sender is FrameworkElement fe &&
+            fe.DataContext is ServerPriorityItem targetItem)
+        {
+            var sourceItem = e.Data.GetData(typeof(ServerPriorityItem)) as ServerPriorityItem;
+            if (sourceItem != null && sourceItem != targetItem && ViewModel != null)
+            {
+                int oldIndex = ViewModel.Servers.IndexOf(sourceItem);
+                int newIndex = ViewModel.Servers.IndexOf(targetItem);
+                if (oldIndex >= 0 && newIndex >= 0)
+                {
+                    ViewModel.MoveServer(oldIndex, newIndex);
+                }
+            }
+        }
+    }
+
+    private static T? FindVisualParent<T>(DependencyObject child) where T : DependencyObject
+    {
+        var parent = VisualTreeHelper.GetParent(child);
+        while (parent != null)
+        {
+            if (parent is T typedParent) return typedParent;
+            parent = VisualTreeHelper.GetParent(parent);
+        }
+        return null;
     }
 
     private void OnSwitchServerClick(object sender, RoutedEventArgs e)

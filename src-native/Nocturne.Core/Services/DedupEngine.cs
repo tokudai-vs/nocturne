@@ -29,14 +29,34 @@ public class DedupGroup
 
 public class DedupEngine
 {
+    private static readonly Regex ReleaseTagsRegex = new(@"\b(4k|2160p|1080p|720p|uhd|fhd|hd|remux|bluray|blu-ray|bdmv|web-dl|webdl|webrip|hdr|hdr10|hdr10\+|dv|dovi|imax|extended|directors cut|unrated|edition)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex BracketsRegex = new(@"\[[^\]]*\]|\([^\)]*\)", RegexOptions.Compiled);
     private static readonly Regex PunctuationRegex = new(@"[^\w\d\s]", RegexOptions.Compiled);
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
     public static string NormalizeTitle(string? title)
     {
         if (string.IsNullOrWhiteSpace(title)) return string.Empty;
-        var stripped = PunctuationRegex.Replace(title.ToLowerInvariant(), " ");
+        var t = title;
+        // Strip bracketed content [4K Remux], (2010), etc.
+        t = BracketsRegex.Replace(t, " ");
+        // Strip common technical/release tokens
+        t = ReleaseTagsRegex.Replace(t, " ");
+        // Strip punctuation and normalize whitespace
+        var stripped = PunctuationRegex.Replace(t.ToLowerInvariant(), " ");
         return MultiSpaceRegex.Replace(stripped, " ").Trim();
+    }
+
+    public static bool IsGenericTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return true;
+        var norm = NormalizeTitle(title);
+        if (norm.Length <= 1) return true;
+
+        string[] generic = { "episode", "pilot", "special", "part", "chapter", "finale", "series finale", "season finale", "premiere", "season premiere", "movie", "feature" };
+        if (generic.Contains(norm)) return true;
+        if (Regex.IsMatch(norm, @"^(episode|part|chapter)\s+\d+$", RegexOptions.IgnoreCase)) return true;
+        return false;
     }
 
     public List<DedupGroup> Deduplicate(IEnumerable<EmbyItem> items)
@@ -97,10 +117,10 @@ public class DedupEngine
             if (group.SiblingItems.Count > 0)
             {
                 var allCopies = group.AllVersions;
-                var best = allCopies.OrderByDescending(ScorePrimaryItem).First();
+                var best = allCopies.OrderByDescending(c => ScorePrimaryItem(c, null)).First();
                 group.PrimaryItem = best;
                 group.SiblingItems = allCopies.Where(c => c.Id != best.Id)
-                                              .OrderByDescending(ScorePrimaryItem)
+                                              .OrderByDescending(c => ScorePrimaryItem(c, null))
                                               .ToList();
 
                 // Annotate items with group info
@@ -167,33 +187,97 @@ public class DedupEngine
         }
     }
 
-    public static int ScorePrimaryItem(EmbyItem item)
+    public static int ScorePrimaryItem(EmbyItem item, IList<string>? serverPriority = null)
     {
         int score = 0;
-        if (item.BackdropImageTags != null && item.BackdropImageTags.Count > 0) score += 3;
-        if (item.ImageTags != null && item.ImageTags.ContainsKey("Primary")) score += 2;
-        if (!string.IsNullOrWhiteSpace(item.Overview)) score += 2;
-        if (item.CommunityRating.HasValue && item.CommunityRating > 0) score += 1;
-        if (item.Genres != null && item.Genres.Count > 0) score += 1;
-        if (item.Studios != null && item.Studios.Count > 0) score += 1;
+        bool hasBackdrop = (item.BackdropImageTags != null && item.BackdropImageTags.Count > 0) || !string.IsNullOrEmpty(item.BackdropTag);
+        bool hasPoster = (item.ImageTags != null && item.ImageTags.ContainsKey("Primary")) || !string.IsNullOrEmpty(item.ImageTag);
+        bool hasOverview = !string.IsNullOrWhiteSpace(item.Overview);
+        bool hasRating = item.CommunityRating.HasValue && item.CommunityRating > 0;
 
-        // Resolution score: 4K (+4), 1080p (+2), 720p (+1)
-        var stream = item.MediaSources?.FirstOrDefault()?.MediaStreams?.FirstOrDefault(s => s.Type == "Video");
-        if (stream != null)
+        if (hasBackdrop) score += 100;
+        if (hasPoster) score += 50;
+        if (hasOverview) score += 30;
+        if (hasRating) score += 10;
+
+        if (serverPriority != null && !string.IsNullOrEmpty(item.ServerId))
         {
-            if (stream.Width >= 3800 || stream.Height >= 2100) score += 4;
-            else if (stream.Width >= 1900 || stream.Height >= 1000) score += 2;
-            else if (stream.Width >= 1200 || stream.Height >= 700) score += 1;
+            int idx = serverPriority.IndexOf(item.ServerId);
+            if (idx >= 0)
+            {
+                score += Math.Max(0, 20 - idx * 2);
+            }
         }
 
         return score;
     }
 
-    public int RebuildIndex(DatabaseService db)
+    public int RebuildIndex(DatabaseService db, IList<string>? serverPriority = null)
     {
-        var allItems = db.GetCachedItems(limit: 50000);
-        var groups = Deduplicate(allItems);
-        db.SaveDedupGroups(groups);
-        return groups.Count(g => g.SiblingItems.Count > 0);
+        var dedupIndex = new ConcurrentDedupIndex();
+        dedupIndex.SetServerPriority(serverPriority);
+
+        db.SwapInRebuild(() =>
+        {
+            db.ExecuteSql(@"
+                DROP TABLE IF EXISTS dedup_groups_rebuild;
+                DROP TABLE IF EXISTS dedup_keys_rebuild;
+                DROP TABLE IF EXISTS item_group_rebuild;
+
+                CREATE TABLE dedup_groups_rebuild (
+                    group_id         INTEGER PRIMARY KEY,
+                    item_type        TEXT NOT NULL,
+                    primary_item_id  TEXT NOT NULL,
+                    primary_server   TEXT NOT NULL,
+                    is_provisional   INTEGER NOT NULL DEFAULT 0,
+                    version_count    INTEGER NOT NULL DEFAULT 1,
+                    name             TEXT NOT NULL,
+                    sort_name        TEXT,
+                    year             INTEGER,
+                    overview         TEXT,
+                    image_tag        TEXT,
+                    backdrop_tag     TEXT,
+                    community_rating REAL,
+                    date_created     INTEGER,
+                    series_group_id  INTEGER,
+                    season_number    INTEGER,
+                    episode_number   INTEGER,
+                    max_height       INTEGER,
+                    has_4k           INTEGER NOT NULL DEFAULT 0,
+                    max_bitrate      INTEGER,
+                    audio_formats    TEXT
+                );
+
+                CREATE TABLE dedup_keys_rebuild (
+                    key              TEXT PRIMARY KEY,
+                    group_id         INTEGER NOT NULL,
+                    is_authoritative INTEGER NOT NULL DEFAULT 1
+                ) WITHOUT ROWID;
+
+                CREATE TABLE item_group_rebuild (
+                    id        TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    group_id  INTEGER NOT NULL,
+                    PRIMARY KEY (id, server_id)
+                ) WITHOUT ROWID;
+            ");
+
+            int offset = 0;
+            const int chunkSize = 5000;
+            while (true)
+            {
+                var batch = db.GetCachedItemsChunk(offset, chunkSize);
+                if (batch.Count == 0) break;
+                dedupIndex.ProcessBatch(batch, null);
+                offset += batch.Count;
+            }
+
+            db.SaveRebuildDedupState(dedupIndex);
+        }, unmapped =>
+        {
+            dedupIndex.ProcessBatch(unmapped, db);
+        });
+
+        return dedupIndex.MultiVersionGroupsCount;
     }
 }

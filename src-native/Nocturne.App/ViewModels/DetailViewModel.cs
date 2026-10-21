@@ -391,17 +391,45 @@ public class DetailViewModel : BaseViewModel
         }
         OnPropertyChanged(nameof(HasCast));
 
-        // Deduplication siblings
+        // Deduplication siblings & Clean Edition Mapping (Zero Server Leakage)
         GroupVersions.Clear();
         var siblings = _db.GetSiblingVersions(item);
-        foreach (var sib in siblings)
+        if (siblings.Count == 0) siblings.Add(item);
+
+        var priorityList = _settings.Current.PreferredServerPriority ?? new List<string>();
+
+        // Order siblings by Playback Decision Matrix: Quality > Bitrate > Server Priority
+        var sortedSiblings = siblings
+            .OrderByDescending(s => GetQualityRank(s))
+            .ThenByDescending(s => s.MeasuredBitrate ?? 0)
+            .ThenBy(s =>
+            {
+                var idx = priorityList.IndexOf(s.ServerId ?? string.Empty);
+                return idx >= 0 ? idx : int.MaxValue;
+            })
+            .ToList();
+
+        // Deduplicate distinct technical editions (e.g. 4K IMAX, 1080p BluRay)
+        var distinctEditions = new Dictionary<string, EmbyItem>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sib in sortedSiblings)
         {
-            var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == sib.ServerId);
-            if (srv != null) sib.ServerName = srv.Name;
-            GroupVersions.Add(sib);
+            var key = sib.TechnicalBadge;
+            if (string.IsNullOrWhiteSpace(key)) key = sib.ResolutionBadge ?? "HD";
+
+            if (!distinctEditions.TryGetValue(key, out var rep))
+            {
+                distinctEditions[key] = sib;
+                GroupVersions.Add(sib);
+            }
+            else
+            {
+                // Sibling copy with identical quality on another server - add as fallback
+                rep.FallbackCopies.Add(sib);
+            }
         }
-        var matchInGroup = GroupVersions.FirstOrDefault(v => v.Id == item.Id && (string.IsNullOrEmpty(item.ServerId) || v.ServerId == item.ServerId))
-                        ?? GroupVersions.FirstOrDefault(v => v.Id == item.Id)
+
+        var matchInGroup = GroupVersions.FirstOrDefault(v => v.Id == item.Id)
+                        ?? GroupVersions.FirstOrDefault(v => v.TechnicalBadge == item.TechnicalBadge)
                         ?? GroupVersions.FirstOrDefault();
         _selectedVersion = matchInGroup;
         OnPropertyChanged(nameof(SelectedVersion));
@@ -549,11 +577,34 @@ public class DetailViewModel : BaseViewModel
         });
     }
 
+    public static int GetQualityRank(EmbyItem item)
+    {
+        int rank = 0;
+        var res = item.ResolutionBadge;
+        if (res == "4K UHD" || item.Height >= 1440 || item.Width >= 2560) rank = 4000;
+        else if (res == "1080p" || item.Height >= 900) rank = 3000;
+        else if (res == "720p" || item.Height >= 600) rank = 2000;
+        else rank = 1000;
+
+        var ed = item.Edition;
+        if (ed == "IMAX") rank += 300;
+        else if (ed == "Remux") rank += 250;
+        else if (ed == "BluRay") rank += 200;
+        else if (ed == "WEB-DL") rank += 150;
+        else if (ed == "WEBRip") rank += 100;
+
+        var hdr = item.HdrType;
+        if (hdr == "DV") rank += 50;
+        else if (hdr.StartsWith("HDR")) rank += 40;
+
+        return rank;
+    }
+
     public event Action<EmbyItem, long>? PlayRequested;
 
     public async Task PlayAsync(EmbyItem? target = null)
     {
-        var playItem = target ?? Item;
+        var playItem = target ?? SelectedVersion ?? Item;
         if (playItem == null) return;
 
         // If series, resolve to first unwatched episode

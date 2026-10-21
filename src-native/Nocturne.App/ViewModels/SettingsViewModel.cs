@@ -52,6 +52,56 @@ public class DiscoveredConnectServerUi : BaseViewModel
     }
 }
 
+public class ServerPriorityItem : BaseViewModel
+{
+    public ServerConfig Server { get; }
+    public string Id => Server.Id;
+    public string Name => Server.Name;
+    public string Url => Server.Url;
+    public string UserId => Server.UserId;
+    public string Username => Server.Username;
+
+    private int _priority;
+    public int Priority
+    {
+        get => _priority;
+        set
+        {
+            if (SetProperty(ref _priority, value))
+            {
+                OnPropertyChanged(nameof(PriorityBadgeText));
+                OnPropertyChanged(nameof(CanMoveUp));
+                OnPropertyChanged(nameof(CanMoveDown));
+            }
+        }
+    }
+
+    public string PriorityBadgeText => $"#{Priority} Priority";
+
+    private int _totalServers;
+    public int TotalServers
+    {
+        get => _totalServers;
+        set
+        {
+            if (SetProperty(ref _totalServers, value))
+            {
+                OnPropertyChanged(nameof(CanMoveDown));
+            }
+        }
+    }
+
+    public bool CanMoveUp => Priority > 1;
+    public bool CanMoveDown => Priority < TotalServers;
+
+    public ServerPriorityItem(ServerConfig server, int priority, int totalServers)
+    {
+        Server = server;
+        _priority = priority;
+        _totalServers = totalServers;
+    }
+}
+
 public class ServerSyncProgressItem : BaseViewModel
 {
     public string ServerId { get; set; } = string.Empty;
@@ -290,7 +340,7 @@ public class SettingsViewModel : BaseViewModel
     private string _traktClientId = string.Empty;
     private string _traktClientSecret = string.Empty;
 
-    public ObservableCollection<ServerConfig> Servers { get; } = new();
+    public ObservableCollection<ServerPriorityItem> Servers { get; } = new();
     public ObservableCollection<CombinedMapping> CombinedGroups { get; } = new();
 
     public SettingsViewModel(
@@ -481,10 +531,71 @@ public class SettingsViewModel : BaseViewModel
     public void LoadServers()
     {
         Servers.Clear();
-        foreach (var s in _settings.Current.Servers)
+        var priorityList = _settings.Current.PreferredServerPriority ?? new List<string>();
+        var allServers = _settings.Current.Servers.ToList();
+
+        var ordered = allServers.OrderBy(srv =>
         {
-            Servers.Add(s);
+            var idx = priorityList.IndexOf(srv.Id);
+            return idx >= 0 ? idx : int.MaxValue;
+        }).ToList();
+
+        int total = ordered.Count;
+        for (int i = 0; i < total; i++)
+        {
+            Servers.Add(new ServerPriorityItem(ordered[i], i + 1, total));
         }
+    }
+
+    public void MoveServerUp(string serverId)
+    {
+        var item = Servers.FirstOrDefault(s => s.Id == serverId);
+        if (item == null) return;
+        int idx = Servers.IndexOf(item);
+        if (idx > 0)
+        {
+            MoveServer(idx, idx - 1);
+        }
+    }
+
+    public void MoveServerDown(string serverId)
+    {
+        var item = Servers.FirstOrDefault(s => s.Id == serverId);
+        if (item == null) return;
+        int idx = Servers.IndexOf(item);
+        if (idx >= 0 && idx < Servers.Count - 1)
+        {
+            MoveServer(idx, idx + 1);
+        }
+    }
+
+    public void MoveServer(int oldIndex, int newIndex)
+    {
+        if (oldIndex < 0 || oldIndex >= Servers.Count || newIndex < 0 || newIndex >= Servers.Count || oldIndex == newIndex)
+            return;
+
+        var item = Servers[oldIndex];
+        Servers.RemoveAt(oldIndex);
+        Servers.Insert(newIndex, item);
+
+        for (int i = 0; i < Servers.Count; i++)
+        {
+            Servers[i].Priority = i + 1;
+            Servers[i].TotalServers = Servers.Count;
+        }
+
+        var newPriorityList = Servers.Select(s => s.Id).ToList();
+        _settings.Update(s =>
+        {
+            s.PreferredServerPriority = newPriorityList;
+            s.Servers = s.Servers.OrderBy(srv =>
+            {
+                var idx = newPriorityList.IndexOf(srv.Id);
+                return idx >= 0 ? idx : int.MaxValue;
+            }).ToList();
+        });
+
+        _sync.SetServerPriority(newPriorityList);
     }
 
     public void LoadCombinedGroups()
@@ -574,6 +685,10 @@ public class SettingsViewModel : BaseViewModel
                 {
                     s.Servers.RemoveAll(x => x.Url == cleanUrl && x.UserId == auth.User.Id);
                     s.Servers.Add(newServer);
+                    if (!s.PreferredServerPriority.Contains(newServer.Id))
+                    {
+                        s.PreferredServerPriority.Add(newServer.Id);
+                    }
                     s.ActiveServerId = newServer.Id;
                 });
 
@@ -620,6 +735,7 @@ public class SettingsViewModel : BaseViewModel
         _settings.Update(s =>
         {
             s.Servers.RemoveAll(x => x.Id == serverId);
+            s.PreferredServerPriority.Remove(serverId);
             if (s.ActiveServerId == serverId)
             {
                 s.ActiveServerId = s.Servers.FirstOrDefault()?.Id;
@@ -839,6 +955,10 @@ public class SettingsViewModel : BaseViewModel
                     {
                         s.Servers.RemoveAll(x => (x.Id == newServer.Id) || (x.Url == newServer.Url && x.UserId == newServer.UserId));
                         s.Servers.Add(newServer);
+                        if (!s.PreferredServerPriority.Contains(newServer.Id))
+                        {
+                            s.PreferredServerPriority.Add(newServer.Id);
+                        }
                         if (string.IsNullOrEmpty(s.ActiveServerId))
                         {
                             s.ActiveServerId = newServer.Id;
@@ -911,6 +1031,10 @@ public class SettingsViewModel : BaseViewModel
                 {
                     s.Servers.RemoveAll(x => (x.Id == newServer.Id) || (x.Url == newServer.Url && x.UserId == newServer.UserId));
                     s.Servers.Add(newServer);
+                    if (!s.PreferredServerPriority.Contains(newServer.Id))
+                    {
+                        s.PreferredServerPriority.Add(newServer.Id);
+                    }
                     if (string.IsNullOrEmpty(s.ActiveServerId))
                     {
                         s.ActiveServerId = newServer.Id;

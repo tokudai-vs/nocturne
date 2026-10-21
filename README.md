@@ -18,7 +18,7 @@
 
 <p align="center">
   <a href="https://github.com/tokudai-vs/nocturne/releases/latest">
-    <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20Download%20Installer-v4.1.0%20(Setup.exe)-E5A00D?style=for-the-badge&logo=windows&logoColor=white" height="42" alt="Download Nocturne" />
+    <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20Download%20Installer-v4.2.0%20(Setup.exe)-E5A00D?style=for-the-badge&logo=windows&logoColor=white" height="42" alt="Download Nocturne" />
   </a>
   &nbsp;&nbsp;
   <a href="#-why-nocturne">
@@ -138,7 +138,7 @@ The official Emby desktop and web apps run on Chromium and Electron, consuming 6
 
 ### Method 1: Standalone Installer (Recommended)
 
-1. Download the latest `Nocturne-v4.1.0-Setup.exe` from the [Releases Page](https://github.com/tokudai-vs/nocturne/releases/latest).
+1. Download the latest `Nocturne-v4.2.0-Setup.exe` from the [Releases Page](https://github.com/tokudai-vs/nocturne/releases/latest).
 2. Run the installer. Nocturne will install automatically and create a Desktop shortcut.
 3. Launch Nocturne, sign in via **Emby Connect PIN** or enter your server URL, and start streaming!
 
@@ -168,7 +168,7 @@ dotnet test src-native/Nocturne.Tests/Nocturne.Tests.csproj
 node scripts/build-installer.js
 ```
 
-The compiled installer will be available at `dist/Nocturne-v4.1.0-Setup.exe`.
+The compiled installer will be available at `dist/Nocturne-v4.2.0-Setup.exe`.
 
 ---
 

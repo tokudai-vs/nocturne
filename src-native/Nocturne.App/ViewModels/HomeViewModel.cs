@@ -119,7 +119,8 @@ public class HomeViewModel : BaseViewModel
             {
                 if (ContinueWatching.Count == 0 && LatestMovies.Count == 0 && LatestEpisodes.Count == 0)
                 {
-                    var cachedResume = _db.GetCachedContinueWatching();
+                    var cachedResume = _db.GetContinueWatchingItems();
+                    if (cachedResume.Count == 0) cachedResume = _db.GetCachedContinueWatching();
                     var cachedMovies = _db.GetCachedItems("Movie", limit: 20);
                     var cachedEpisodes = _db.GetCachedItems("Episode", limit: 20);
 
@@ -227,7 +228,15 @@ public class HomeViewModel : BaseViewModel
                 var allMovies = serverResults.SelectMany(r => r.Item3).ToList();
                 var allEpisodes = serverResults.SelectMany(r => r.Item4).ToList();
 
-                var mergedResume = DeduplicateResume(allResume);
+                foreach (var it in allResume)
+                {
+                    if (it.UserData != null && it.UserData.PlaybackPositionTicks > 0)
+                    {
+                        _db.UpdateLocalPlaybackProgress(it.ServerId ?? string.Empty, it.Id, it.UserData.PlaybackPositionTicks, it.UserData.Played);
+                    }
+                }
+                var dbResume = _db.GetContinueWatchingItems();
+                var mergedResume = dbResume.Count > 0 ? dbResume : DeduplicateResume(allResume);
                 var mergedNextUp = DeduplicateEpisodes(allNextUp);
 
                 var dedupMovieGroups = _dedup.Deduplicate(allMovies);
@@ -290,17 +299,28 @@ public class HomeViewModel : BaseViewModel
                 var movies = (await latestMoviesTask).Items;
                 var eps = (await latestEpisodesTask).Items;
 
-                foreach (var it in resumeItems) { it.ServerId = activeSid; it.ServerName = activeSname; }
+                foreach (var it in resumeItems)
+                {
+                    it.ServerId = activeSid;
+                    it.ServerName = activeSname;
+                    if (it.UserData != null && it.UserData.PlaybackPositionTicks > 0)
+                    {
+                        _db.UpdateLocalPlaybackProgress(activeSid, it.Id, it.UserData.PlaybackPositionTicks, it.UserData.Played);
+                    }
+                }
                 foreach (var it in nextUpItems) { it.ServerId = activeSid; it.ServerName = activeSname; }
                 foreach (var it in movies) { it.ServerId = activeSid; it.ServerName = activeSname; }
                 foreach (var it in eps) { it.ServerId = activeSid; it.ServerName = activeSname; }
 
-                _db.SaveContinueWatchingCache(resumeItems);
+                var singleDbResume = _db.GetContinueWatchingItems();
+                var displayResume = singleDbResume.Count > 0 ? singleDbResume : resumeItems;
+
+                _db.SaveContinueWatchingCache(displayResume);
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     ContinueWatching.Clear();
-                    foreach (var item in resumeItems) ContinueWatching.Add(item);
+                    foreach (var item in displayResume) ContinueWatching.Add(item);
 
                     NextUp.Clear();
                     foreach (var item in nextUpItems) NextUp.Add(item);
@@ -360,6 +380,24 @@ public class HomeViewModel : BaseViewModel
                 : EmbyClient.CreateForServer(srv);
 
             await client.RemoveFromResumeAsync(item.Id);
+
+            if (long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
+            {
+                _db.MarkLocalGroupPlayed(gid);
+                var siblings = _db.GetGroupVersions(gid.ToString());
+                foreach (var sib in siblings)
+                {
+                    if (sib.ServerId != item.ServerId)
+                    {
+                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, 0, markPlayed: true);
+                    }
+                }
+            }
+            else
+            {
+                _db.MarkLocalItemPlayed(item.ServerId ?? string.Empty, item.Id);
+            }
+
             _db.ClearResumeProgress(item.Id);
             _db.RemoveFromContinueWatchingCache(item.Id);
 

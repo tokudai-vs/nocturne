@@ -10,6 +10,7 @@
     <ApplicationIcon>../../build/icon.ico</ApplicationIcon>
     <RootNamespace>Nocturne.App</RootNamespace>
     <AssemblyName>Nocturne</AssemblyName>
+    <Version>4.2.0</Version>
     <ServerGarbageCollector>false</ServerGarbageCollector>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>

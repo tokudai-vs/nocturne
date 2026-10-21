@@ -382,26 +382,24 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <!-- Version Picker (Multi-Server Dedup - High-Contrast Container) -->
+                            <!-- Quality & Edition Selection (Multi-Server Dedup - Zero Server Info Leaked) -->
                             <StackPanel Margin="0,0,0,18" Visibility="{Binding HasMultipleVersions, Converter={StaticResource BoolToVisibility}}">
-                                <TextBlock Text="Available Versions" FontSize="12" FontWeight="SemiBold"
+                                <TextBlock Text="Available Editions &amp; Qualities" FontSize="12" FontWeight="SemiBold"
                                            Foreground="#CCCCCC" Margin="0,0,0,6" />
-                                <ComboBox HorizontalAlignment="Left" MinWidth="340"
+                                <ComboBox HorizontalAlignment="Left" MinWidth="280"
                                           Style="{StaticResource VersionPickerComboBoxStyle}"
                                           ItemsSource="{Binding GroupVersions}"
                                           SelectedItem="{Binding SelectedVersion, Mode=TwoWay}">
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate>
                                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                <ui:SymbolIcon Symbol="Server24" FontSize="15" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" VerticalAlignment="Center" />
-                                                <TextBlock Text="{Binding ServerName}" FontWeight="Bold" FontSize="13" Foreground="#FFFFFF" Margin="0,0,10,0" VerticalAlignment="Center" />
-                                                <Border Background="#35FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,6,0"
-                                                        Visibility="{Binding ResolutionBadge, Converter={StaticResource NullToVisibility}}" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding ResolutionBadge}" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
+                                                <Border Background="{DynamicResource NocturneAmberTintBrush}" BorderBrush="{DynamicResource NocturneAmberBrush}"
+                                                        BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="0,0,8,0" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding TechnicalBadge}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberTextBrush}" />
                                                 </Border>
                                                 <Border Background="#25FFFFFF" CornerRadius="4" Padding="6,2" Margin="0,0,6,0"
-                                                        Visibility="{Binding CodecBadge, Converter={StaticResource NullToVisibility}}" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding CodecBadge}" FontSize="11" FontWeight="Medium" Foreground="#E0E0E0" />
+                                                        Visibility="{Binding BitrateBadge, Converter={StaticResource NullToVisibility}}" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding BitrateBadge}" FontSize="11" FontWeight="Medium" Foreground="#CCCCCC" />
                                                 </Border>
                                             </StackPanel>
                                         </DataTemplate>

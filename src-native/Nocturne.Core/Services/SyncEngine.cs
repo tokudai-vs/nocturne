@@ -90,6 +90,11 @@ public class SyncEngine
 
     public SyncState CurrentState { get; private set; } = SyncState.Idle;
 
+    public void SetServerPriority(IList<string> priorityList)
+    {
+        _dedupIndex.SetServerPriority(priorityList);
+    }
+
     public Task SyncAllAsync(CancellationToken ct = default, bool forceResync = false) => RunFullSyncAsync(ct, forceResync);
 
     public async Task RunFullSyncAsync(CancellationToken ct = default, bool forceResync = false)
@@ -243,6 +248,8 @@ public class SyncEngine
             var syncSw = Stopwatch.StartNew();
 
             _settings.Update(s => s.SyncStatus = "in-progress");
+            _dedupIndex.SetServerPriority(_settings.Current.PreferredServerPriority);
+            _dedupIndex.SetConnectedServerCount(servers.Count);
             _dedupIndex.InitializeFromDb(_db);
 
             // ── Single Consumer / Writer Task (Serialized SQLite Transactions) ──

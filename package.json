@@ -1,6 +1,6 @@
 {
   "name": "nocturne",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "description": "Pure Native Windows & Desktop Emby client with Mica, Acrylic, multi-server support, SQLite cache, library deduplication, and Trakt.tv integration.",
   "main": "./out/main/index.js",
   "scripts": {

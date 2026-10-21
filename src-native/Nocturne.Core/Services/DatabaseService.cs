@@ -45,6 +45,7 @@ public class DatabaseService : IDisposable
             cmd.CommandText = @"
                 PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = NORMAL;
+                PRAGMA busy_timeout = 5000;
 
                 DROP TABLE IF EXISTS items;
                 DROP TABLE IF EXISTS dedup_episode_groups;
@@ -55,6 +56,7 @@ public class DatabaseService : IDisposable
                     id TEXT NOT NULL,
                     server_id TEXT NOT NULL,
                     parent_id TEXT,
+                    group_id INTEGER,
                     name TEXT NOT NULL,
                     type TEXT NOT NULL,
                     run_time_ticks INTEGER,
@@ -70,27 +72,18 @@ public class DatabaseService : IDisposable
                     tmdb_id TEXT,
                     imdb_id TEXT,
                     dedup_group_id TEXT,
+                    height INTEGER,
+                    width INTEGER,
+                    video_codec TEXT,
+                    audio_codec TEXT,
+                    bitrate INTEGER,
+                    size_bytes INTEGER,
+                    runtime_seconds INTEGER,
+                    hdr_type TEXT,
+                    edition TEXT,
                     json_data TEXT NOT NULL,
                     last_synced INTEGER NOT NULL,
                     PRIMARY KEY (id, server_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_cached_items_type ON cached_items(type);
-                CREATE INDEX IF NOT EXISTS idx_cached_items_parent ON cached_items(parent_id);
-                CREATE INDEX IF NOT EXISTS idx_cached_items_series ON cached_items(series_id);
-                CREATE INDEX IF NOT EXISTS idx_cached_items_dedup ON cached_items(dedup_group_id);
-                CREATE INDEX IF NOT EXISTS idx_cached_items_tmdb ON cached_items(tmdb_id);
-                CREATE INDEX IF NOT EXISTS idx_cached_items_imdb ON cached_items(imdb_id);
-
-                CREATE TABLE IF NOT EXISTS dedup_groups (
-                    group_id TEXT PRIMARY KEY,
-                    primary_item_id TEXT NOT NULL,
-                    item_ids TEXT NOT NULL,
-                    tmdb_id TEXT,
-                    imdb_id TEXT,
-                    title TEXT NOT NULL,
-                    year INTEGER,
-                    type TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS sync_checkpoints (
@@ -159,44 +152,147 @@ public class DatabaseService : IDisposable
                     subtitle_language TEXT,
                     updated_at INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS migration_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
             ";
             cmd.ExecuteNonQuery();
 
             EnsureSchema(_connection);
+            SelfCheckPreparedStatements();
 
             NocturneLogger.Info("DatabaseService", "Database initialized in WAL mode successfully.");
         }
         catch (Exception ex)
         {
             NocturneLogger.Error("DatabaseService", "Database initialization error", ex);
+            throw; // Fail fast per architecture review V5
         }
     }
 
     private void EnsureSchema(SqliteConnection conn)
     {
-        // 1. cached_items migration
+        // Check if dedup_groups is legacy TEXT group_id schema
+        bool isLegacyDedupGroups = false;
+        try
+        {
+            using var checkCmd = conn.CreateCommand();
+            checkCmd.CommandText = "PRAGMA table_info(dedup_groups);";
+            using var reader = checkCmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var colName = reader.GetString(1);
+                var colType = reader.GetString(2);
+                if (string.Equals(colName, "group_id", StringComparison.OrdinalIgnoreCase) &&
+                    colType.Contains("TEXT", StringComparison.OrdinalIgnoreCase))
+                {
+                    isLegacyDedupGroups = true;
+                    break;
+                }
+            }
+        }
+        catch { }
+
+        if (isLegacyDedupGroups)
+        {
+            using var dropCmd = conn.CreateCommand();
+            dropCmd.CommandText = "DROP TABLE IF EXISTS dedup_groups; DROP TABLE IF EXISTS dedup_keys;";
+            dropCmd.ExecuteNonQuery();
+        }
+
+        using var initCmd = conn.CreateCommand();
+        initCmd.CommandText = @"
+            -- 1. Denormalized groups table (the display entity for shelves/search)
+            CREATE TABLE IF NOT EXISTS dedup_groups (
+                group_id         INTEGER PRIMARY KEY,
+                item_type        TEXT NOT NULL,
+                primary_item_id  TEXT NOT NULL,
+                primary_server   TEXT NOT NULL,
+                is_provisional   INTEGER NOT NULL DEFAULT 0,
+                version_count    INTEGER NOT NULL DEFAULT 1,
+                name             TEXT NOT NULL,
+                sort_name        TEXT,
+                year             INTEGER,
+                overview         TEXT,
+                image_tag        TEXT,
+                backdrop_tag     TEXT,
+                community_rating REAL,
+                date_created     INTEGER,
+                series_group_id  INTEGER,
+                season_number    INTEGER,
+                episode_number   INTEGER,
+                max_height       INTEGER,
+                has_4k           INTEGER NOT NULL DEFAULT 0,
+                max_bitrate      INTEGER,
+                audio_formats    TEXT
+            );
+
+            -- 2. Union-Find Alias Table (WITHOUT ROWID)
+            CREATE TABLE IF NOT EXISTS dedup_keys (
+                key              TEXT PRIMARY KEY,
+                group_id         INTEGER NOT NULL,
+                is_authoritative INTEGER NOT NULL DEFAULT 1
+            ) WITHOUT ROWID;
+
+            -- 3. User Data State (Native Source of Truth, Immune to Group Rebuilds)
+            CREATE TABLE IF NOT EXISTS user_data (
+                server_id       TEXT NOT NULL,
+                item_id         TEXT NOT NULL,
+                position_ticks  INTEGER NOT NULL DEFAULT 0,
+                runtime_ticks   INTEGER,
+                played          INTEGER NOT NULL DEFAULT 0,
+                last_played_utc INTEGER,
+                updated_locally INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (server_id, item_id)
+            ) WITHOUT ROWID;
+
+            CREATE INDEX IF NOT EXISTS ix_user_data_continue
+                ON user_data(last_played_utc DESC)
+                WHERE position_ticks > 0 AND played = 0;
+
+            -- 4. Persistent Sibling Write Queue with Unique Upsert
+            CREATE TABLE IF NOT EXISTS sibling_write_queue (
+                queue_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id      TEXT NOT NULL,
+                item_id        TEXT NOT NULL,
+                position_ticks INTEGER,
+                mark_played    INTEGER NOT NULL DEFAULT 0,
+                queued_utc     INTEGER NOT NULL,
+                attempts       INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(server_id, item_id)
+            );
+        ";
+        initCmd.ExecuteNonQuery();
+
+        // 5. cached_items column migration
         MigrateTableColumns(conn, "cached_items", new Dictionary<string, string>
         {
             { "genres", "TEXT" },
             { "tmdb_id", "TEXT" },
             { "imdb_id", "TEXT" },
-            { "dedup_group_id", "TEXT" }
+            { "dedup_group_id", "TEXT" },
+            { "group_id", "INTEGER" },
+            { "height", "INTEGER" },
+            { "width", "INTEGER" },
+            { "video_codec", "TEXT" },
+            { "audio_codec", "TEXT" },
+            { "bitrate", "INTEGER" },
+            { "size_bytes", "INTEGER" },
+            { "runtime_seconds", "INTEGER" },
+            { "hdr_type", "TEXT" },
+            { "edition", "TEXT" }
         });
 
-        // 2. watch_events migration
+        // 6. watch_events migration
         MigrateTableColumns(conn, "watch_events", new Dictionary<string, string>
         {
             { "series_name", "TEXT" },
             { "genres", "TEXT" }
         });
 
-        // 3. dedup_groups migration
-        MigrateTableColumns(conn, "dedup_groups", new Dictionary<string, string>
-        {
-            { "item_ids", "TEXT" },
-            { "title", "TEXT" }
-        });
-
+        // 7. Indexes
         using var idxCmd = conn.CreateCommand();
         idxCmd.CommandText = @"
             CREATE INDEX IF NOT EXISTS idx_cached_items_type ON cached_items(type);
@@ -205,10 +301,53 @@ public class DatabaseService : IDisposable
             CREATE INDEX IF NOT EXISTS idx_cached_items_dedup ON cached_items(dedup_group_id);
             CREATE INDEX IF NOT EXISTS idx_cached_items_tmdb ON cached_items(tmdb_id);
             CREATE INDEX IF NOT EXISTS idx_cached_items_imdb ON cached_items(imdb_id);
+            CREATE INDEX IF NOT EXISTS ix_items_group ON cached_items(group_id);
+            CREATE INDEX IF NOT EXISTS ix_items_server_sync ON cached_items(server_id, last_synced);
+            CREATE INDEX IF NOT EXISTS ix_dedup_keys_group ON dedup_keys(group_id);
+            CREATE INDEX IF NOT EXISTS ix_dedup_groups_shelf ON dedup_groups(item_type, date_created DESC);
+            CREATE INDEX IF NOT EXISTS ix_dedup_groups_primary ON dedup_groups(primary_item_id, primary_server);
+            CREATE INDEX IF NOT EXISTS ix_dedup_groups_series ON dedup_groups(series_group_id, season_number, episode_number);
+            CREATE INDEX IF NOT EXISTS ix_dedup_groups_sort ON dedup_groups(item_type, sort_name);
             CREATE INDEX IF NOT EXISTS idx_watch_events_time ON watch_events(watched_at);
             CREATE INDEX IF NOT EXISTS idx_watch_events_source ON watch_events(source);
         ";
         idxCmd.ExecuteNonQuery();
+
+        // 8. FTS5 Search & triggers
+        try
+        {
+            using var ftsCmd = conn.CreateCommand();
+            ftsCmd.CommandText = @"
+                CREATE VIRTUAL TABLE IF NOT EXISTS dedup_groups_fts USING fts5(
+                    name,
+                    sort_name,
+                    content='dedup_groups',
+                    content_rowid='group_id'
+                );
+
+                CREATE TRIGGER IF NOT EXISTS dg_fts_ai AFTER INSERT ON dedup_groups BEGIN
+                  INSERT INTO dedup_groups_fts(rowid, name, sort_name)
+                    VALUES (new.group_id, new.name, new.sort_name);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS dg_fts_ad AFTER DELETE ON dedup_groups BEGIN
+                  INSERT INTO dedup_groups_fts(dedup_groups_fts, rowid, name, sort_name)
+                    VALUES ('delete', old.group_id, old.name, old.sort_name);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS dg_fts_au AFTER UPDATE ON dedup_groups BEGIN
+                  INSERT INTO dedup_groups_fts(dedup_groups_fts, rowid, name, sort_name)
+                    VALUES ('delete', old.group_id, old.name, old.sort_name);
+                  INSERT INTO dedup_groups_fts(rowid, name, sort_name)
+                    VALUES (new.group_id, new.name, new.sort_name);
+                END;
+            ";
+            ftsCmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("DatabaseService", $"FTS5 setup note: {ex.Message}");
+        }
     }
 
     private void MigrateTableColumns(SqliteConnection conn, string tableName, Dictionary<string, string> requiredColumns)
@@ -250,17 +389,22 @@ public class DatabaseService : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = @"
                 INSERT INTO cached_items (
-                    id, server_id, parent_id, name, type, run_time_ticks, production_year,
+                    id, server_id, parent_id, group_id, name, type, run_time_ticks, production_year,
                     community_rating, index_number, parent_index_number, series_id, series_name,
-                    season_id, season_name, genres, tmdb_id, imdb_id, dedup_group_id, json_data, last_synced
+                    season_id, season_name, genres, tmdb_id, imdb_id, dedup_group_id,
+                    height, width, video_codec, audio_codec, bitrate, size_bytes, runtime_seconds, hdr_type, edition,
+                    json_data, last_synced
                 ) VALUES (
-                    $id, $server_id, $parent_id, $name, $type, $run_time_ticks, $production_year,
+                    $id, $server_id, $parent_id, $group_id, $name, $type, $run_time_ticks, $production_year,
                     $community_rating, $index_number, $parent_index_number, $series_id, $series_name,
-                    $season_id, $season_name, $genres, $tmdb_id, $imdb_id, $dedup_group_id, $json_data, $last_synced
+                    $season_id, $season_name, $genres, $tmdb_id, $imdb_id, $dedup_group_id,
+                    $height, $width, $video_codec, $audio_codec, $bitrate, $size_bytes, $runtime_seconds, $hdr_type, $edition,
+                    $json_data, $last_synced
                 )
                 ON CONFLICT(id, server_id) DO UPDATE SET
                     name = excluded.name,
                     parent_id = COALESCE(excluded.parent_id, cached_items.parent_id),
+                    group_id = COALESCE(excluded.group_id, cached_items.group_id),
                     type = excluded.type,
                     run_time_ticks = excluded.run_time_ticks,
                     production_year = excluded.production_year,
@@ -275,13 +419,26 @@ public class DatabaseService : IDisposable
                     tmdb_id = excluded.tmdb_id,
                     imdb_id = excluded.imdb_id,
                     dedup_group_id = COALESCE(excluded.dedup_group_id, cached_items.dedup_group_id),
+                    height = COALESCE(excluded.height, cached_items.height),
+                    width = COALESCE(excluded.width, cached_items.width),
+                    video_codec = COALESCE(excluded.video_codec, cached_items.video_codec),
+                    audio_codec = COALESCE(excluded.audio_codec, cached_items.audio_codec),
+                    bitrate = COALESCE(excluded.bitrate, cached_items.bitrate),
+                    size_bytes = COALESCE(excluded.size_bytes, cached_items.size_bytes),
+                    runtime_seconds = COALESCE(excluded.runtime_seconds, cached_items.runtime_seconds),
+                    hdr_type = COALESCE(excluded.hdr_type, cached_items.hdr_type),
+                    edition = COALESCE(excluded.edition, cached_items.edition),
                     json_data = excluded.json_data,
                     last_synced = excluded.last_synced;
             ";
 
+            int? gid = null;
+            if (int.TryParse(item.DedupGroupId, out int parsedGid)) gid = parsedGid;
+
             cmd.Parameters.AddWithValue("$id", item.Id);
             cmd.Parameters.AddWithValue("$server_id", serverId);
             cmd.Parameters.AddWithValue("$parent_id", (object?)parentId ?? (object?)item.SeasonId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$group_id", (object?)gid ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$name", item.Name);
             cmd.Parameters.AddWithValue("$type", item.Type);
             cmd.Parameters.AddWithValue("$run_time_ticks", (object?)item.RunTimeTicks ?? DBNull.Value);
@@ -297,10 +454,41 @@ public class DatabaseService : IDisposable
             cmd.Parameters.AddWithValue("$tmdb_id", (object?)item.TmdbId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$imdb_id", (object?)item.ImdbId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$dedup_group_id", (object?)item.DedupGroupId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$height", (object?)item.Height ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$width", (object?)item.Width ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$video_codec", (object?)item.VideoCodec ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$audio_codec", (object?)item.AudioCodec ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$bitrate", (object?)item.MeasuredBitrate ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$size_bytes", (object?)item.SizeBytes ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$runtime_seconds", (object?)item.RuntimeSeconds ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$hdr_type", (object?)item.HdrType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$edition", (object?)item.Edition ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$json_data", JsonSerializer.Serialize(item));
             cmd.Parameters.AddWithValue("$last_synced", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
             cmd.ExecuteNonQuery();
+
+            if (item.UserData != null)
+            {
+                using var userCmd = _connection.CreateCommand();
+                userCmd.CommandText = @"
+                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
+                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 0)
+                    ON CONFLICT(server_id, item_id) DO UPDATE SET
+                        position_ticks = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.position_ticks ELSE excluded.position_ticks END,
+                        played = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.played ELSE excluded.played END,
+                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END;
+                ";
+                userCmd.Parameters.AddWithValue("$u_srv", serverId);
+                userCmd.Parameters.AddWithValue("$u_item", item.Id);
+                userCmd.Parameters.AddWithValue("$u_pos", item.UserData.PlaybackPositionTicks);
+                userCmd.Parameters.AddWithValue("$u_run", (object?)item.RunTimeTicks ?? DBNull.Value);
+                userCmd.Parameters.AddWithValue("$u_played", item.UserData.Played ? 1 : 0);
+                userCmd.Parameters.AddWithValue("$u_last", item.UserData.LastPlayedDate.HasValue
+                    ? ((DateTimeOffset)item.UserData.LastPlayedDate.Value).ToUnixTimeSeconds()
+                    : DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                userCmd.ExecuteNonQuery();
+            }
         }
     }
 
@@ -334,17 +522,22 @@ public class DatabaseService : IDisposable
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
                     INSERT INTO cached_items (
-                        id, server_id, parent_id, name, type, run_time_ticks, production_year,
+                        id, server_id, parent_id, group_id, name, type, run_time_ticks, production_year,
                         community_rating, index_number, parent_index_number, series_id, series_name,
-                        season_id, season_name, genres, tmdb_id, imdb_id, dedup_group_id, json_data, last_synced
+                        season_id, season_name, genres, tmdb_id, imdb_id, dedup_group_id,
+                        height, width, video_codec, audio_codec, bitrate, size_bytes, runtime_seconds, hdr_type, edition,
+                        json_data, last_synced
                     ) VALUES (
-                        $id, $server_id, $parent_id, $name, $type, $run_time_ticks, $production_year,
+                        $id, $server_id, $parent_id, $group_id, $name, $type, $run_time_ticks, $production_year,
                         $community_rating, $index_number, $parent_index_number, $series_id, $series_name,
-                        $season_id, $season_name, $genres, $tmdb_id, $imdb_id, $dedup_group_id, $json_data, $last_synced
+                        $season_id, $season_name, $genres, $tmdb_id, $imdb_id, $dedup_group_id,
+                        $height, $width, $video_codec, $audio_codec, $bitrate, $size_bytes, $runtime_seconds, $hdr_type, $edition,
+                        $json_data, $last_synced
                     )
                     ON CONFLICT(id, server_id) DO UPDATE SET
                         name = excluded.name,
                         parent_id = COALESCE(excluded.parent_id, cached_items.parent_id),
+                        group_id = COALESCE(excluded.group_id, cached_items.group_id),
                         type = excluded.type,
                         run_time_ticks = excluded.run_time_ticks,
                         production_year = excluded.production_year,
@@ -359,6 +552,15 @@ public class DatabaseService : IDisposable
                         tmdb_id = excluded.tmdb_id,
                         imdb_id = excluded.imdb_id,
                         dedup_group_id = COALESCE(excluded.dedup_group_id, cached_items.dedup_group_id),
+                        height = COALESCE(excluded.height, cached_items.height),
+                        width = COALESCE(excluded.width, cached_items.width),
+                        video_codec = COALESCE(excluded.video_codec, cached_items.video_codec),
+                        audio_codec = COALESCE(excluded.audio_codec, cached_items.audio_codec),
+                        bitrate = COALESCE(excluded.bitrate, cached_items.bitrate),
+                        size_bytes = COALESCE(excluded.size_bytes, cached_items.size_bytes),
+                        runtime_seconds = COALESCE(excluded.runtime_seconds, cached_items.runtime_seconds),
+                        hdr_type = COALESCE(excluded.hdr_type, cached_items.hdr_type),
+                        edition = COALESCE(excluded.edition, cached_items.edition),
                         json_data = excluded.json_data,
                         last_synced = excluded.last_synced;
                 ";
@@ -366,6 +568,7 @@ public class DatabaseService : IDisposable
                 var pId = cmd.Parameters.Add("$id", SqliteType.Text);
                 var pServerId = cmd.Parameters.Add("$server_id", SqliteType.Text);
                 var pParentId = cmd.Parameters.Add("$parent_id", SqliteType.Text);
+                var pGroupId = cmd.Parameters.Add("$group_id", SqliteType.Integer);
                 var pName = cmd.Parameters.Add("$name", SqliteType.Text);
                 var pType = cmd.Parameters.Add("$type", SqliteType.Text);
                 var pRunTimeTicks = cmd.Parameters.Add("$run_time_ticks", SqliteType.Integer);
@@ -381,16 +584,46 @@ public class DatabaseService : IDisposable
                 var pTmdbId = cmd.Parameters.Add("$tmdb_id", SqliteType.Text);
                 var pImdbId = cmd.Parameters.Add("$imdb_id", SqliteType.Text);
                 var pDedupGroupId = cmd.Parameters.Add("$dedup_group_id", SqliteType.Text);
+                var pHeight = cmd.Parameters.Add("$height", SqliteType.Integer);
+                var pWidth = cmd.Parameters.Add("$width", SqliteType.Integer);
+                var pVideoCodec = cmd.Parameters.Add("$video_codec", SqliteType.Text);
+                var pAudioCodec = cmd.Parameters.Add("$audio_codec", SqliteType.Text);
+                var pBitrate = cmd.Parameters.Add("$bitrate", SqliteType.Integer);
+                var pSizeBytes = cmd.Parameters.Add("$size_bytes", SqliteType.Integer);
+                var pRuntimeSeconds = cmd.Parameters.Add("$runtime_seconds", SqliteType.Integer);
+                var pHdrType = cmd.Parameters.Add("$hdr_type", SqliteType.Text);
+                var pEdition = cmd.Parameters.Add("$edition", SqliteType.Text);
                 var pJsonData = cmd.Parameters.Add("$json_data", SqliteType.Text);
                 var pLastSynced = cmd.Parameters.Add("$last_synced", SqliteType.Integer);
+
+                using var userCmd = _connection.CreateCommand();
+                userCmd.Transaction = tx;
+                userCmd.CommandText = @"
+                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
+                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 0)
+                    ON CONFLICT(server_id, item_id) DO UPDATE SET
+                        position_ticks = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.position_ticks ELSE excluded.position_ticks END,
+                        played = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.played ELSE excluded.played END,
+                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END;
+                ";
+                var puSrv = userCmd.Parameters.Add("$u_srv", SqliteType.Text);
+                var puItem = userCmd.Parameters.Add("$u_item", SqliteType.Text);
+                var puPos = userCmd.Parameters.Add("$u_pos", SqliteType.Integer);
+                var puRun = userCmd.Parameters.Add("$u_run", SqliteType.Integer);
+                var puPlayed = userCmd.Parameters.Add("$u_played", SqliteType.Integer);
+                var puLast = userCmd.Parameters.Add("$u_last", SqliteType.Integer);
 
                 var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
                 foreach (var item in chunk)
                 {
+                    int? itemGid = null;
+                    if (int.TryParse(item.DedupGroupId, out int parsed)) itemGid = parsed;
+
                     pId.Value = item.Id;
                     pServerId.Value = serverId;
                     pParentId.Value = (object?)parentId ?? (object?)item.SeasonId ?? DBNull.Value;
+                    pGroupId.Value = (object?)itemGid ?? DBNull.Value;
                     pName.Value = item.Name;
                     pType.Value = item.Type;
                     pRunTimeTicks.Value = (object?)item.RunTimeTicks ?? DBNull.Value;
@@ -406,10 +639,33 @@ public class DatabaseService : IDisposable
                     pTmdbId.Value = (object?)item.TmdbId ?? DBNull.Value;
                     pImdbId.Value = (object?)item.ImdbId ?? DBNull.Value;
                     pDedupGroupId.Value = (object?)item.DedupGroupId ?? DBNull.Value;
+                    pHeight.Value = (object?)item.Height ?? DBNull.Value;
+                    pWidth.Value = (object?)item.Width ?? DBNull.Value;
+                    pVideoCodec.Value = (object?)item.VideoCodec ?? DBNull.Value;
+                    pAudioCodec.Value = (object?)item.AudioCodec ?? DBNull.Value;
+                    pBitrate.Value = (object?)item.MeasuredBitrate ?? DBNull.Value;
+                    pSizeBytes.Value = (object?)item.SizeBytes ?? DBNull.Value;
+                    pRuntimeSeconds.Value = (object?)item.RuntimeSeconds ?? DBNull.Value;
+                    pHdrType.Value = (object?)item.HdrType ?? DBNull.Value;
+                    pEdition.Value = (object?)item.Edition ?? DBNull.Value;
                     pJsonData.Value = JsonSerializer.Serialize(item);
                     pLastSynced.Value = now;
 
                     cmd.ExecuteNonQuery();
+
+                    if (item.UserData != null && (item.UserData.PlaybackPositionTicks > 0 || item.UserData.Played))
+                    {
+                        long lastPlayed = item.UserData.LastPlayedDate.HasValue
+                            ? new DateTimeOffset(item.UserData.LastPlayedDate.Value).ToUnixTimeSeconds()
+                            : now;
+                        puSrv.Value = serverId;
+                        puItem.Value = item.Id;
+                        puPos.Value = item.UserData.PlaybackPositionTicks;
+                        puRun.Value = (object?)item.RunTimeTicks ?? DBNull.Value;
+                        puPlayed.Value = item.UserData.Played ? 1 : 0;
+                        puLast.Value = lastPlayed;
+                        userCmd.ExecuteNonQuery();
+                    }
                 }
 
                 // Crash safety: write the checkpoint in the exact same transaction as the data it covers
@@ -651,10 +907,10 @@ public class DatabaseService : IDisposable
             using var cmd = _connection.CreateCommand();
             var sql = @"
                 SELECT c.json_data, c.server_id, c.dedup_group_id,
-                       COALESCE((SELECT COUNT(*) FROM cached_items sub WHERE sub.dedup_group_id = c.dedup_group_id AND sub.dedup_group_id IS NOT NULL AND sub.dedup_group_id != ''), 1) AS v_count
+                       COALESCE(dg.version_count, 1) AS v_count
                 FROM cached_items c
-                LEFT JOIN dedup_groups dg ON c.dedup_group_id = dg.group_id
-                WHERE (dg.group_id IS NULL OR c.id = dg.primary_item_id) ";
+                LEFT JOIN dedup_groups dg ON c.group_id = dg.group_id
+                WHERE (dg.group_id IS NULL OR (c.id = dg.primary_item_id AND c.server_id = dg.primary_server)) ";
 
             if (libList.Count > 0)
             {
@@ -715,21 +971,45 @@ public class DatabaseService : IDisposable
 
         lock (_dbLock)
         {
+            if (_connection == null) return list;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE dedup_group_id = $group_id;";
-            cmd.Parameters.AddWithValue("$group_id", groupId);
+            if (long.TryParse(groupId, out var gid))
+            {
+                cmd.CommandText = @"
+                    SELECT json_data, server_id, dedup_group_id,
+                           height, width, video_codec, audio_codec, bitrate, size_bytes, hdr_type, edition
+                    FROM cached_items
+                    WHERE group_id = $gid OR dedup_group_id = $group_id;";
+                cmd.Parameters.AddWithValue("$gid", gid);
+                cmd.Parameters.AddWithValue("$group_id", groupId);
+            }
+            else
+            {
+                cmd.CommandText = @"
+                    SELECT json_data, server_id, dedup_group_id,
+                           height, width, video_codec, audio_codec, bitrate, size_bytes, hdr_type, edition
+                    FROM cached_items
+                    WHERE dedup_group_id = $group_id;";
+                cmd.Parameters.AddWithValue("$group_id", groupId);
+            }
 
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
                 var json = reader.GetString(0);
                 var sid = reader.GetString(1);
-                var gid = reader.IsDBNull(2) ? groupId : reader.GetString(2);
+                var g = reader.IsDBNull(2) ? groupId : reader.GetString(2);
                 var item = JsonSerializer.Deserialize<EmbyItem>(json);
                 if (item != null)
                 {
                     item.ServerId = sid;
-                    item.DedupGroupId = gid;
+                    item.DedupGroupId = g;
+                    if (!reader.IsDBNull(3)) item.Height = reader.GetInt32(3);
+                    if (!reader.IsDBNull(4)) item.Width = reader.GetInt32(4);
+                    if (!reader.IsDBNull(5)) item.VideoCodec = reader.GetString(5);
+                    if (!reader.IsDBNull(6)) item.AudioCodec = reader.GetString(6);
+                    if (!reader.IsDBNull(7)) item.Bitrate = reader.GetInt64(7);
+                    if (!reader.IsDBNull(8)) item.SizeBytes = reader.GetInt64(8);
                     list.Add(item);
                 }
             }
@@ -739,9 +1019,25 @@ public class DatabaseService : IDisposable
 
     public List<EmbyItem> GetSiblingVersions(EmbyItem item)
     {
-        if (!string.IsNullOrEmpty(item.DedupGroupId))
+        string? groupId = item.DedupGroupId;
+        if (string.IsNullOrEmpty(groupId))
         {
-            var byGroup = GetGroupVersions(item.DedupGroupId);
+            lock (_dbLock)
+            {
+                if (_connection != null)
+                {
+                    using var lookupCmd = _connection.CreateCommand();
+                    lookupCmd.CommandText = "SELECT COALESCE(CAST(group_id AS TEXT), dedup_group_id) FROM cached_items WHERE id = $id LIMIT 1;";
+                    lookupCmd.Parameters.AddWithValue("$id", item.Id);
+                    var res = lookupCmd.ExecuteScalar();
+                    if (res != null && res != DBNull.Value) groupId = res.ToString();
+                }
+            }
+        }
+
+        if (!string.IsNullOrEmpty(groupId))
+        {
+            var byGroup = GetGroupVersions(groupId);
             if (byGroup.Count > 0) return byGroup;
         }
 
@@ -1389,6 +1685,9 @@ public class DatabaseService : IDisposable
                     cmd.CommandText = @"
                         DELETE FROM cached_items;
                         DELETE FROM dedup_groups;
+                        DELETE FROM dedup_keys;
+                        DELETE FROM user_data;
+                        DELETE FROM sibling_write_queue;
                         DELETE FROM trakt_watchlist;
                         DELETE FROM sync_checkpoints;
                         DROP TABLE IF EXISTS items;
@@ -1426,10 +1725,35 @@ public class DatabaseService : IDisposable
         lock (_dbLock)
         {
             if (_connection == null) return;
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM cached_items WHERE server_id = $server_id; DELETE FROM sync_checkpoints WHERE server_id = $server_id;";
-            cmd.Parameters.AddWithValue("$server_id", serverId);
-            cmd.ExecuteNonQuery();
+            using var tx = _connection.BeginTransaction();
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    DELETE FROM cached_items WHERE server_id = $server_id;
+                    DELETE FROM sync_checkpoints WHERE server_id = $server_id;
+                    DELETE FROM sibling_write_queue WHERE server_id = $server_id;
+                    DELETE FROM user_data WHERE server_id = $server_id;
+
+                    -- Clean up empty dedup groups and keys
+                    DELETE FROM dedup_groups WHERE group_id NOT IN (SELECT DISTINCT group_id FROM cached_items WHERE group_id IS NOT NULL);
+                    DELETE FROM dedup_keys WHERE group_id NOT IN (SELECT group_id FROM dedup_groups);
+
+                    -- Update remaining version counts
+                    UPDATE dedup_groups
+                       SET version_count = (SELECT COUNT(*) FROM cached_items c WHERE c.group_id = dedup_groups.group_id);
+                ";
+                cmd.Parameters.AddWithValue("$server_id", serverId);
+                cmd.ExecuteNonQuery();
+                tx.Commit();
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                NocturneLogger.Error("DatabaseService", $"Failed to clear server data for {serverId}", ex);
+                throw;
+            }
         }
     }
 
@@ -1439,7 +1763,7 @@ public class DatabaseService : IDisposable
         lock (_dbLock)
         {
             using var cmd = _connection!.CreateCommand();
-            cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE type IN ('Movie', 'Series');";
+            cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE type IN ('Movie', 'Series', 'Episode');";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1462,134 +1786,281 @@ public class DatabaseService : IDisposable
         return items;
     }
 
-    public void UpsertDedupGroup(
-        string groupId,
-        string primaryItemId,
-        IEnumerable<string> itemIds,
-        string? tmdbId,
-        string? imdbId,
-        string title,
-        int? year,
-        string type)
+    public void SaveDedupBatch(
+        List<DedupGroupRecord> dirtyGroups,
+        List<int> deletedGroupIds,
+        List<(int FromGid, int ToGid)> remappedGroups,
+        List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave,
+        List<(string ServerId, string ItemId, int GroupId)>? itemAssignments = null)
     {
         lock (_dbLock)
         {
             if (_connection == null) return;
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO dedup_groups (group_id, primary_item_id, item_ids, tmdb_id, imdb_id, title, year, type)
-                VALUES ($group_id, $primary_item_id, $item_ids, $tmdb_id, $imdb_id, $title, $year, $type)
-                ON CONFLICT(group_id) DO UPDATE SET
-                    primary_item_id = excluded.primary_item_id,
-                    item_ids = excluded.item_ids,
-                    tmdb_id = excluded.tmdb_id,
-                    imdb_id = excluded.imdb_id,
-                    title = excluded.title,
-                    year = excluded.year,
-                    type = excluded.type;
-            ";
-            cmd.Parameters.AddWithValue("$group_id", groupId);
-            cmd.Parameters.AddWithValue("$primary_item_id", primaryItemId);
-            cmd.Parameters.AddWithValue("$item_ids", string.Join(",", itemIds));
-            cmd.Parameters.AddWithValue("$tmdb_id", (object?)tmdbId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$imdb_id", (object?)imdbId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$title", title);
-            cmd.Parameters.AddWithValue("$year", (object?)year ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$type", type);
-            cmd.ExecuteNonQuery();
+            using var tx = _connection.BeginTransaction();
+            try
+            {
+                // 1. Remap cached_items if groups were merged
+                if (remappedGroups.Count > 0)
+                {
+                    using var remapCmd = _connection.CreateCommand();
+                    remapCmd.Transaction = tx;
+                    remapCmd.CommandText = "UPDATE cached_items SET group_id = $toGid, dedup_group_id = $toGidStr WHERE group_id = $fromGid;";
+                    var pTo = remapCmd.Parameters.Add("$toGid", SqliteType.Integer);
+                    var pToStr = remapCmd.Parameters.Add("$toGidStr", SqliteType.Text);
+                    var pFrom = remapCmd.Parameters.Add("$fromGid", SqliteType.Integer);
+
+                    foreach (var (fromGid, toGid) in remappedGroups)
+                    {
+                        pFrom.Value = fromGid;
+                        pTo.Value = toGid;
+                        pToStr.Value = toGid.ToString();
+                        remapCmd.ExecuteNonQuery();
+                    }
+                }
+
+                // 2. Delete loser groups
+                if (deletedGroupIds.Count > 0)
+                {
+                    using var delCmd = _connection.CreateCommand();
+                    delCmd.Transaction = tx;
+                    delCmd.CommandText = "DELETE FROM dedup_groups WHERE group_id = $gid; DELETE FROM dedup_keys WHERE group_id = $gid;";
+                    var pDel = delCmd.Parameters.Add("$gid", SqliteType.Integer);
+                    foreach (var id in deletedGroupIds)
+                    {
+                        pDel.Value = id;
+                        delCmd.ExecuteNonQuery();
+                    }
+                }
+
+                // 3. Upsert keys
+                if (keysToSave.Count > 0)
+                {
+                    using var keyCmd = _connection.CreateCommand();
+                    keyCmd.Transaction = tx;
+                    keyCmd.CommandText = @"
+                        INSERT INTO dedup_keys (key, group_id, is_authoritative)
+                        VALUES ($key, $group_id, $is_auth)
+                        ON CONFLICT(key) DO UPDATE SET
+                            group_id = excluded.group_id,
+                            is_authoritative = excluded.is_authoritative;
+                    ";
+                    var pK = keyCmd.Parameters.Add("$key", SqliteType.Text);
+                    var pG = keyCmd.Parameters.Add("$group_id", SqliteType.Integer);
+                    var pA = keyCmd.Parameters.Add("$is_auth", SqliteType.Integer);
+
+                    foreach (var (k, gid, isAuth) in keysToSave)
+                    {
+                        pK.Value = k;
+                        pG.Value = gid;
+                        pA.Value = isAuth ? 1 : 0;
+                        keyCmd.ExecuteNonQuery();
+                    }
+                }
+
+                // 4. Upsert dirty groups
+                if (dirtyGroups.Count > 0)
+                {
+                    using var grpCmd = _connection.CreateCommand();
+                    grpCmd.Transaction = tx;
+                    grpCmd.CommandText = @"
+                        INSERT INTO dedup_groups (
+                            group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
+                            name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
+                            date_created, series_group_id, season_number, episode_number,
+                            max_height, has_4k, max_bitrate, audio_formats
+                        ) VALUES (
+                            $group_id, $item_type, $primary_item_id, $primary_server, $is_provisional, $version_count,
+                            $name, $sort_name, $year, $overview, $image_tag, $backdrop_tag, $community_rating,
+                            $date_created, $series_group_id, $season_number, $episode_number,
+                            $max_height, $has_4k, $max_bitrate, $audio_formats
+                        )
+                        ON CONFLICT(group_id) DO UPDATE SET
+                            item_type = excluded.item_type,
+                            primary_item_id = excluded.primary_item_id,
+                            primary_server = excluded.primary_server,
+                            is_provisional = excluded.is_provisional,
+                            version_count = excluded.version_count,
+                            name = excluded.name,
+                            sort_name = excluded.sort_name,
+                            year = excluded.year,
+                            overview = excluded.overview,
+                            image_tag = excluded.image_tag,
+                            backdrop_tag = excluded.backdrop_tag,
+                            community_rating = excluded.community_rating,
+                            date_created = excluded.date_created,
+                            series_group_id = excluded.series_group_id,
+                            season_number = excluded.season_number,
+                            episode_number = excluded.episode_number,
+                            max_height = excluded.max_height,
+                            has_4k = excluded.has_4k,
+                            max_bitrate = excluded.max_bitrate,
+                            audio_formats = excluded.audio_formats;
+                    ";
+
+                    var pGroupId = grpCmd.Parameters.Add("$group_id", SqliteType.Integer);
+                    var pItemType = grpCmd.Parameters.Add("$item_type", SqliteType.Text);
+                    var pPrimaryItemId = grpCmd.Parameters.Add("$primary_item_id", SqliteType.Text);
+                    var pPrimaryServer = grpCmd.Parameters.Add("$primary_server", SqliteType.Text);
+                    var pIsProvisional = grpCmd.Parameters.Add("$is_provisional", SqliteType.Integer);
+                    var pVersionCount = grpCmd.Parameters.Add("$version_count", SqliteType.Integer);
+                    var pName = grpCmd.Parameters.Add("$name", SqliteType.Text);
+                    var pSortName = grpCmd.Parameters.Add("$sort_name", SqliteType.Text);
+                    var pYear = grpCmd.Parameters.Add("$year", SqliteType.Integer);
+                    var pOverview = grpCmd.Parameters.Add("$overview", SqliteType.Text);
+                    var pImageTag = grpCmd.Parameters.Add("$image_tag", SqliteType.Text);
+                    var pBackdropTag = grpCmd.Parameters.Add("$backdrop_tag", SqliteType.Text);
+                    var pCommunityRating = grpCmd.Parameters.Add("$community_rating", SqliteType.Real);
+                    var pDateCreated = grpCmd.Parameters.Add("$date_created", SqliteType.Integer);
+                    var pSeriesGroupId = grpCmd.Parameters.Add("$series_group_id", SqliteType.Integer);
+                    var pSeasonNumber = grpCmd.Parameters.Add("$season_number", SqliteType.Integer);
+                    var pEpisodeNumber = grpCmd.Parameters.Add("$episode_number", SqliteType.Integer);
+                    var pMaxHeight = grpCmd.Parameters.Add("$max_height", SqliteType.Integer);
+                    var pHas4k = grpCmd.Parameters.Add("$has_4k", SqliteType.Integer);
+                    var pMaxBitrate = grpCmd.Parameters.Add("$max_bitrate", SqliteType.Integer);
+                    var pAudioFormats = grpCmd.Parameters.Add("$audio_formats", SqliteType.Text);
+
+                    foreach (var g in dirtyGroups)
+                    {
+                        pGroupId.Value = g.GroupId;
+                        pItemType.Value = g.ItemType;
+                        pPrimaryItemId.Value = g.PrimaryItemId;
+                        pPrimaryServer.Value = g.PrimaryServerId;
+                        pIsProvisional.Value = g.IsProvisional;
+                        pVersionCount.Value = g.VersionCount;
+                        pName.Value = g.Name;
+                        pSortName.Value = (object?)g.SortName ?? DBNull.Value;
+                        pYear.Value = (object?)g.Year ?? DBNull.Value;
+                        pOverview.Value = (object?)g.Overview ?? DBNull.Value;
+                        pImageTag.Value = (object?)g.ImageTag ?? DBNull.Value;
+                        pBackdropTag.Value = (object?)g.BackdropTag ?? DBNull.Value;
+                        pCommunityRating.Value = (object?)g.CommunityRating ?? DBNull.Value;
+                        pDateCreated.Value = (object?)g.DateCreated ?? DBNull.Value;
+                        pSeriesGroupId.Value = (object?)g.SeriesGroupId ?? DBNull.Value;
+                        pSeasonNumber.Value = (object?)g.SeasonNumber ?? DBNull.Value;
+                        pEpisodeNumber.Value = (object?)g.EpisodeNumber ?? DBNull.Value;
+                        pMaxHeight.Value = (object?)g.MaxHeight ?? DBNull.Value;
+                        pHas4k.Value = g.Has4k;
+                        pMaxBitrate.Value = (object?)g.MaxBitrate ?? DBNull.Value;
+                        pAudioFormats.Value = (object?)g.AudioFormats ?? DBNull.Value;
+
+                        grpCmd.ExecuteNonQuery();
+                        g.IsDirty = false;
+                    }
+                }
+
+                // 5. Update cached_items group assignment
+                if (itemAssignments != null && itemAssignments.Count > 0)
+                {
+                    using var assignCmd = _connection.CreateCommand();
+                    assignCmd.Transaction = tx;
+                    assignCmd.CommandText = "UPDATE cached_items SET group_id = $gid, dedup_group_id = $gidStr WHERE id = $id AND server_id = $srv;";
+                    var pGid = assignCmd.Parameters.Add("$gid", SqliteType.Integer);
+                    var pGidStr = assignCmd.Parameters.Add("$gidStr", SqliteType.Text);
+                    var pId = assignCmd.Parameters.Add("$id", SqliteType.Text);
+                    var pSrv = assignCmd.Parameters.Add("$srv", SqliteType.Text);
+
+                    foreach (var (srv, id, gid) in itemAssignments)
+                    {
+                        pGid.Value = gid;
+                        pGidStr.Value = gid.ToString();
+                        pId.Value = id;
+                        pSrv.Value = srv;
+                        assignCmd.ExecuteNonQuery();
+                    }
+                }
+
+                tx.Commit();
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                NocturneLogger.Error("DatabaseService", "Failed to save dedup batch", ex);
+                throw;
+            }
         }
     }
 
-    public void UpdateItemDedupGroupId(string itemId, string? serverId, string groupId)
+    public (List<DedupGroupRecord> Groups, List<(string Key, int GroupId, bool IsAuthoritative)> Keys, List<(string ServerId, string ItemId, int GroupId)> Items) GetDedupStateForIndex()
     {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            using var cmd = _connection.CreateCommand();
-            if (!string.IsNullOrEmpty(serverId))
-            {
-                cmd.CommandText = "UPDATE cached_items SET dedup_group_id = $gid WHERE id = $id AND server_id = $srv;";
-                cmd.Parameters.AddWithValue("$gid", groupId);
-                cmd.Parameters.AddWithValue("$id", itemId);
-                cmd.Parameters.AddWithValue("$srv", serverId);
-            }
-            else
-            {
-                cmd.CommandText = "UPDATE cached_items SET dedup_group_id = $gid WHERE id = $id;";
-                cmd.Parameters.AddWithValue("$gid", groupId);
-                cmd.Parameters.AddWithValue("$id", itemId);
-            }
-            cmd.ExecuteNonQuery();
-        }
-    }
-
-    public List<(string GroupId, string PrimaryItemId, string ItemIds, string? TmdbId, string? ImdbId, string Title, int? Year, string Type)> GetExistingDedupGroupsForIndex()
-    {
-        var result = new List<(string, string, string, string?, string?, string, int?, string)>();
-        lock (_dbLock)
-        {
-            if (_connection == null) return result;
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT group_id, primary_item_id, item_ids, tmdb_id, imdb_id, title, year, type FROM dedup_groups;";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                var gid = reader.GetString(0);
-                var pid = reader.GetString(1);
-                var ids = reader.GetString(2);
-                var tmdb = reader.IsDBNull(3) ? null : reader.GetString(3);
-                var imdb = reader.IsDBNull(4) ? null : reader.GetString(4);
-                var title = reader.GetString(5);
-                var year = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6);
-                var type = reader.GetString(7);
-                result.Add((gid, pid, ids, tmdb, imdb, title, year, type));
-            }
-        }
-        return result;
-    }
-
-    public void SaveDedupGroups(List<DedupGroup> groups)
-    {
-        var multiVersionGroups = groups.Where(g => g.SiblingItems != null && g.SiblingItems.Count > 0).ToList();
+        var groups = new List<DedupGroupRecord>();
+        var keys = new List<(string Key, int GroupId, bool IsAuthoritative)>();
+        var items = new List<(string ServerId, string ItemId, int GroupId)>();
 
         lock (_dbLock)
         {
-            using var tx = _connection!.BeginTransaction();
-            using var clearCmd = _connection.CreateCommand();
-            clearCmd.Transaction = tx;
-            clearCmd.CommandText = "DELETE FROM dedup_groups; UPDATE cached_items SET dedup_group_id = NULL;";
-            clearCmd.ExecuteNonQuery();
+            if (_connection == null) return (groups, keys, items);
 
-            foreach (var g in multiVersionGroups)
+            // 1. Load groups
+            using (var cmd = _connection.CreateCommand())
             {
-                using var cmd = _connection.CreateCommand();
-                cmd.Transaction = tx;
                 cmd.CommandText = @"
-                    INSERT INTO dedup_groups (group_id, primary_item_id, item_ids, tmdb_id, imdb_id, title, year, type)
-                    VALUES ($group_id, $primary_item_id, $item_ids, $tmdb_id, $imdb_id, $title, $year, $type);
+                    SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
+                           name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
+                           date_created, series_group_id, season_number, episode_number,
+                           max_height, has_4k, max_bitrate, audio_formats
+                    FROM dedup_groups;
                 ";
-                var itemIds = new List<string> { g.PrimaryItem.Id };
-                itemIds.AddRange(g.SiblingItems.Select(x => x.Id));
-
-                cmd.Parameters.AddWithValue("$group_id", g.GroupId);
-                cmd.Parameters.AddWithValue("$primary_item_id", g.PrimaryItem.Id);
-                cmd.Parameters.AddWithValue("$item_ids", string.Join(",", itemIds));
-                cmd.Parameters.AddWithValue("$tmdb_id", (object?)g.TmdbId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$imdb_id", (object?)g.ImdbId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$title", g.PrimaryItem.Name);
-                cmd.Parameters.AddWithValue("$year", (object?)g.PrimaryItem.ProductionYear ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$type", g.PrimaryItem.Type);
-                cmd.ExecuteNonQuery();
-
-                // Update dedup_group_id on cached_items
-                using var updateCmd = _connection.CreateCommand();
-                updateCmd.Transaction = tx;
-                updateCmd.CommandText = $"UPDATE cached_items SET dedup_group_id = $gid WHERE id IN ('{string.Join("','", itemIds)}');";
-                updateCmd.Parameters.AddWithValue("$gid", g.GroupId);
-                updateCmd.ExecuteNonQuery();
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var g = new DedupGroupRecord
+                    {
+                        GroupId = reader.GetInt32(0),
+                        ItemType = reader.GetString(1),
+                        PrimaryItemId = reader.GetString(2),
+                        PrimaryServerId = reader.GetString(3),
+                        IsProvisional = reader.GetInt32(4),
+                        VersionCount = reader.GetInt32(5),
+                        Name = reader.GetString(6),
+                        SortName = reader.IsDBNull(7) ? null : reader.GetString(7),
+                        Year = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                        Overview = reader.IsDBNull(9) ? null : reader.GetString(9),
+                        ImageTag = reader.IsDBNull(10) ? null : reader.GetString(10),
+                        BackdropTag = reader.IsDBNull(11) ? null : reader.GetString(11),
+                        CommunityRating = reader.IsDBNull(12) ? null : reader.GetFloat(12),
+                        DateCreated = reader.IsDBNull(13) ? null : reader.GetInt64(13),
+                        SeriesGroupId = reader.IsDBNull(14) ? null : reader.GetInt32(14),
+                        SeasonNumber = reader.IsDBNull(15) ? null : reader.GetInt32(15),
+                        EpisodeNumber = reader.IsDBNull(16) ? null : reader.GetInt32(16),
+                        MaxHeight = reader.IsDBNull(17) ? null : reader.GetInt32(17),
+                        Has4k = reader.GetInt32(18),
+                        MaxBitrate = reader.IsDBNull(19) ? null : reader.GetInt64(19),
+                        AudioFormats = reader.IsDBNull(20) ? null : reader.GetString(20),
+                        IsDirty = false
+                    };
+                    groups.Add(g);
+                }
             }
-            tx.Commit();
+
+            // 2. Load keys
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT key, group_id, is_authoritative FROM dedup_keys;";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    keys.Add((reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2) == 1));
+                }
+            }
+
+            // 3. Load items
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT server_id, id, group_id FROM cached_items WHERE group_id IS NOT NULL;";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    items.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+                }
+            }
         }
+
+        return (groups, keys, items);
+    }
+
+    public void UpdatePlaybackProgress(string itemId, string serverId, long positionTicks, long? runtimeTicks = null)
+    {
+        UpdateLocalPlaybackProgress(serverId, itemId, positionTicks, runtimeTicks);
     }
 
     public void ClearResumeProgress(string itemId)
@@ -1909,6 +2380,514 @@ public class DatabaseService : IDisposable
             }
         }
         return null;
+    }
+
+    public void SelfCheckPreparedStatements()
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+
+            string[] queriesToCheck = new[]
+            {
+                "SELECT json_data, server_id, dedup_group_id, height, width, video_codec, audio_codec, bitrate, size_bytes, hdr_type, edition FROM cached_items WHERE group_id = $gid OR dedup_group_id = $group_id;",
+                "SELECT COALESCE(CAST(group_id AS TEXT), dedup_group_id) FROM cached_items WHERE id = $id LIMIT 1;",
+                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE dedup_group_id = $group_id;",
+                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE tmdb_id = $val AND id != $id;",
+                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE imdb_id = $val AND id != $id;",
+                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE LOWER(name) = $name AND production_year = $year AND id != $id;",
+                "SELECT id, server_id, json_data FROM cached_items WHERE id = @id;",
+                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE parent_id = $parent_id AND server_id = $server_id;",
+                "SELECT COUNT(*) FROM cached_items;",
+                "SELECT COUNT(*) FROM dedup_groups;",
+                "SELECT start_index, total_items, is_completed, last_synced FROM sync_checkpoints WHERE server_id = $server_id AND library_id = $library_id;",
+                "SELECT id, item_id, server_id, item_name, series_name, item_type, duration_seconds, watched_at, source, genres FROM watch_events;",
+                "SELECT key, trakt_type, tmdb_id, imdb_id, show_tmdb_id, season_number, episode_number, watched_at, synced_at FROM trakt_watched_history;",
+                "SELECT json_data, server_id FROM continue_watching_cache ORDER BY sort_order ASC;",
+                "SELECT key, group_id, is_authoritative FROM dedup_keys WHERE key = $key;",
+                "SELECT server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally FROM user_data WHERE server_id = $server_id AND item_id = $item_id;",
+                "SELECT queue_id, server_id, item_id, position_ticks, mark_played, queued_utc, attempts FROM sibling_write_queue ORDER BY queued_utc ASC LIMIT 50;",
+                @"SELECT g.group_id, g.item_type, g.primary_item_id, g.primary_server, g.is_provisional, g.version_count,
+                         g.name, g.sort_name, g.year, g.overview, g.image_tag, g.backdrop_tag, g.community_rating,
+                         g.date_created, g.series_group_id, g.season_number, g.episode_number,
+                         g.max_height, g.has_4k, g.max_bitrate, g.audio_formats,
+                         MAX(u.last_played_utc) AS latest_played,
+                         u.position_ticks, u.runtime_ticks, u.server_id, u.item_id
+                  FROM user_data u
+                  JOIN cached_items c ON c.id = u.item_id AND c.server_id = u.server_id
+                  JOIN dedup_groups g ON g.group_id = c.group_id
+                  WHERE u.position_ticks > 0 AND u.played = 0
+                  GROUP BY g.group_id
+                  ORDER BY latest_played DESC
+                  LIMIT 20;"
+            };
+
+            foreach (var sql in queriesToCheck)
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = sql;
+                cmd.Prepare();
+            }
+            NocturneLogger.Info("DatabaseService", "SelfCheckPreparedStatements passed all syntax and column validations.");
+        }
+    }
+
+    public void UpdateLocalPlaybackProgress(string serverId, string itemId, long positionTicks, long? runtimeTicks = null)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
+                VALUES ($server_id, $item_id, $position_ticks, $runtime_ticks, 0, $last_played_utc, 1)
+                ON CONFLICT(server_id, item_id) DO UPDATE SET
+                    position_ticks = excluded.position_ticks,
+                    runtime_ticks = COALESCE(excluded.runtime_ticks, user_data.runtime_ticks),
+                    played = 0,
+                    last_played_utc = excluded.last_played_utc,
+                    updated_locally = 1;
+            ";
+            cmd.Parameters.AddWithValue("$server_id", serverId);
+            cmd.Parameters.AddWithValue("$item_id", itemId);
+            cmd.Parameters.AddWithValue("$position_ticks", positionTicks);
+            cmd.Parameters.AddWithValue("$runtime_ticks", (object?)runtimeTicks ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$last_played_utc", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public void MarkLocalGroupPlayed(int groupId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                UPDATE user_data
+                   SET played = 1, position_ticks = 0, last_played_utc = $now, updated_locally = 1
+                 WHERE (server_id, item_id) IN (
+                     SELECT server_id, id FROM cached_items WHERE group_id = $group_id
+                 );
+            ";
+            cmd.Parameters.AddWithValue("$now", now);
+            cmd.Parameters.AddWithValue("$group_id", groupId);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public void MarkLocalItemPlayed(string serverId, string itemId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
+                VALUES ($server_id, $item_id, 0, NULL, 1, $now, 1)
+                ON CONFLICT(server_id, item_id) DO UPDATE SET
+                    played = 1,
+                    position_ticks = 0,
+                    last_played_utc = excluded.last_played_utc,
+                    updated_locally = 1;
+            ";
+            cmd.Parameters.AddWithValue("$server_id", serverId);
+            cmd.Parameters.AddWithValue("$item_id", itemId);
+            cmd.Parameters.AddWithValue("$now", now);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public List<EmbyItem> GetContinueWatchingItems()
+    {
+        var list = new List<EmbyItem>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            using var cmd = _connection.CreateCommand();
+            // CRITICAL SQLITE INVARIANT: Exactly ONE aggregate function MAX(u.last_played_utc)
+            cmd.CommandText = @"
+                SELECT g.group_id, g.item_type, g.primary_item_id, g.primary_server, g.is_provisional, g.version_count,
+                       g.name, g.sort_name, g.year, g.overview, g.image_tag, g.backdrop_tag, g.community_rating,
+                       g.date_created, g.series_group_id, g.season_number, g.episode_number,
+                       g.max_height, g.has_4k, g.max_bitrate, g.audio_formats,
+                       MAX(u.last_played_utc) AS latest_played,
+                       u.position_ticks, u.runtime_ticks, u.server_id, u.item_id,
+                       c.json_data
+                FROM user_data u
+                JOIN cached_items c ON c.id = u.item_id AND c.server_id = u.server_id
+                JOIN dedup_groups g ON g.group_id = c.group_id
+                WHERE u.position_ticks > 0 AND u.played = 0
+                GROUP BY g.group_id
+                ORDER BY latest_played DESC
+                LIMIT 20;
+            ";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var gid = reader.GetInt32(0);
+                var itemType = reader.GetString(1);
+                var primItemId = reader.GetString(2);
+                var primServerId = reader.GetString(3);
+                var isProv = reader.GetInt32(4);
+                var vCount = reader.GetInt32(5);
+                var name = reader.GetString(6);
+                var sortName = reader.IsDBNull(7) ? null : reader.GetString(7);
+                var year = reader.IsDBNull(8) ? (int?)null : reader.GetInt32(8);
+                var overview = reader.IsDBNull(9) ? null : reader.GetString(9);
+                var imgTag = reader.IsDBNull(10) ? null : reader.GetString(10);
+                var bdTag = reader.IsDBNull(11) ? null : reader.GetString(11);
+                var rating = reader.IsDBNull(12) ? (float?)null : reader.GetFloat(12);
+                var posTicks = reader.GetInt64(22);
+                var runTicks = reader.IsDBNull(23) ? (long?)null : reader.GetInt64(23);
+                var sid = reader.GetString(24);
+                var itemId = reader.GetString(25);
+                var json = reader.GetString(26);
+
+                var item = JsonSerializer.Deserialize<EmbyItem>(json);
+                if (item != null)
+                {
+                    item.ServerId = sid;
+                    item.DedupGroupId = gid.ToString();
+                    item.VersionCount = vCount;
+                    item.UserData ??= new UserItemData();
+                    item.UserData.PlaybackPositionTicks = posTicks;
+                    item.UserData.Played = false;
+                    list.Add(item);
+                }
+            }
+        }
+        return list;
+    }
+
+    public void EnqueueSiblingPlaybackWrite(string serverId, string itemId, long? positionTicks, bool markPlayed)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO sibling_write_queue(server_id, item_id, position_ticks, mark_played, queued_utc)
+                VALUES ($server_id, $item_id, $position_ticks, $mark_played, $queued_utc)
+                ON CONFLICT(server_id, item_id) DO UPDATE SET
+                    position_ticks = excluded.position_ticks,
+                    mark_played = excluded.mark_played,
+                    queued_utc = excluded.queued_utc;
+            ";
+            cmd.Parameters.AddWithValue("$server_id", serverId);
+            cmd.Parameters.AddWithValue("$item_id", itemId);
+            cmd.Parameters.AddWithValue("$position_ticks", (object?)positionTicks ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$mark_played", markPlayed ? 1 : 0);
+            cmd.Parameters.AddWithValue("$queued_utc", now);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public List<(int QueueId, string ServerId, string ItemId, long? PositionTicks, bool MarkPlayed)> GetPendingSiblingWrites(int limit = 50)
+    {
+        var list = new List<(int, string, string, long?, bool)>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT queue_id, server_id, item_id, position_ticks, mark_played FROM sibling_write_queue ORDER BY queued_utc ASC LIMIT $limit;";
+            cmd.Parameters.AddWithValue("$limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                int qid = reader.GetInt32(0);
+                string sid = reader.GetString(1);
+                string iid = reader.GetString(2);
+                long? pos = reader.IsDBNull(3) ? null : reader.GetInt64(3);
+                bool played = reader.GetInt32(4) == 1;
+                list.Add((qid, sid, iid, pos, played));
+            }
+        }
+        return list;
+    }
+
+    public void RemoveSiblingWrite(int queueId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM sibling_write_queue WHERE queue_id = $qid;";
+            cmd.Parameters.AddWithValue("$qid", queueId);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public void ExecuteSql(string sql)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public List<EmbyItem> GetCachedItemsChunk(int offset, int limit)
+    {
+        var items = new List<EmbyItem>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return items;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT json_data, server_id FROM cached_items WHERE type IN ('Movie', 'Series', 'Episode') ORDER BY rowid LIMIT $limit OFFSET $offset;";
+            cmd.Parameters.AddWithValue("$limit", limit);
+            cmd.Parameters.AddWithValue("$offset", offset);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var json = reader.GetString(0);
+                var sid = reader.GetString(1);
+                var item = JsonSerializer.Deserialize<EmbyItem>(json);
+                if (item != null)
+                {
+                    item.ServerId = sid;
+                    items.Add(item);
+                }
+            }
+        }
+        return items;
+    }
+
+    public void SaveRebuildDedupState(ConcurrentDedupIndex index)
+    {
+        var (groups, keys, items) = index.GetRebuildState();
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var tx = _connection.BeginTransaction();
+            try
+            {
+                // 1. dedup_groups_rebuild
+                using var grpCmd = _connection.CreateCommand();
+                grpCmd.Transaction = tx;
+                grpCmd.CommandText = @"
+                    INSERT INTO dedup_groups_rebuild (
+                        group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
+                        name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
+                        date_created, series_group_id, season_number, episode_number,
+                        max_height, has_4k, max_bitrate, audio_formats
+                    ) VALUES (
+                        $group_id, $item_type, $primary_item_id, $primary_server, $is_provisional, $version_count,
+                        $name, $sort_name, $year, $overview, $image_tag, $backdrop_tag, $community_rating,
+                        $date_created, $series_group_id, $season_number, $episode_number,
+                        $max_height, $has_4k, $max_bitrate, $audio_formats
+                    );
+                ";
+                var pGroupId = grpCmd.Parameters.Add("$group_id", SqliteType.Integer);
+                var pItemType = grpCmd.Parameters.Add("$item_type", SqliteType.Text);
+                var pPrimaryItemId = grpCmd.Parameters.Add("$primary_item_id", SqliteType.Text);
+                var pPrimaryServer = grpCmd.Parameters.Add("$primary_server", SqliteType.Text);
+                var pIsProvisional = grpCmd.Parameters.Add("$is_provisional", SqliteType.Integer);
+                var pVersionCount = grpCmd.Parameters.Add("$version_count", SqliteType.Integer);
+                var pName = grpCmd.Parameters.Add("$name", SqliteType.Text);
+                var pSortName = grpCmd.Parameters.Add("$sort_name", SqliteType.Text);
+                var pYear = grpCmd.Parameters.Add("$year", SqliteType.Integer);
+                var pOverview = grpCmd.Parameters.Add("$overview", SqliteType.Text);
+                var pImageTag = grpCmd.Parameters.Add("$image_tag", SqliteType.Text);
+                var pBackdropTag = grpCmd.Parameters.Add("$backdrop_tag", SqliteType.Text);
+                var pCommunityRating = grpCmd.Parameters.Add("$community_rating", SqliteType.Real);
+                var pDateCreated = grpCmd.Parameters.Add("$date_created", SqliteType.Integer);
+                var pSeriesGroupId = grpCmd.Parameters.Add("$series_group_id", SqliteType.Integer);
+                var pSeasonNumber = grpCmd.Parameters.Add("$season_number", SqliteType.Integer);
+                var pEpisodeNumber = grpCmd.Parameters.Add("$episode_number", SqliteType.Integer);
+                var pMaxHeight = grpCmd.Parameters.Add("$max_height", SqliteType.Integer);
+                var pHas4k = grpCmd.Parameters.Add("$has_4k", SqliteType.Integer);
+                var pMaxBitrate = grpCmd.Parameters.Add("$max_bitrate", SqliteType.Integer);
+                var pAudioFormats = grpCmd.Parameters.Add("$audio_formats", SqliteType.Text);
+
+                foreach (var g in groups)
+                {
+                    pGroupId.Value = g.GroupId;
+                    pItemType.Value = g.ItemType;
+                    pPrimaryItemId.Value = g.PrimaryItemId;
+                    pPrimaryServer.Value = g.PrimaryServerId;
+                    pIsProvisional.Value = g.IsProvisional;
+                    pVersionCount.Value = g.VersionCount;
+                    pName.Value = g.Name;
+                    pSortName.Value = (object?)g.SortName ?? DBNull.Value;
+                    pYear.Value = (object?)g.Year ?? DBNull.Value;
+                    pOverview.Value = (object?)g.Overview ?? DBNull.Value;
+                    pImageTag.Value = (object?)g.ImageTag ?? DBNull.Value;
+                    pBackdropTag.Value = (object?)g.BackdropTag ?? DBNull.Value;
+                    pCommunityRating.Value = (object?)g.CommunityRating ?? DBNull.Value;
+                    pDateCreated.Value = (object?)g.DateCreated ?? DBNull.Value;
+                    pSeriesGroupId.Value = (object?)g.SeriesGroupId ?? DBNull.Value;
+                    pSeasonNumber.Value = (object?)g.SeasonNumber ?? DBNull.Value;
+                    pEpisodeNumber.Value = (object?)g.EpisodeNumber ?? DBNull.Value;
+                    pMaxHeight.Value = (object?)g.MaxHeight ?? DBNull.Value;
+                    pHas4k.Value = g.Has4k;
+                    pMaxBitrate.Value = (object?)g.MaxBitrate ?? DBNull.Value;
+                    pAudioFormats.Value = (object?)g.AudioFormats ?? DBNull.Value;
+                    grpCmd.ExecuteNonQuery();
+                }
+
+                // 2. dedup_keys_rebuild
+                using var keyCmd = _connection.CreateCommand();
+                keyCmd.Transaction = tx;
+                keyCmd.CommandText = "INSERT INTO dedup_keys_rebuild (key, group_id, is_authoritative) VALUES ($k, $g, $a);";
+                var pkK = keyCmd.Parameters.Add("$k", SqliteType.Text);
+                var pkG = keyCmd.Parameters.Add("$g", SqliteType.Integer);
+                var pkA = keyCmd.Parameters.Add("$a", SqliteType.Integer);
+                foreach (var (k, gid, isAuth) in keys)
+                {
+                    pkK.Value = k;
+                    pkG.Value = gid;
+                    pkA.Value = isAuth ? 1 : 0;
+                    keyCmd.ExecuteNonQuery();
+                }
+
+                // 3. item_group_rebuild
+                using var mapCmd = _connection.CreateCommand();
+                mapCmd.Transaction = tx;
+                mapCmd.CommandText = "INSERT INTO item_group_rebuild (id, server_id, group_id) VALUES ($id, $srv, $gid);";
+                var pmId = mapCmd.Parameters.Add("$id", SqliteType.Text);
+                var pmSrv = mapCmd.Parameters.Add("$srv", SqliteType.Text);
+                var pmGid = mapCmd.Parameters.Add("$gid", SqliteType.Integer);
+                foreach (var (srv, id, gid) in items)
+                {
+                    pmId.Value = id;
+                    pmSrv.Value = srv;
+                    pmGid.Value = gid;
+                    mapCmd.ExecuteNonQuery();
+                }
+
+                tx.Commit();
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                NocturneLogger.Error("DatabaseService", "Failed to save rebuild dedup state", ex);
+                throw;
+            }
+        }
+    }
+
+    public List<EmbyItem> GetItemsWithNullGroupId()
+    {
+        var items = new List<EmbyItem>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return items;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT json_data, server_id FROM cached_items WHERE group_id IS NULL;";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var json = reader.GetString(0);
+                var sid = reader.GetString(1);
+                var item = JsonSerializer.Deserialize<EmbyItem>(json);
+                if (item != null)
+                {
+                    item.ServerId = sid;
+                    items.Add(item);
+                }
+            }
+        }
+        return items;
+    }
+
+    public void SwapInRebuild(
+        Action createMappingAndRebuildTables,
+        Action<List<EmbyItem>>? postCommitReingest = null)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+
+            // 1. Build new tables alongside existing tables
+            createMappingAndRebuildTables();
+
+            // 2. Perform atomic swap under PRAGMA legacy_alter_table = ON
+            using (var pragmaCmd = _connection.CreateCommand())
+            {
+                pragmaCmd.CommandText = "PRAGMA legacy_alter_table = ON;";
+                pragmaCmd.ExecuteNonQuery();
+            }
+
+            using var tx = _connection.BeginTransaction();
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    -- Swap tables
+                    DROP TABLE IF EXISTS dedup_groups_old;
+                    DROP TABLE IF EXISTS dedup_keys_old;
+                    ALTER TABLE dedup_groups RENAME TO dedup_groups_old;
+                    ALTER TABLE dedup_keys RENAME TO dedup_keys_old;
+                    ALTER TABLE dedup_groups_rebuild RENAME TO dedup_groups;
+                    ALTER TABLE dedup_keys_rebuild RENAME TO dedup_keys;
+                    DROP TABLE dedup_groups_old;
+                    DROP TABLE dedup_keys_old;
+
+                    -- Re-create FTS5 triggers destroyed by rename
+                    DROP TRIGGER IF EXISTS dg_fts_ai;
+                    DROP TRIGGER IF EXISTS dg_fts_ad;
+                    DROP TRIGGER IF EXISTS dg_fts_au;
+
+                    CREATE TRIGGER dg_fts_ai AFTER INSERT ON dedup_groups BEGIN
+                      INSERT INTO dedup_groups_fts(rowid, name, sort_name)
+                        VALUES (new.group_id, new.name, new.sort_name);
+                    END;
+                    CREATE TRIGGER dg_fts_ad AFTER DELETE ON dedup_groups BEGIN
+                      INSERT INTO dedup_groups_fts(dedup_groups_fts, rowid, name, sort_name)
+                        VALUES ('delete', old.group_id, old.name, old.sort_name);
+                    END;
+                    CREATE TRIGGER dg_fts_au AFTER UPDATE ON dedup_groups BEGIN
+                      INSERT INTO dedup_groups_fts(dedup_groups_fts, rowid, name, sort_name)
+                        VALUES ('delete', old.group_id, old.name, old.sort_name);
+                      INSERT INTO dedup_groups_fts(rowid, name, sort_name)
+                        VALUES (new.group_id, new.name, new.sort_name);
+                    END;
+
+                    -- 3a. Reassign mapped items
+                    UPDATE cached_items
+                       SET group_id = (SELECT r.group_id FROM item_group_rebuild r
+                                        WHERE r.id = cached_items.id AND r.server_id = cached_items.server_id)
+                     WHERE EXISTS (SELECT 1 FROM item_group_rebuild r
+                                    WHERE r.id = cached_items.id AND r.server_id = cached_items.server_id);
+
+                    -- 3b. Clear unmapped items to NULL so they never hold stale IDs
+                    UPDATE cached_items
+                       SET group_id = NULL
+                     WHERE NOT EXISTS (SELECT 1 FROM item_group_rebuild r
+                                        WHERE r.id = cached_items.id AND r.server_id = cached_items.server_id);
+
+                    DROP TABLE IF EXISTS item_group_rebuild;
+
+                    -- 4. Rebuild FTS5 index
+                    INSERT INTO dedup_groups_fts(dedup_groups_fts) VALUES('rebuild');
+                ";
+                cmd.ExecuteNonQuery();
+                tx.Commit();
+            }
+            finally
+            {
+                using var pragmaOff = _connection.CreateCommand();
+                pragmaOff.CommandText = "PRAGMA legacy_alter_table = OFF;";
+                pragmaOff.ExecuteNonQuery();
+            }
+
+            // Post-commit reingest of any items where group_id IS NULL
+            if (postCommitReingest != null)
+            {
+                var unmapped = GetItemsWithNullGroupId();
+                if (unmapped.Count > 0)
+                {
+                    postCommitReingest(unmapped);
+                }
+            }
+        }
     }
 
     public void Dispose()

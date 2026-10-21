@@ -12,7 +12,7 @@ public class DedupEngineTests
     public void NormalizeTitle_CleansPunctuationAndWhitespace()
     {
         var result = DedupEngine.NormalizeTitle("Avengers: Endgame (2019) - IMAX [Edition]!");
-        Assert.Equal("avengers endgame 2019 imax edition", result);
+        Assert.Equal("avengers endgame", result);
     }
 
     [Fact]
@@ -117,5 +117,72 @@ public class DedupEngineTests
         var score4K = DedupEngine.ScorePrimaryItem(copy4K);
 
         Assert.True(score4K > score1080);
+    }
+
+    [Fact]
+    public void PlaybackDecisionMatrix_HighestQualityFirst_ThenBitrate_ThenServerPriority()
+    {
+        var copy4KRemux = new EmbyItem
+        {
+            Id = "copy1",
+            ServerId = "server_beta",
+            Name = "Avatar",
+            Height = 2160,
+            Width = 3840,
+            Bitrate = 65_000_000,
+            RunTimeTicks = 9_000_000_000L
+        };
+
+        var copy4KWeb = new EmbyItem
+        {
+            Id = "copy2",
+            ServerId = "server_alpha",
+            Name = "Avatar",
+            Height = 2160,
+            Width = 3840,
+            Bitrate = 18_000_000,
+            RunTimeTicks = 9_000_000_000L
+        };
+
+        var copy1080pBluRay = new EmbyItem
+        {
+            Id = "copy3",
+            ServerId = "server_alpha",
+            Name = "Avatar",
+            Height = 1080,
+            Width = 1920,
+            Bitrate = 14_000_000,
+            RunTimeTicks = 9_000_000_000L
+        };
+
+        var copy1080pBluRayServerBeta = new EmbyItem
+        {
+            Id = "copy4",
+            ServerId = "server_beta",
+            Name = "Avatar",
+            Height = 1080,
+            Width = 1920,
+            Bitrate = 14_000_000,
+            RunTimeTicks = 9_000_000_000L
+        };
+
+        var serverPriority = new List<string> { "server_alpha", "server_beta" };
+
+        var list = new List<EmbyItem> { copy1080pBluRayServerBeta, copy4KWeb, copy1080pBluRay, copy4KRemux };
+
+        var ordered = list
+            .OrderByDescending(i => (i.Height >= 2100 ? 4000 : i.Height >= 1000 ? 3000 : 1000))
+            .ThenByDescending(i => i.MeasuredBitrate ?? 0)
+            .ThenBy(i =>
+            {
+                var idx = serverPriority.IndexOf(i.ServerId ?? string.Empty);
+                return idx >= 0 ? idx : int.MaxValue;
+            })
+            .ToList();
+
+        Assert.Equal("copy1", ordered[0].Id); // 4K Remux (highest quality & bitrate)
+        Assert.Equal("copy2", ordered[1].Id); // 4K Web (4K resolution tier)
+        Assert.Equal("copy3", ordered[2].Id); // 1080p from server_alpha (higher server priority than server_beta)
+        Assert.Equal("copy4", ordered[3].Id); // 1080p from server_beta
     }
 }

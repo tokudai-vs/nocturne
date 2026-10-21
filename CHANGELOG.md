@@ -1,5 +1,16 @@
 # Changelog
 
+## v4.2.0 — 2026-10-21
+
+### Added
+- **Multi-Quality Deduplication Engine**: Merges duplicate copies across multiple servers and within the same server for Movies, Series, and Episodes into a single unified library entry with distinct quality tiers.
+- **Server Priority Drag-and-Drop & Reordering**: Interactive server priority list in Settings with full mouse drag-and-drop and up/down arrow buttons to configure preferred playback sources.
+- **Smart Playback Decision Routing Matrix**: Hierarchical playback candidate sorting (`Hardware capability filter > Quality Tier (4K > 1080p > 720p > SD) > Bitrate > Server Priority`) with seamless automatic failover across sibling servers.
+- **Unified Clean Media Edition Badges**: Detail page displays clean technical edition pills (`4K IMAX Enhanced • Dolby Vision`, `1080p BluRay`, `720p HD`, bitrate) with server identities completely hidden from the user interface.
+- **Single Deduped Continue Watching**: Continue Watching rows display exactly one card per title regardless of how many servers host the media, powered by strict bare-column SQLite aggregation.
+- **Cross-Server Sibling Progress Syncing**: Local playback immediately saves progress and queues background updates (`sibling_write_queue`) across all other servers and Trakt.tv.
+- **Robust N-Way Rebuild & Self-Check Migration**: Schema v4.2 migration with prepared statement self-check, atomic swap-in rebuild, and zero unmapped foreign-key invariants.
+
 ## v4.1.0 — 2026-10-20
 
 ### Added
