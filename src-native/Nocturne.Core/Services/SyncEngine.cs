@@ -70,6 +70,7 @@ public class SyncEngine
     private readonly EmbyClient _embyClient;
     private readonly DatabaseService _db;
     private readonly DedupEngine _dedup;
+    private readonly ConcurrentDedupIndex _dedupIndex = new();
     private readonly TraktService _trakt;
     private readonly SettingsService _settings;
 
@@ -242,6 +243,7 @@ public class SyncEngine
             var syncSw = Stopwatch.StartNew();
 
             _settings.Update(s => s.SyncStatus = "in-progress");
+            _dedupIndex.InitializeFromDb(_db);
 
             // ── Single Consumer / Writer Task (Serialized SQLite Transactions) ──
             var writerTask = Task.Run(async () =>
@@ -255,6 +257,10 @@ public class SyncEngine
                         string watermarkKey = $"{batch.Server.Id}:{batch.View.Id}";
                         int watermark = batch.StartIndex + batch.Items.Count;
                         viewWatermarks[watermarkKey] = watermark;
+
+                        // Concurrent incremental hash-index deduplication:
+                        // Matches items across servers in real time and assigns DedupGroupId prior to DB write
+                        _dedupIndex.ProcessBatch(batch.Items, _db);
 
                         // Atomic crash safety: items + checkpoint committed in the exact same transaction!
                         _db.UpsertItems(
@@ -653,31 +659,13 @@ public class SyncEngine
                 }
             }
 
-            // Rebuild multi-server deduplication index for Movies and Series
+            // Finalize multi-server deduplication index (built concurrently during sync)
             _settings.Update(s => s.DedupStatus = "in-progress");
-            var dedupCandidates = _db.GetItemsForDeduplication();
-            var dedupMsg = $"Rebuilding multi-server deduplication index ({dedupCandidates.Count:N0} titles)...";
-            SetState(SyncState.Deduping, dedupMsg);
-            ProgressReported?.Invoke(new SyncProgressReport
-            {
-                State = SyncState.Deduping,
-                ServerId = "catalog",
-                ServerName = "Catalog",
-                StatusMessage = dedupMsg,
-                Percentage = 92.0,
-                ServerPercentage = 92.0,
-                ItemsFetched = totalItemsFetched,
-                ItemsWritten = totalItemsWritten,
-                TotalServersCount = servers.Count,
-                ActiveServersCount = servers.Count
-            });
-
-            var dedupGroups = _dedup.Deduplicate(dedupCandidates);
-            _db.SaveDedupGroups(dedupGroups);
+            _dedupIndex.FlushAll(_db);
             _settings.Update(s => s.DedupStatus = "complete");
 
             int totalIndexed = _db.GetCachedItemsCount();
-            var multiVersionGroups = dedupGroups.Count(g => g.SiblingItems.Count > 0);
+            var multiVersionGroups = _dedupIndex.MultiVersionGroupsCount;
             var doneMsg = $"Sync complete ({totalIndexed:N0} items from {servers.Count} server(s), {multiVersionGroups:N0} deduplicated titles).";
 
             _settings.Update(s =>

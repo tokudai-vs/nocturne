@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -525,6 +526,14 @@ public partial class MainWindow : FluentWindow
         if (e.ChangedButton == MouseButton.Left)
         {
             _viewModel.NavigateToHome();
+        }
+    }
+
+    private void OnAnyScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (_viewModel != null && Math.Abs(e.VerticalChange) > 0.1)
+        {
+            _viewModel.IsScrolledOverContent = e.VerticalOffset > 20;
         }
     }
 

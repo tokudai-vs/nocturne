@@ -7,45 +7,52 @@ namespace Nocturne.Core.Services;
 public class AdaptiveBatchController
 {
     public const int MinBatchSize = 250;
-    public const int MaxBatchSize = 2500;
+    public const int MaxBatchSize = 25000;
     public const int DefaultBatchSize = 1000;
     public const int StepSize = 250;
-    public const long FastLatencyThresholdMs = 1200;
-    public const long SlowLatencyThresholdMs = 2800;
+    public const long LatencyLimitMs = 3500;
+    public const int ConsecutiveSuccessesNeeded = 5;
 
     public int CurrentBatchSize { get; private set; }
+    public int ConsecutiveSuccesses { get; private set; }
 
     public AdaptiveBatchController(int initialBatchSize = DefaultBatchSize)
     {
         CurrentBatchSize = Math.Clamp(initialBatchSize, MinBatchSize, MaxBatchSize);
+        ConsecutiveSuccesses = 0;
     }
 
     /// <summary>
     /// Records the latency and success status of the last request and adjusts batch size accordingly.
-    /// Fast responses (&lt;1200ms) increase batch size by 250 up to 2500.
-    /// Slow responses (&gt;2800ms) decrease batch size by 250 down to 250 to relieve server pressure.
-    /// Transient errors immediately back off to MinBatchSize (250).
+    /// - Transient network / HTTP error: immediate backoff to MinBatchSize (250) and resets success counter.
+    /// - Latency failure (&gt;3500ms): steps down by StepSize (250) and resets success counter.
+    /// - 5 consecutive successful batches under latency threshold: increases batch size by StepSize (250).
     /// </summary>
     public int RecordLatency(long latencyMs, bool wasSuccess)
     {
         if (!wasSuccess)
         {
             // Immediate backoff to minimal batch size on network error or HTTP failure
+            ConsecutiveSuccesses = 0;
             CurrentBatchSize = MinBatchSize;
             return CurrentBatchSize;
         }
 
-        if (latencyMs < FastLatencyThresholdMs)
+        if (latencyMs > LatencyLimitMs)
         {
-            // Fast server roundtrip: safely scale up to increase throughput
-            CurrentBatchSize = Math.Min(MaxBatchSize, CurrentBatchSize + StepSize);
-        }
-        else if (latencyMs > SlowLatencyThresholdMs)
-        {
-            // High server latency: throttle down to alleviate pressure on server
+            // Latency failure: exceeded threshold (>3500ms). Step down and reset success counter.
+            ConsecutiveSuccesses = 0;
             CurrentBatchSize = Math.Max(MinBatchSize, CurrentBatchSize - StepSize);
+            return CurrentBatchSize;
         }
-        // Healthy zone (1200ms - 2800ms): keep current batch size
+
+        // Healthy response within latency limit (<= 3500ms)
+        ConsecutiveSuccesses++;
+        if (ConsecutiveSuccesses >= ConsecutiveSuccessesNeeded)
+        {
+            CurrentBatchSize = Math.Min(MaxBatchSize, CurrentBatchSize + StepSize);
+            ConsecutiveSuccesses = 0;
+        }
 
         return CurrentBatchSize;
     }
@@ -53,5 +60,6 @@ public class AdaptiveBatchController
     public void Reset()
     {
         CurrentBatchSize = DefaultBatchSize;
+        ConsecutiveSuccesses = 0;
     }
 }

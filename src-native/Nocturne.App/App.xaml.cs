@@ -168,6 +168,7 @@ public partial class App : Application
             }
             SettingsViewModel.UpdateThemeGradients();
             _serviceProvider?.GetService<ThemeColorService>()?.UpdateAdaptiveTextColors();
+            _serviceProvider?.GetService<MainViewModel>()?.UpdateTopBarColors();
         }
         catch (Exception ex)
         {

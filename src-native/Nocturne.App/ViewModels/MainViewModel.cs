@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Media;
 using Wpf.Ui.Controls;
+using Nocturne.App.Services;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
 using Nocturne.Core.Utils;
@@ -17,6 +18,7 @@ public class MainViewModel : BaseViewModel
     private readonly DatabaseService _db;
     private readonly WatchPartyService _watchParty;
     private readonly SyncEngine _sync;
+    private readonly ThemeColorService _themeColors;
 
     private BaseViewModel _currentViewModel;
     private WindowBackdropType _backdropType = WindowBackdropType.Mica;
@@ -68,6 +70,7 @@ public class MainViewModel : BaseViewModel
         DatabaseService db,
         WatchPartyService watchParty,
         SyncEngine sync,
+        ThemeColorService themeColors,
         HomeViewModel homeVM,
         LibraryViewModel libraryVM,
         DetailViewModel detailVM,
@@ -84,6 +87,8 @@ public class MainViewModel : BaseViewModel
         _db = db;
         _watchParty = watchParty;
         _sync = sync;
+        _themeColors = themeColors;
+        _themeColors.ThemeColorChanged += _ => UpdateTopBarColors();
 
         HomeVM = homeVM;
         LibraryVM = libraryVM;
@@ -278,6 +283,19 @@ public class MainViewModel : BaseViewModel
     private string _currentServerName = "Emby Server";
     private string _currentUserInitial = "U";
 
+    private bool _isScrolledOverContent;
+    public bool IsScrolledOverContent
+    {
+        get => _isScrolledOverContent;
+        set
+        {
+            if (SetProperty(ref _isScrolledOverContent, value))
+            {
+                UpdateTopBarColors();
+            }
+        }
+    }
+
     public BaseViewModel CurrentViewModel
     {
         get => _currentViewModel;
@@ -285,6 +303,7 @@ public class MainViewModel : BaseViewModel
         {
             if (SetProperty(ref _currentViewModel, value))
             {
+                _isScrolledOverContent = false;
                 IsNavigationVisible = value is not OnboardingViewModel;
                 OnPropertyChanged(nameof(IsHomeActive));
                 OnPropertyChanged(nameof(IsLibraryActive));
@@ -294,10 +313,7 @@ public class MainViewModel : BaseViewModel
                 OnPropertyChanged(nameof(IsAnalyticsActive));
                 OnPropertyChanged(nameof(IsOnboardingActive));
                 OnPropertyChanged(nameof(IsHeroPage));
-                OnPropertyChanged(nameof(TopBarForeground));
-                OnPropertyChanged(nameof(TopBarSecondaryForeground));
-                OnPropertyChanged(nameof(HomeTabIconBrush));
-                OnPropertyChanged(nameof(LibraryTabIconBrush));
+                UpdateTopBarColors();
             }
         }
     }
@@ -311,13 +327,118 @@ public class MainViewModel : BaseViewModel
     public bool IsOnboardingActive => CurrentViewModel is OnboardingViewModel;
     public bool IsHeroPage => CurrentViewModel is HomeViewModel || CurrentViewModel is DetailViewModel;
 
-    public Brush TopBarForeground => IsHeroPage
-        ? Brushes.White
-        : (Brush)(Application.Current?.TryFindResource("TextFillColorPrimaryBrush") ?? Brushes.Black);
+    public bool IsThemeLight
+    {
+        get
+        {
+            try
+            {
+                return Wpf.Ui.Appearance.ApplicationThemeManager.GetAppTheme() == Wpf.Ui.Appearance.ApplicationTheme.Light;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
 
-    public Brush TopBarSecondaryForeground => IsHeroPage
-        ? new SolidColorBrush(Color.FromArgb(0xDC, 0xFF, 0xFF, 0xFF))
-        : (Brush)(Application.Current?.TryFindResource("TextFillColorSecondaryBrush") ?? Brushes.Gray);
+    public bool IsOverHeroBanner => IsHeroPage && !IsScrolledOverContent;
+
+    public Brush TopBarForeground
+    {
+        get
+        {
+            if (IsOverHeroBanner || !IsThemeLight)
+            {
+                return Brushes.White;
+            }
+            return (Brush)(Application.Current?.TryFindResource("TextFillColorPrimaryBrush") ?? new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11)));
+        }
+    }
+
+    public Brush TopBarSecondaryForeground
+    {
+        get
+        {
+            if (IsOverHeroBanner || !IsThemeLight)
+            {
+                return new SolidColorBrush(Color.FromArgb(0xDC, 0xFF, 0xFF, 0xFF));
+            }
+            return (Brush)(Application.Current?.TryFindResource("TextFillColorSecondaryBrush") ?? new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x70)));
+        }
+    }
+
+    public Brush TopBarBackgroundBrush
+    {
+        get
+        {
+            if (IsOverHeroBanner)
+            {
+                var gradient = new LinearGradientBrush
+                {
+                    StartPoint = new Point(0.5, 0),
+                    EndPoint = new Point(0.5, 1)
+                };
+                gradient.GradientStops.Add(new GradientStop(Color.FromArgb(0xE8, 0x00, 0x00, 0x00), 0.0));
+                gradient.GradientStops.Add(new GradientStop(Color.FromArgb(0xB8, 0x00, 0x00, 0x00), 0.5));
+                gradient.GradientStops.Add(new GradientStop(Color.FromArgb(0x60, 0x00, 0x00, 0x00), 1.0));
+                gradient.Freeze();
+                return gradient;
+            }
+
+            if (!IsThemeLight)
+            {
+                var darkBrush = new SolidColorBrush(Color.FromArgb(0xF2, 0x14, 0x14, 0x18));
+                darkBrush.Freeze();
+                return darkBrush;
+            }
+            else
+            {
+                var lightBrush = new SolidColorBrush(Color.FromArgb(0xF5, 0xF8, 0xF8, 0xFC));
+                lightBrush.Freeze();
+                return lightBrush;
+            }
+        }
+    }
+
+    public Brush TopBarBorderBrush
+    {
+        get
+        {
+            if (IsOverHeroBanner)
+            {
+                return Brushes.Transparent;
+            }
+            return !IsThemeLight
+                ? new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF))
+                : new SolidColorBrush(Color.FromArgb(0x18, 0x00, 0x00, 0x00));
+        }
+    }
+
+    public Brush TopBarSyncPillBackgroundBrush
+    {
+        get
+        {
+            if (IsOverHeroBanner || !IsThemeLight)
+            {
+                var b = new SolidColorBrush(Color.FromArgb(0x35, 0x00, 0x00, 0x00));
+                b.Freeze();
+                return b;
+            }
+            else
+            {
+                var b = new SolidColorBrush(Color.FromArgb(0x14, 0x00, 0x00, 0x00));
+                b.Freeze();
+                return b;
+            }
+        }
+    }
+
+    public Brush TopBarSyncPillBorderBrush => (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange);
+
+    public Brush TopBarSyncIconBrush => (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange);
+
+    public Brush TopBarSyncTextBrush => TopBarForeground;
 
     public Brush HomeTabIconBrush => IsHomeActive
         ? (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange)
@@ -326,6 +447,22 @@ public class MainViewModel : BaseViewModel
     public Brush LibraryTabIconBrush => IsLibraryActive
         ? (Brush)(Application.Current?.TryFindResource("NocturneAmberBrush") ?? Brushes.Orange)
         : TopBarSecondaryForeground;
+
+    public void UpdateTopBarColors()
+    {
+        OnPropertyChanged(nameof(IsThemeLight));
+        OnPropertyChanged(nameof(IsOverHeroBanner));
+        OnPropertyChanged(nameof(TopBarForeground));
+        OnPropertyChanged(nameof(TopBarSecondaryForeground));
+        OnPropertyChanged(nameof(TopBarBackgroundBrush));
+        OnPropertyChanged(nameof(TopBarBorderBrush));
+        OnPropertyChanged(nameof(TopBarSyncPillBackgroundBrush));
+        OnPropertyChanged(nameof(TopBarSyncPillBorderBrush));
+        OnPropertyChanged(nameof(TopBarSyncIconBrush));
+        OnPropertyChanged(nameof(TopBarSyncTextBrush));
+        OnPropertyChanged(nameof(HomeTabIconBrush));
+        OnPropertyChanged(nameof(LibraryTabIconBrush));
+    }
 
     public string CurrentUserName
     {

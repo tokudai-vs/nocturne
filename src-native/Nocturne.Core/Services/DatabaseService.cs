@@ -1462,6 +1462,92 @@ public class DatabaseService : IDisposable
         return items;
     }
 
+    public void UpsertDedupGroup(
+        string groupId,
+        string primaryItemId,
+        IEnumerable<string> itemIds,
+        string? tmdbId,
+        string? imdbId,
+        string title,
+        int? year,
+        string type)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO dedup_groups (group_id, primary_item_id, item_ids, tmdb_id, imdb_id, title, year, type)
+                VALUES ($group_id, $primary_item_id, $item_ids, $tmdb_id, $imdb_id, $title, $year, $type)
+                ON CONFLICT(group_id) DO UPDATE SET
+                    primary_item_id = excluded.primary_item_id,
+                    item_ids = excluded.item_ids,
+                    tmdb_id = excluded.tmdb_id,
+                    imdb_id = excluded.imdb_id,
+                    title = excluded.title,
+                    year = excluded.year,
+                    type = excluded.type;
+            ";
+            cmd.Parameters.AddWithValue("$group_id", groupId);
+            cmd.Parameters.AddWithValue("$primary_item_id", primaryItemId);
+            cmd.Parameters.AddWithValue("$item_ids", string.Join(",", itemIds));
+            cmd.Parameters.AddWithValue("$tmdb_id", (object?)tmdbId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$imdb_id", (object?)imdbId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$title", title);
+            cmd.Parameters.AddWithValue("$year", (object?)year ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$type", type);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public void UpdateItemDedupGroupId(string itemId, string? serverId, string groupId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            if (!string.IsNullOrEmpty(serverId))
+            {
+                cmd.CommandText = "UPDATE cached_items SET dedup_group_id = $gid WHERE id = $id AND server_id = $srv;";
+                cmd.Parameters.AddWithValue("$gid", groupId);
+                cmd.Parameters.AddWithValue("$id", itemId);
+                cmd.Parameters.AddWithValue("$srv", serverId);
+            }
+            else
+            {
+                cmd.CommandText = "UPDATE cached_items SET dedup_group_id = $gid WHERE id = $id;";
+                cmd.Parameters.AddWithValue("$gid", groupId);
+                cmd.Parameters.AddWithValue("$id", itemId);
+            }
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public List<(string GroupId, string PrimaryItemId, string ItemIds, string? TmdbId, string? ImdbId, string Title, int? Year, string Type)> GetExistingDedupGroupsForIndex()
+    {
+        var result = new List<(string, string, string, string?, string?, string, int?, string)>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return result;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT group_id, primary_item_id, item_ids, tmdb_id, imdb_id, title, year, type FROM dedup_groups;";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var gid = reader.GetString(0);
+                var pid = reader.GetString(1);
+                var ids = reader.GetString(2);
+                var tmdb = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var imdb = reader.IsDBNull(4) ? null : reader.GetString(4);
+                var title = reader.GetString(5);
+                var year = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6);
+                var type = reader.GetString(7);
+                result.Add((gid, pid, ids, tmdb, imdb, title, year, type));
+            }
+        }
+        return result;
+    }
+
     public void SaveDedupGroups(List<DedupGroup> groups)
     {
         var multiVersionGroups = groups.Where(g => g.SiblingItems != null && g.SiblingItems.Count > 0).ToList();
