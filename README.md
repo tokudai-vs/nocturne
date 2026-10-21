@@ -40,7 +40,9 @@ The official Emby desktop and web apps run on Chromium and Electron, consuming 6
 
 * ⚡ **Pure Native Windows Performance**: Crafted in C# with .NET 8 and WPF-UI. Idle memory footprint is under **100 MB**. Navigates in 0ms from an optimized SQLite WAL cache — even with libraries of 1.5M+ items.
 * 🎬 **DirectPlay Everything with mpv**: Plays 4K UHD, HDR10, Dolby Vision (P5/P8 tone-mapping), AV1, HEVC 10-bit, DTS-HD Master Audio, and TrueHD Dolby Atmos without ever requesting server transcoding.
-* 🌐 **Unified Multi-Server Library**: Connect multiple Emby servers simultaneously. Duplicate movies and TV series are automatically merged into a single clean shelf with an integrated quality version picker and automatic stream failover.
+* 🌐 **Unified Multi-Server Library**: Connect multiple Emby servers simultaneously. Duplicate movies and TV series are automatically merged into a single clean shelf with an integrated quality version picker (4K Remux, Web-DL, HD) and automatic stream failover.
+* 🎛️ **Server Priority & Seamless Failover**: Drag-and-drop server priority reordering. If a server is offline or errors during playback, Nocturne seamlessly fails over to the next highest-quality stream available.
+* 📑 **Dedicated Watchlist Navigation & Two-Way Trakt Sync**: Dedicated top-level Watchlist tab (`Home │ Watchlist │ Libraries`) merging Trakt watchlist entries and Emby favorites with 1-click card bookmarking, RFC 7636 PKCE OAuth device authentication, real-time scrobble stream, and TMDB fallback enrichment.
 * ⏭️ **Automated TheIntroDB Skipping**: Skips TV show intros, recaps, and credits automatically or via a 1-click amber HUD prompt (`Enter`). Zero server plugins or complex setup required.
 * 🍿 **Real-Time Synchronized WatchParty**: Host or join live viewing sessions with friends across different servers with synchronized play, pause, and seek heartbeats.
 * 📊 **Deep Trakt.tv Integration & Analytics**: Seamless OAuth scrobbling, Trakt Watchlist virtual library, and interactive GitHub-style viewing heatmaps and statistics.
@@ -59,11 +61,15 @@ The official Emby desktop and web apps run on Chromium and Electron, consuming 6
 | **4K HDR10 / Dolby Vision** | **Native GPU DirectPlay** | Often Transcodes | Transcodes |
 | **TrueHD Atmos / DTS-HD MA** | **Bitstream & Direct Audio** | Transcodes to AAC | Transcodes to AAC |
 | **Multi-Server Deduplication** | **Unified Shelf + Auto-Merge** | ❌ (Separate tabs) | ❌ (Separate tabs) |
+| **Multi-Quality Version Picker**| **4K Remux / Web-DL / HD Badges**| ❌ Server clutter | ❌ Server clutter |
+| **Automatic Stream Failover** | **Instant Peer Redundancy** | ❌ Playback stops | ❌ Playback stops |
+| **Dedicated Watchlist Tab** | **Unified Trakt + Favorites** | ❌ (Separate tabs) | ❌ (Separate tabs) |
 | **Automated Intro/Credit Skip** | **Built-in (TheIntroDB)** | ❌ (Plugin dependent) | ❌ (Plugin dependent) |
 | **Scrubbing Preview Thumbnails** | **Netflix-Style 16:9 Popups** | Basic | Basic |
 | **Timeline Chapter Markers** | **Visual Ticks + Intro Blocks** | Standard | Standard |
 | **Real-Time WatchParty** | **Built-in Peer Sync** | ❌ None | ❌ None |
-| **Trakt.tv Scrobbler & Analytics** | **Built-in OAuth + Heatmap** | ❌ (Plugin / VIP) | ❌ None |
+| **Trakt.tv Scrobbler & Sync** | **Two-Way OAuth PKCE + Queue** | ❌ (Plugin / VIP) | ❌ None |
+| **TMDB Artwork Enrichment** | **Automatic Token-Bucket Fallback**| ❌ Missing images stay blank | ❌ Missing images stay blank |
 | **Windows 11 DWM (Mica / Acrylic)**| **Native Composition** | ❌ Simulated | ❌ None |
 
 ---
@@ -97,13 +103,31 @@ The official Emby desktop and web apps run on Chromium and Electron, consuming 6
 
 ---
 
-### 🌐 Multi-Server Architecture & Instant Dedup
+### 🌐 Multi-Server Architecture, Deduplication & Failover
 * **Emby Connect & PIN Login**: Authenticate instantly via `emby.media/pin` with zero local password requirements.
-* **Multi-Server Management**: Add home, cloud, and shared Emby servers. Browse them individually or in **Combined Library Mode**.
-* **6-Pass Smart Deduplication Engine**:
-  * Matches duplicates across servers via `TMDB ID` → `IMDb ID` → `TVDb ID` → `Name + Year`.
-  * Merges copies into a single card while preserving all audio tracks, resolutions, and streaming sources.
-  * Automatic fallback: If your primary server is offline or missing artwork, Nocturne swaps in a sibling server's stream seamlessly.
+* **Server Priority Reordering**: Custom drag-and-drop server priority ranking in Settings.
+* **Smart Quality Tiering**:
+  * Merges versions across servers into clean quality badges: `4K Remux`, `4K IMAX`, `4K WEB-DL`, `1080p HD`, `720p`.
+  * Clutter-free UI: Server identifiers are abstracted away from media versions to provide a unified streaming experience.
+* **Automatic Playback Failover**: If a server is offline or fails mid-stream, Nocturne automatically switches to the next best available quality on an active server without interrupting your session.
+* **Unified Continue Watching**: Deduplicates in-progress media across servers and qualities into a single card with synchronized playback timestamps.
+
+---
+
+### 📑 Trakt.tv Two-Way Sync & Watchlist Navigation
+* **Dedicated Watchlist Navigation Tab**: Accessible directly from the main header (`Home │ Watchlist │ Libraries`) with instant search, status filters (`All`, `Movies`, `Shows`, `Unowned`), and sorting.
+* **1-Click Card & Detail Bookmarks**: Toggle items on or off your watchlist directly from shelf card hover buttons and detail views with instant optimistic UI feedback.
+* **Secure PKCE Device Auth**: Device authorization flow with RFC 7636 PKCE S256 (`code_challenge` / `code_verifier`) and Windows DPAPI credential protection — zero client secrets stored or transmitted.
+* **Real-Time Scrobble Push Queue**: Ordered stream of playback events (`start`, `pause`, `stop`) delivered reliably to Trakt; automatically prunes stale transient events (> 5m) while guaranteeing scrobble completion.
+* **Delta Watched-State Pull**: Detects changes via `/sync/last_activities`, synchronizes watch history with source timestamp fidelity, and replicates progress across sibling versions.
+* **TMDB Fallback Artwork Enrichment**: Automatically enriches groups with missing posters, backdrops, or episode stills using a 20 req/s token-bucket rate limiter with season batching.
+
+---
+
+### ⚡ Adaptive Parallel Sync Engine
+* **Concurrent Multi-Server Sync**: Syncs multiple Emby servers in parallel rather than sequentially.
+* **Latency-Guided Adaptive Batching**: Dynamically tunes batch size (20 to 100 items per request) based on real-time server response times.
+* **Expandable Sync Telemetry Card**: Live HUD in the top bar and Settings displaying per-server progress, items processed, and network transfer speeds.
 
 ---
 
@@ -181,6 +205,7 @@ The compiled installer will be available at `dist/Nocturne-v4.2.0-Setup.exe`.
 * **Third-Party APIs**:
   * [TheIntroDB](https://introdb.app/) — Community crowd-sourced intro & credit skip timestamps.
   * [Trakt.tv API](https://trakt.docs.apiary.io/) — Two-way scrobbling and watchlist synchronization.
+  * [The Movie Database (TMDB)](https://www.themoviedb.org/) — Fallback poster, backdrop, and episode still enrichment. *(Note: This product uses the TMDB API but is not endorsed or certified by TMDB.)*
 
 ---
 
