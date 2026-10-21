@@ -137,13 +137,22 @@ public class MainViewModel : BaseViewModel
         {
             Application.Current?.Dispatcher?.Invoke(() =>
             {
-                if (report.State == SyncState.Done || report.State == SyncState.Idle || report.State == SyncState.Error)
+                // Partial and Error used to fall into the "still syncing" branch or just hide the pill: a failed or
+                // incomplete sync left "Syncing..." up for good or vanished without a word. Both now leave a warning.
+                if (report.State == SyncState.Partial || report.State == SyncState.Error)
+                {
+                    IsSyncing = false;
+                    SyncProgressPercent = 0;
+                    SyncProblemText = report.StatusMessage;
+                }
+                else if (report.State == SyncState.Done || report.State == SyncState.Idle)
                 {
                     IsSyncing = false;
                     SyncProgressPercent = 0;
                 }
                 else
                 {
+                    SyncProblemText = string.Empty;
                     IsSyncing = true;
                     SyncProgressPercent = Math.Clamp(report.Percentage, 0, 100);
                     HeaderSyncStatusText = $"{report.StatusMessage} ({report.Percentage:F0}%)";
@@ -156,6 +165,8 @@ public class MainViewModel : BaseViewModel
             Application.Current?.Dispatcher?.Invoke(() =>
             {
                 IsSyncing = false;
+                SyncProblemText = string.Empty;
+                if (!_settings.Current.FirstLaunchComplete) ConfirmLibrarySetup();
                 _ = HomeVM.LoadAsync();
                 _ = LibraryVM.LoadViewsAsync();
             });
@@ -592,6 +603,42 @@ public class MainViewModel : BaseViewModel
     {
         get => _headerSyncStatusText;
         set => SetProperty(ref _headerSyncStatusText, value);
+    }
+
+    private string _syncProblemText = string.Empty;
+    public string SyncProblemText
+    {
+        get => _syncProblemText;
+        set
+        {
+            if (SetProperty(ref _syncProblemText, value)) OnPropertyChanged(nameof(HasSyncProblem));
+        }
+    }
+    public bool HasSyncProblem => !string.IsNullOrEmpty(_syncProblemText);
+
+    // Library setup after the first completed sync (v3.5's LibraryMappingWizard step; v4 went straight to
+    // separate mode and never asked). With one server there is nothing to choose. The groups shown are the ones
+    // the sync maintains from each library's type; Settings edits them.
+    private void ConfirmLibrarySetup()
+    {
+        var s = _settings.Current;
+        if (s.Servers.Count < 2)
+        {
+            _settings.Update(x => x.FirstLaunchComplete = true);
+            return;
+        }
+        var groups = string.Join("\n", s.CombinedMappings.Values.Select(m =>
+            $"• {m.Name}: {string.Join(", ", m.Libraries.Select(l => $"{l.LibraryName} ({l.ServerName})"))}"));
+        var choice = System.Windows.MessageBox.Show(
+            $"You have {s.Servers.Count} servers. Combine them into one library, so a title on both is shown once with a version picker?\n\n{groups}\n\n" +
+            "Yes: one combined library.\nNo: keep each server separate.\n\nBoth the mode and the grouping can be changed in Settings.",
+            "Library setup", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question);
+        _settings.Update(x =>
+        {
+            x.LibraryMode = choice == System.Windows.MessageBoxResult.Yes ? "combined" : "separate";
+            x.FirstLaunchComplete = true;
+        });
+        OnPropertyChanged(nameof(IsSwitchServerVisible));
     }
 
     private double _syncProgressPercent;

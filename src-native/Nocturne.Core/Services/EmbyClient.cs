@@ -206,10 +206,15 @@ public class EmbyClient
         return $"{_baseUrl}/emby{p}";
     }
 
-    public async Task<EmbyServerInfo?> GetServerInfoAsync(string? url = null)
+    public async Task<EmbyServerInfo?> GetServerInfoAsync(string? url = null) => (await CheckServerAsync(url)).Info;
+
+    // Connection test that keeps the reason for a failure (DNS, TLS, refused, timeout, HTTP status) so the
+    // caller can show it instead of a generic "could not connect".
+    public async Task<(EmbyServerInfo? Info, string? Error)> CheckServerAsync(string? url = null)
     {
         var target = string.IsNullOrWhiteSpace(url) ? _baseUrl : NormalizeServerUrl(url);
-        if (string.IsNullOrWhiteSpace(target)) return null;
+        if (string.IsNullOrWhiteSpace(target)) return (null, "No server address.");
+        string? error = null;
 
         var paths = new[]
         {
@@ -230,17 +235,28 @@ public class EmbyClient
                     if (info != null)
                     {
                         NocturneLogger.Info("EmbyClient", $"Connected to {info.ServerName} (v{info.Version}) at {p}");
-                        return info;
+                        return (info, null);
                     }
+                    error = "The server answered, but not like an Emby server.";
                 }
+                else
+                {
+                    error = $"The server answered HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}.";
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                error = "No answer within 4 seconds.";
+                NocturneLogger.Warn("EmbyClient", $"{p} check failed: timed out");
             }
             catch (Exception ex)
             {
+                error = (ex.InnerException ?? ex).Message;
                 NocturneLogger.Warn("EmbyClient", $"{p} check failed: {ex.Message}");
             }
         }
 
-        return null;
+        return (null, error);
     }
 
     public async Task<List<PublicUser>> GetPublicUsersAsync(string url)

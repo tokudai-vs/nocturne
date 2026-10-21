@@ -183,12 +183,20 @@ public class SyncEngine
                 }
             }));
 
+            // GetViewsAsync returns an empty list on any failure, so "no libraries" is treated as unreachable: the
+            // server used to be dropped here and the run still reported "completed successfully".
             var discoveredServerViews = new List<(ServerConfig Server, List<EmbyItem> Views)>();
+            var unreachableServers = new List<ServerConfig>();
             foreach (var res in discResults)
             {
                 if (res.Success && res.Views.Count > 0)
                 {
                     discoveredServerViews.Add((res.Server, res.Views));
+                }
+                else
+                {
+                    unreachableServers.Add(res.Server);
+                    NocturneLogger.Warn("SyncEngine", $"{res.Server.Name}: no libraries returned (unreachable, or none visible to this user); not synced this run.");
                 }
             }
 
@@ -263,6 +271,7 @@ public class SyncEngine
             long totalServerRequestMs = 0;
             long totalSqliteWriteMs = 0;
             var failedServers = new ConcurrentDictionary<string, byte>();
+            foreach (var srv in unreachableServers) failedServers[srv.Id] = 1;
 
             var syncSw = Stopwatch.StartNew();
 
@@ -559,7 +568,9 @@ public class SyncEngine
             if (!failedServers.IsEmpty)
             {
                 _settings.Update(s => s.SyncStatus = "partial");
-                var partialMsg = $"Sync finished with network errors on {failedServers.Count} server(s). Checkpoints preserved for retry.";
+                var failedNames = string.Join(", ", servers.Where(sv => failedServers.ContainsKey(sv.Id)).Select(sv => sv.Name));
+                var partialMsg = $"Sync incomplete: {failedNames} could not be synced. Progress is kept and the next sync retries.";
+                NocturneLogger.Warn("SyncEngine", partialMsg);
                 SetState(SyncState.Partial, partialMsg);
                 ProgressReported?.Invoke(new SyncProgressReport
                 {

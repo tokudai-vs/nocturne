@@ -194,10 +194,10 @@ public class OnboardingViewModel : BaseViewModel
         IsConnecting = true;
         try
         {
-            var info = await _emby.GetServerInfoAsync(cleanUrl);
+            var (info, error) = await _emby.CheckServerAsync(cleanUrl);
             if (info == null)
             {
-                ErrorMessage = "Could not connect to Emby server. Please check the address and ensure the server is online.";
+                ErrorMessage = $"Could not connect to {cleanUrl}: {error}";
                 IsConnecting = false;
                 return;
             }
@@ -524,7 +524,9 @@ public class OnboardingViewModel : BaseViewModel
             _settings.Current.ActiveServerId = newServer.Id;
         }
 
-        _settings.Current.FirstLaunchComplete = true;
+        // FirstLaunchComplete now means "library setup confirmed": MainViewModel asks combined vs separate after
+        // the first completed sync once there are two or more servers. Adding a server re-opens the question.
+        if (existing == null && _settings.Current.Servers.Count >= 2) _settings.Current.FirstLaunchComplete = false;
         _settings.Save();
 
         _ = _sync.SyncAllAsync();
@@ -569,6 +571,14 @@ public class OnboardingViewModel : BaseViewModel
 
         try
         {
+            // An unreachable server is not an expired session: say why, and don't ask for a sign-in.
+            var (info, error) = await _emby.CheckServerAsync(server.Url);
+            if (info == null)
+            {
+                ErrorMessage = $"Could not reach {server.Name}: {error}";
+                return;
+            }
+
             _emby.Configure(server.Url, server.AccessToken, server.UserId);
             var views = await _emby.GetViewsAsync();
 

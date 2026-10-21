@@ -233,6 +233,17 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Last sync incomplete or failed: stays until the next sync starts -->
+                <Border Visibility="{Binding HasSyncProblem, Converter={StaticResource BoolToVisibility}}"
+                        Background="#30FF9800" BorderBrush="#60FF9800" BorderThickness="1" CornerRadius="14" Padding="10,5" Margin="0,0,10,0"
+                        VerticalAlignment="Center" MaxWidth="420" ToolTip="{Binding SyncProblemText}">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="Warning24" FontSize="13" Foreground="#FFB74D" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding SyncProblemText}" FontSize="11" FontWeight="SemiBold" Foreground="#FFB74D"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
                 <!-- User Profile Avatar Button -->
                 <Button x:Name="UserProfileButton" Click="OnUserProfileClick"
                         Width="32" Height="32" Margin="0,0,4,0" Padding="0" Cursor="Hand"
