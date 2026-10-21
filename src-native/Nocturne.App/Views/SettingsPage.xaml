@@ -389,58 +389,194 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Live Sync Progress Section: Dedicated Progress Bar Per Syncing Server -->
-                        <StackPanel Margin="0,0,0,14" Visibility="{Binding IsSyncing, Converter={StaticResource BoolToVisibility}}">
-                            <!-- ItemsControl Rendering a Separate Progress Card for Each Server -->
-                            <ItemsControl ItemsSource="{Binding ActiveServerProgresses}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}" CornerRadius="8" Padding="14,12" Margin="0,0,0,8">
-                                            <StackPanel>
-                                                <DockPanel Margin="0,0,0,8">
-                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                        <ui:SymbolIcon Symbol="ArrowSync24" FontSize="14" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
-                                                        <TextBlock Text="{Binding ServerName}" FontSize="12" FontWeight="Bold"
-                                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,6,0" />
-                                                        <TextBlock Text="•" FontSize="12" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,6,0" />
-                                                        <TextBlock Text="{Binding StatusText}" FontSize="12"
-                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                                    </StackPanel>
-                                                    <TextBlock Text="{Binding ProgressPercent, StringFormat='{}{0:F0}%'}" FontSize="12" FontWeight="Bold"
-                                                               HorizontalAlignment="Right" Foreground="{DynamicResource NocturneAmberBrush}" />
-                                                </DockPanel>
-                                                <ProgressBar Height="6" Minimum="0" Maximum="100"
-                                                             Value="{Binding ProgressPercent}"
-                                                             IsIndeterminate="{Binding IsIndeterminate}"
-                                                             Foreground="{DynamicResource NocturneAmberBrush}" />
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                        <!-- Live Sync Progress Section: Expandable Master Card with Per-Server Telemetry -->
+                        <Border Margin="0,0,0,14" Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1"
+                                CornerRadius="8" Padding="14,12"
+                                Visibility="{Binding IsSyncing, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel>
+                                <!-- Master Header Row -->
+                                <DockPanel LastChildFill="True">
+                                    <!-- Right Side: Overall Percentage & Expand/Collapse Chevron Button -->
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding SyncProgressPercent, StringFormat='{}{0:F0}%'}"
+                                                   FontSize="13" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}"
+                                                   VerticalAlignment="Center" Margin="0,0,10,0" />
+                                        <Button Padding="6,4" Click="OnToggleSyncDetailsClick" Cursor="Hand"
+                                                Background="Transparent" BorderThickness="0" ToolTip="Toggle sync details">
+                                            <Grid>
+                                                <ui:SymbolIcon Symbol="ChevronDown24" FontSize="14" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                               Visibility="{Binding IsSyncDetailsExpanded, Converter={StaticResource InvertBoolToVisibility}}" />
+                                                <ui:SymbolIcon Symbol="ChevronUp24" FontSize="14" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                               Visibility="{Binding IsSyncDetailsExpanded, Converter={StaticResource BoolToVisibility}}" />
+                                            </Grid>
+                                        </Button>
+                                    </StackPanel>
 
-                            <!-- Post-processing / Catalog Deduplication Phase -->
-                            <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}" CornerRadius="8" Padding="14,12" Margin="0,0,0,8"
-                                    Visibility="{Binding HasGlobalProgress, Converter={StaticResource BoolToVisibility}}">
-                                <StackPanel>
-                                    <DockPanel Margin="0,0,0,8">
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ui:SymbolIcon Symbol="ArrowSync24" FontSize="14" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
-                                            <TextBlock Text="Catalog Deduplication" FontSize="12" FontWeight="Bold"
-                                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,6,0" />
-                                            <TextBlock Text="•" FontSize="12" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,6,0" />
-                                            <TextBlock Text="{Binding GlobalSyncStatusText}" FontSize="12"
-                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <!-- Left Side: Sync Icon + Master Title + Bullet + Master Subtitle -->
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <ui:SymbolIcon Symbol="ArrowSync24" FontSize="15" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                                        <TextBlock Text="{Binding MasterSyncTitle}" FontSize="13" FontWeight="Bold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="•" FontSize="13" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding MasterSyncSubtitle}" FontSize="12"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DockPanel>
+
+                                <!-- Master Progress Bar (Slowest / Cumulative progress across all servers) -->
+                                <ProgressBar Height="6" Minimum="0" Maximum="100" Margin="0,10,0,0"
+                                             Value="{Binding SyncProgressPercent}"
+                                             IsIndeterminate="{Binding IsSyncIndeterminate}"
+                                             Foreground="{DynamicResource NocturneAmberBrush}" />
+
+                                <!-- Expandable Details Drawer (Collapsible via Chevron) -->
+                                <StackPanel Visibility="{Binding IsSyncDetailsExpanded, Converter={StaticResource BoolToVisibility}}"
+                                            Margin="0,14,0,0">
+
+                                    <!-- SINGLE SERVER EXPANDED VIEW -->
+                                    <Border Visibility="{Binding IsSingleServerSync, Converter={StaticResource BoolToVisibility}}"
+                                            Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                            BorderThickness="1" CornerRadius="6" Padding="12,10">
+                                        <DockPanel LastChildFill="True">
+                                            <!-- Right Telemetry Pills: Batch & Latency -->
+                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Border Background="#18FFFFFF" BorderBrush="#25FFFFFF" BorderThickness="1"
+                                                        CornerRadius="4" Padding="8,3" Margin="0,0,8,0">
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <TextBlock Text="Batch: " FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                        <TextBlock Text="{Binding PrimaryServerProgress.BatchText}" FontSize="11" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border Background="#18FFFFFF" BorderBrush="#25FFFFFF" BorderThickness="1"
+                                                        CornerRadius="4" Padding="8,3">
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <TextBlock Text="Latency: " FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                        <TextBlock Text="{Binding PrimaryServerProgress.LatencyText}" FontSize="11" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+
+                                            <!-- Left Info: Library & Synced Count -->
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="Library: " FontSize="12" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                <TextBlock Text="{Binding PrimaryServerProgress.LibraryName, FallbackValue='Connecting...'}"
+                                                           FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,8,0" />
+                                                <TextBlock Text="•" FontSize="12" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,8,0" />
+                                                <TextBlock Text="{Binding PrimaryServerProgress.ItemsProgressText}"
+                                                           FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+
+                                    <!-- MULTIPLE SERVERS EXPANDED VIEW: Nested Server Cards -->
+                                    <ItemsControl ItemsSource="{Binding ActiveServerProgresses}"
+                                                  Visibility="{Binding IsMultiServerSync, Converter={StaticResource BoolToVisibility}}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                        BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,0,0,8">
+                                                    <StackPanel>
+                                                        <!-- Server Header Row -->
+                                                        <DockPanel LastChildFill="True" Margin="0,0,0,8">
+                                                            <!-- Right: Server Percentage -->
+                                                            <TextBlock DockPanel.Dock="Right"
+                                                                       Text="{Binding ProgressPercent, StringFormat='{}{0:F0}%'}"
+                                                                       FontSize="12" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}"
+                                                                       VerticalAlignment="Center" />
+
+                                                            <!-- Left: Server Name + Status Badge -->
+                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <ui:SymbolIcon Symbol="Server24" FontSize="13" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,6,0" />
+                                                                <TextBlock Text="{Binding ServerName}" FontSize="12" FontWeight="Bold"
+                                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                                                <!-- Status Badge (Complete or Syncing) -->
+                                                                <Border Visibility="{Binding IsComplete, Converter={StaticResource BoolToVisibility}}"
+                                                                        Background="#1A10B981" BorderBrush="#4010B981" BorderThickness="1"
+                                                                        CornerRadius="4" Padding="6,2">
+                                                                    <TextBlock Text="Complete" FontSize="10" FontWeight="SemiBold" Foreground="#10B981" />
+                                                                </Border>
+                                                                <Border Visibility="{Binding IsComplete, Converter={StaticResource InvertBoolToVisibility}}"
+                                                                        Background="#1AFFB020" BorderBrush="#40FFB020" BorderThickness="1"
+                                                                        CornerRadius="4" Padding="6,2">
+                                                                    <TextBlock Text="Syncing" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                                                </Border>
+                                                            </StackPanel>
+                                                        </DockPanel>
+
+                                                        <!-- Dedicated Server Progress Bar -->
+                                                        <ProgressBar Height="4" Minimum="0" Maximum="100" Margin="0,0,0,8"
+                                                                     Value="{Binding ProgressPercent}"
+                                                                     IsIndeterminate="{Binding IsIndeterminate}"
+                                                                     Foreground="{DynamicResource NocturneAmberBrush}" />
+
+                                                        <!-- Server Telemetry Row -->
+                                                        <DockPanel LastChildFill="True">
+                                                            <!-- Right Telemetry Pills: Batch & Latency -->
+                                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <Border Background="#18FFFFFF" BorderBrush="#25FFFFFF" BorderThickness="1"
+                                                                        CornerRadius="4" Padding="6,2" Margin="0,0,6,0">
+                                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                        <TextBlock Text="Batch: " FontSize="10" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                                        <TextBlock Text="{Binding BatchText}" FontSize="10" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                                                    </StackPanel>
+                                                                </Border>
+                                                                <Border Background="#18FFFFFF" BorderBrush="#25FFFFFF" BorderThickness="1"
+                                                                        CornerRadius="4" Padding="6,2">
+                                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                        <TextBlock Text="Latency: " FontSize="10" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                                        <TextBlock Text="{Binding LatencyText}" FontSize="10" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                                                    </StackPanel>
+                                                                </Border>
+                                                            </StackPanel>
+
+                                                            <!-- Left Info: Library & Synced Count -->
+                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding LibraryName, FallbackValue='Connecting...'}"
+                                                                           FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,6,0" />
+                                                                <TextBlock Text="•" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,6,0" />
+                                                                <TextBlock Text="{Binding ItemsProgressText}"
+                                                                           FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                            </StackPanel>
+                                                        </DockPanel>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <!-- Post-processing / Catalog Deduplication Phase -->
+                                    <Border Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                            BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,0,0,8"
+                                            Visibility="{Binding HasGlobalProgress, Converter={StaticResource BoolToVisibility}}">
+                                        <StackPanel>
+                                            <DockPanel Margin="0,0,0,8">
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <ui:SymbolIcon Symbol="ArrowSync24" FontSize="13" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,0,8,0" />
+                                                    <TextBlock Text="Catalog Deduplication" FontSize="12" FontWeight="Bold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,6,0" />
+                                                    <TextBlock Text="•" FontSize="12" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,6,0" />
+                                                    <TextBlock Text="{Binding GlobalSyncStatusText}" FontSize="12"
+                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding GlobalSyncProgressPercent, StringFormat='{}{0:F0}%'}" FontSize="12" FontWeight="Bold"
+                                                           HorizontalAlignment="Right" Foreground="{DynamicResource NocturneAmberBrush}" />
+                                            </DockPanel>
+                                            <ProgressBar Height="4" Minimum="0" Maximum="100"
+                                                         Value="{Binding GlobalSyncProgressPercent}"
+                                                         Foreground="{DynamicResource NocturneAmberBrush}" />
                                         </StackPanel>
-                                        <TextBlock Text="{Binding GlobalSyncProgressPercent, StringFormat='{}{0:F0}%'}" FontSize="12" FontWeight="Bold"
-                                                   HorizontalAlignment="Right" Foreground="{DynamicResource NocturneAmberBrush}" />
-                                    </DockPanel>
-                                    <ProgressBar Height="6" Minimum="0" Maximum="100"
-                                                 Value="{Binding GlobalSyncProgressPercent}"
-                                                 Foreground="{DynamicResource NocturneAmberBrush}" />
+                                    </Border>
                                 </StackPanel>
-                            </Border>
-                        </StackPanel>
+                            </StackPanel>
+                        </Border>
 
                         <!-- Idle / Last Status message (hidden during active sync) -->
                         <DockPanel Visibility="{Binding IsSyncing, Converter={StaticResource InvertBoolToVisibility}}">

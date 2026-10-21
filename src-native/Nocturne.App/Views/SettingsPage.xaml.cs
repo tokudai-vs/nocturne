@@ -153,6 +153,11 @@ public partial class SettingsPage : UserControl
         }
     }
 
+    private void OnToggleSyncDetailsClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel?.ToggleSyncDetails();
+    }
+
     private void OnClearCacheClick(object sender, RoutedEventArgs e)
     {
         var res = MessageBox.Show("Clear all cached items and deduplication groups?", "Clear Cache", MessageBoxButton.YesNo, MessageBoxImage.Question);

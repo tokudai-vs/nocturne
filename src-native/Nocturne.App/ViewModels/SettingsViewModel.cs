@@ -63,6 +63,76 @@ public class ServerSyncProgressItem : BaseViewModel
         set => SetProperty(ref _serverName, value);
     }
 
+    private string _libraryName = string.Empty;
+    public string LibraryName
+    {
+        get => _libraryName;
+        set => SetProperty(ref _libraryName, value);
+    }
+
+    private int _currentItem;
+    public int CurrentItem
+    {
+        get => _currentItem;
+        set
+        {
+            if (SetProperty(ref _currentItem, value))
+            {
+                UpdateItemsProgressText();
+            }
+        }
+    }
+
+    private int _totalItems;
+    public int TotalItems
+    {
+        get => _totalItems;
+        set
+        {
+            if (SetProperty(ref _totalItems, value))
+            {
+                UpdateItemsProgressText();
+            }
+        }
+    }
+
+    private string _itemsProgressText = "Discovering...";
+    public string ItemsProgressText
+    {
+        get => _itemsProgressText;
+        private set => SetProperty(ref _itemsProgressText, value);
+    }
+
+    private int _batchSize;
+    public int BatchSize
+    {
+        get => _batchSize;
+        set
+        {
+            if (SetProperty(ref _batchSize, value))
+            {
+                OnPropertyChanged(nameof(BatchText));
+            }
+        }
+    }
+
+    public string BatchText => _batchSize > 0 ? $"{_batchSize:N0}" : "-";
+
+    private long _latencyMs;
+    public long LatencyMs
+    {
+        get => _latencyMs;
+        set
+        {
+            if (SetProperty(ref _latencyMs, value))
+            {
+                OnPropertyChanged(nameof(LatencyText));
+            }
+        }
+    }
+
+    public string LatencyText => _latencyMs > 0 ? $"{_latencyMs}ms" : "-";
+
     private string _statusText = string.Empty;
     public string StatusText
     {
@@ -89,6 +159,22 @@ public class ServerSyncProgressItem : BaseViewModel
     {
         get => _isComplete;
         set => SetProperty(ref _isComplete, value);
+    }
+
+    private void UpdateItemsProgressText()
+    {
+        if (_totalItems > 0)
+        {
+            ItemsProgressText = $"{_currentItem:N0} / {_totalItems:N0} items";
+        }
+        else if (_currentItem > 0)
+        {
+            ItemsProgressText = $"{_currentItem:N0} items";
+        }
+        else
+        {
+            ItemsProgressText = "Discovering...";
+        }
     }
 }
 
@@ -245,16 +331,34 @@ public class SettingsViewModel : BaseViewModel
                         {
                             ServerId = report.ServerId,
                             ServerName = !string.IsNullOrEmpty(report.ServerName) ? report.ServerName : "Server",
+                            LibraryName = report.LibraryName,
+                            CurrentItem = report.CurrentItem,
+                            TotalItems = report.TotalItems,
+                            BatchSize = report.BatchSize,
+                            LatencyMs = report.LatencyMs,
                             StatusText = report.StatusMessage,
                             ProgressPercent = Math.Clamp(report.ServerPercentage, 0, 100),
                             IsIndeterminate = report.State == SyncState.Discovering,
                             IsComplete = report.ServerPercentage >= 100.0
                         };
                         ActiveServerProgresses.Add(existing);
+                        UpdateSyncHeaderProperties();
                     }
                     else
                     {
-                        if (!string.IsNullOrEmpty(report.ServerName)) existing.ServerName = report.ServerName;
+                        if (!string.IsNullOrEmpty(report.ServerName) && existing.ServerName != report.ServerName)
+                        {
+                            existing.ServerName = report.ServerName;
+                            UpdateSyncHeaderProperties();
+                        }
+                        if (!string.IsNullOrEmpty(report.LibraryName)) existing.LibraryName = report.LibraryName;
+                        if (report.CurrentItem > 0 || report.TotalItems > 0)
+                        {
+                            existing.CurrentItem = report.CurrentItem;
+                            existing.TotalItems = report.TotalItems;
+                        }
+                        if (report.BatchSize > 0) existing.BatchSize = report.BatchSize;
+                        if (report.LatencyMs > 0) existing.LatencyMs = report.LatencyMs;
                         existing.StatusText = report.StatusMessage;
                         existing.ProgressPercent = Math.Clamp(report.ServerPercentage, 0, 100);
                         existing.IsIndeterminate = report.State == SyncState.Discovering;
@@ -304,12 +408,14 @@ public class SettingsViewModel : BaseViewModel
                             IsIndeterminate = true
                         });
                     }
+                    UpdateSyncHeaderProperties();
                     HasGlobalProgress = false;
                 }
                 else if (state == SyncState.Done || state == SyncState.Error || state == SyncState.Idle)
                 {
                     RefreshDatabaseStats();
                     HasGlobalProgress = false;
+                    UpdateSyncHeaderProperties();
                 }
             });
         };
@@ -1368,6 +1474,53 @@ public class SettingsViewModel : BaseViewModel
     }
 
     public ObservableCollection<ServerSyncProgressItem> ActiveServerProgresses { get; } = new();
+
+    private bool _isSyncDetailsExpanded;
+    public bool IsSyncDetailsExpanded
+    {
+        get => _isSyncDetailsExpanded;
+        set => SetProperty(ref _isSyncDetailsExpanded, value);
+    }
+
+    public void ToggleSyncDetails()
+    {
+        IsSyncDetailsExpanded = !IsSyncDetailsExpanded;
+    }
+
+    public bool IsMultiServerSync => ActiveServerProgresses.Count > 1;
+    public bool IsSingleServerSync => ActiveServerProgresses.Count <= 1;
+    public ServerSyncProgressItem? PrimaryServerProgress => ActiveServerProgresses.FirstOrDefault();
+
+    public string MasterSyncTitle
+    {
+        get
+        {
+            if (ActiveServerProgresses.Count > 1)
+                return $"Syncing {ActiveServerProgresses.Count} Servers";
+            if (ActiveServerProgresses.Count == 1)
+                return $"Syncing {PrimaryServerProgress?.ServerName ?? "Server"}";
+            return "Syncing...";
+        }
+    }
+
+    public string MasterSyncSubtitle
+    {
+        get
+        {
+            if (ActiveServerProgresses.Count > 1)
+                return "Cumulative progress";
+            return "Entire library sync";
+        }
+    }
+
+    public void UpdateSyncHeaderProperties()
+    {
+        OnPropertyChanged(nameof(IsMultiServerSync));
+        OnPropertyChanged(nameof(IsSingleServerSync));
+        OnPropertyChanged(nameof(PrimaryServerProgress));
+        OnPropertyChanged(nameof(MasterSyncTitle));
+        OnPropertyChanged(nameof(MasterSyncSubtitle));
+    }
 
     private string _globalSyncStatusText = string.Empty;
     public string GlobalSyncStatusText

@@ -30,6 +30,10 @@ public class SyncProgressReport
     public int ItemsWritten { get; set; }
     public double Percentage { get; set; }
     public double ServerPercentage { get; set; }
+    public int BatchSize { get; set; }
+    public long LatencyMs { get; set; }
+    public int ActiveServersCount { get; set; }
+    public int TotalServersCount { get; set; }
     public string StatusMessage { get; set; } = string.Empty;
 }
 
@@ -120,7 +124,9 @@ public class SyncEngine
             {
                 State = SyncState.Discovering,
                 StatusMessage = discMsg,
-                Percentage = 5.0
+                Percentage = 5.0,
+                TotalServersCount = servers.Count,
+                ActiveServersCount = servers.Count
             });
 
             // Concurrently query views from each distinct server
@@ -131,9 +137,11 @@ public class SyncEngine
                     State = SyncState.Discovering,
                     ServerId = server.Id,
                     ServerName = server.Name,
-                    StatusMessage = "Discovering libraries...",
+                    StatusMessage = "Connecting & discovering libraries...",
                     Percentage = 5.0,
-                    ServerPercentage = 0
+                    ServerPercentage = 0,
+                    TotalServersCount = servers.Count,
+                    ActiveServersCount = servers.Count
                 });
 
                 var client = new EmbyClient();
@@ -269,8 +277,7 @@ public class SyncEngine
                             ? Math.Min(90.0, 10.0 + (((double)Math.Min(totalItemsFetched, totalItemsWritten) / totalExpectedItems) * 78.0))
                             : 10.0;
 
-                        var msg = $"Saving {batch.View.Name} ({watermark:N0} / {batch.TotalInView:N0} items)...";
-                        SetState(SyncState.Writing, $"{batch.Server.Name}: {msg}");
+                        var msg = $"{batch.View.Name}: {watermark:N0} / {batch.TotalInView:N0} items";
                         ProgressReported?.Invoke(new SyncProgressReport
                         {
                             State = SyncState.Writing,
@@ -283,6 +290,10 @@ public class SyncEngine
                             ItemsWritten = totalItemsWritten,
                             Percentage = overallPercent,
                             ServerPercentage = sPercent,
+                            BatchSize = batch.Items.Count,
+                            LatencyMs = batch.FetchDurationMs,
+                            TotalServersCount = servers.Count,
+                            ActiveServersCount = Math.Max(1, servers.Count - failedServers.Count),
                             StatusMessage = msg
                         });
                     }
@@ -300,6 +311,8 @@ public class SyncEngine
             const int maxConcurrentServers = 4;
             using var serverSemaphore = new SemaphoreSlim(maxConcurrentServers);
             int completedViews = 0;
+
+            SetState(SyncState.Fetching, servers.Count == 1 ? $"Syncing {servers[0].Name}..." : $"Syncing {servers.Count} servers in parallel...");
 
             var serverTasks = viewsByServer.Select(async group =>
             {
@@ -433,8 +446,7 @@ public class SyncEngine
                                 ? Math.Min(90.0, 10.0 + (((double)Math.Min(totalItemsFetched, totalItemsWritten) / totalExpectedItems) * 78.0))
                                 : 10.0;
 
-                            var msg = $"Fetching {view.Name} ({startIndex:N0} / {totalInView:N0} items, batch {currentLimit})...";
-                            SetState(SyncState.Fetching, $"{server.Name}: {msg}");
+                            var msg = $"{view.Name}: {startIndex:N0} / {totalInView:N0} items";
                             ProgressReported?.Invoke(new SyncProgressReport
                             {
                                 State = SyncState.Fetching,
@@ -447,6 +459,10 @@ public class SyncEngine
                                 ItemsWritten = totalItemsWritten,
                                 Percentage = overallPercent,
                                 ServerPercentage = sPercent,
+                                BatchSize = currentLimit,
+                                LatencyMs = reqDurationMs,
+                                TotalServersCount = servers.Count,
+                                ActiveServersCount = Math.Max(1, servers.Count - failedServers.Count),
                                 StatusMessage = msg
                             });
 
@@ -467,7 +483,7 @@ public class SyncEngine
                         State = SyncState.Fetching,
                         ServerId = server.Id,
                         ServerName = server.Name,
-                        LibraryName = string.Empty,
+                        LibraryName = "All libraries synced",
                         CurrentItem = sFinalTotal,
                         TotalItems = sFinalTotal,
                         ItemsFetched = totalItemsFetched,
@@ -476,6 +492,10 @@ public class SyncEngine
                             ? Math.Min(90.0, 10.0 + (((double)Math.Min(totalItemsFetched, totalItemsWritten) / totalExpectedItems) * 78.0))
                             : 90.0,
                         ServerPercentage = 100.0,
+                        BatchSize = 0,
+                        LatencyMs = 0,
+                        TotalServersCount = servers.Count,
+                        ActiveServersCount = Math.Max(1, servers.Count - failedServers.Count),
                         StatusMessage = "All libraries synced"
                     });
                 }
@@ -518,7 +538,9 @@ public class SyncEngine
                     StatusMessage = partialMsg,
                     Percentage = 100.0,
                     ItemsFetched = totalItemsFetched,
-                    ItemsWritten = totalItemsWritten
+                    ItemsWritten = totalItemsWritten,
+                    TotalServersCount = servers.Count,
+                    ActiveServersCount = Math.Max(0, servers.Count - failedServers.Count)
                 });
                 return;
             }
@@ -613,7 +635,9 @@ public class SyncEngine
                         ServerName = "Trakt.tv",
                         StatusMessage = traktMsg,
                         Percentage = 88.0,
-                        ServerPercentage = 100.0
+                        ServerPercentage = 100.0,
+                        TotalServersCount = servers.Count,
+                        ActiveServersCount = servers.Count
                     });
 
                     var watchlist = await _trakt.GetWatchlistAsync();
@@ -643,7 +667,9 @@ public class SyncEngine
                 Percentage = 92.0,
                 ServerPercentage = 92.0,
                 ItemsFetched = totalItemsFetched,
-                ItemsWritten = totalItemsWritten
+                ItemsWritten = totalItemsWritten,
+                TotalServersCount = servers.Count,
+                ActiveServersCount = servers.Count
             });
 
             var dedupGroups = _dedup.Deduplicate(dedupCandidates);
@@ -668,7 +694,9 @@ public class SyncEngine
                 Percentage = 100.0,
                 ServerPercentage = 100.0,
                 ItemsFetched = totalItemsFetched,
-                ItemsWritten = totalItemsWritten
+                ItemsWritten = totalItemsWritten,
+                TotalServersCount = servers.Count,
+                ActiveServersCount = servers.Count
             });
             NocturneLogger.Info("SyncEngine", $"Multi-server sync completed successfully: {totalIndexed} items indexed across {servers.Count} server(s), {multiVersionGroups} multi-version deduplicated groups.");
             SyncCompleted?.Invoke();
