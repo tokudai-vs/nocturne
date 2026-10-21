@@ -399,7 +399,7 @@ public class SyncEngine
                             if (!itemsResult.IsSuccess)
                             {
                                 // Back off batch size immediately
-                                batchController.RecordLatency(reqDurationMs, wasSuccess: false);
+                                batchController.RecordRequest(reqDurationMs, 0, currentLimit, wasSuccess: false);
 
                                 // Transient retry with backoff to protect server and recover from brief blips
                                 int retryCount = 0;
@@ -429,13 +429,10 @@ public class SyncEngine
                                 }
                             }
 
-                            // Adaptively tune batch size for subsequent requests based on server latency
-                            int prevBatchSize = currentLimit;
-                            int nextBatchSize = batchController.RecordLatency(reqDurationMs, wasSuccess: true);
-                            if (nextBatchSize != prevBatchSize)
-                            {
-                                NocturneLogger.Info("SyncEngine", $"[{server.Name}] Adaptive batch size adjusted: {prevBatchSize} -> {nextBatchSize} (latency {reqDurationMs}ms)");
-                            }
+                            // Size the next request from a fit of this server's own request times (G1, G2).
+                            int nextBatchSize = batchController.RecordRequest(reqDurationMs, itemsResult.Items.Count, currentLimit, wasSuccess: true);
+                            NocturneLogger.Info("SyncEngine",
+                                $"[{server.Name}] batch {itemsResult.Items.Count}/{currentLimit} in {reqDurationMs} ms; fit {batchController.FixedMs:F0} ms + per item baseline {batchController.BaselineMsPerItem:F2} / current {batchController.CurrentMsPerItem:F2} ms{(batchController.IsWarmingUp ? " (warm-up)" : "")}; next {nextBatchSize}");
 
                             if (itemsResult.Items.Count == 0)
                             {
