@@ -379,26 +379,22 @@ public class HomeViewModel : BaseViewModel
                 ? _embyClient
                 : EmbyClient.CreateForServer(srv);
 
+            // Removing from Continue Watching clears the resume point; it is not a "watched" signal.
             await client.RemoveFromResumeAsync(item.Id);
+            _db.ClearResumeProgress(item.Id, item.ServerId);
 
-            if (long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
+            if (FeatureFlags.SiblingCascade && long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
             {
-                _db.MarkLocalGroupPlayed(gid);
-                var siblings = _db.GetGroupVersions(gid.ToString());
-                foreach (var sib in siblings)
+                foreach (var sib in _db.GetGroupVersions(gid.ToString()))
                 {
-                    if (sib.ServerId != item.ServerId)
+                    _db.ClearResumeProgress(sib.Id, sib.ServerId);
+                    if (!string.IsNullOrEmpty(sib.ServerId) && sib.ServerId != item.ServerId)
                     {
-                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, 0, markPlayed: true);
+                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, 0, markPlayed: false);
                     }
                 }
             }
-            else
-            {
-                _db.MarkLocalItemPlayed(item.ServerId ?? string.Empty, item.Id);
-            }
 
-            _db.ClearResumeProgress(item.Id);
             _db.RemoveFromContinueWatchingCache(item.Id);
 
             Application.Current?.Dispatcher?.Invoke(() =>

@@ -82,6 +82,14 @@ public class EmbyClient
         _deviceId = GetOrCreateDeviceId();
     }
 
+    // Test seam: route every request through the given handler instead of the network.
+    public EmbyClient(HttpMessageHandler handler)
+    {
+        _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+        _standalone = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+        _deviceId = GetOrCreateDeviceId();
+    }
+
     private HttpRequestMessage CreateStandaloneRequest(HttpMethod method, string url, string? token = null)
     {
         var req = new HttpRequestMessage(method, url);
@@ -567,7 +575,8 @@ public class EmbyClient
         if (!IsAuthenticated || string.IsNullOrEmpty(itemId)) return false;
         try
         {
-            var resp = await _http.DeleteAsync(BuildUrl($"/Users/{_userId}/PlayingItems/{itemId}"));
+            // PositionTicks must be explicit: without it the server assumes the item was played to completion.
+            var resp = await _http.DeleteAsync(BuildUrl($"/Users/{_userId}/PlayingItems/{itemId}?PositionTicks=0"));
             if (resp.IsSuccessStatusCode) return true;
 
             var postResp = await _http.PostAsync(BuildUrl($"/Users/{_userId}/PlayingItems/{itemId}/Progress?PositionTicks=0"), null);
@@ -766,9 +775,9 @@ public class EmbyClient
         }
     }
 
-    public async Task ReportPlaybackProgressAsync(string itemId, string? mediaSourceId, long positionTicks, bool isPaused = false)
+    public async Task<bool> ReportPlaybackProgressAsync(string itemId, string? mediaSourceId, long positionTicks, bool isPaused = false)
     {
-        if (!IsAuthenticated) return;
+        if (!IsAuthenticated) return false;
         try
         {
             var payload = new PlaybackProgressPayload
@@ -781,14 +790,19 @@ public class EmbyClient
             };
             var json = JsonSerializer.Serialize(payload, JsonOptions);
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            await _http.PostAsync(BuildUrl("/Sessions/Playing/Progress"), content);
+            var resp = await _http.PostAsync(BuildUrl("/Sessions/Playing/Progress"), content);
+            return resp.IsSuccessStatusCode;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("EmbyClient", $"ReportPlaybackProgress failed: {ex.Message}");
+            return false;
+        }
     }
 
-    public async Task ReportPlaybackStoppedAsync(string itemId, string? mediaSourceId, long positionTicks)
+    public async Task<bool> ReportPlaybackStoppedAsync(string itemId, string? mediaSourceId, long positionTicks)
     {
-        if (!IsAuthenticated) return;
+        if (!IsAuthenticated) return false;
         try
         {
             var payload = new PlaybackStopPayload
@@ -799,11 +813,13 @@ public class EmbyClient
             };
             var json = JsonSerializer.Serialize(payload, JsonOptions);
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            await _http.PostAsync(BuildUrl("/Sessions/Playing/Stopped"), content);
+            var resp = await _http.PostAsync(BuildUrl("/Sessions/Playing/Stopped"), content);
+            return resp.IsSuccessStatusCode;
         }
         catch (Exception ex)
         {
             NocturneLogger.Warn("EmbyClient", $"ReportPlaybackStopped failed: {ex.Message}");
+            return false;
         }
     }
 

@@ -22,7 +22,8 @@ public class MpvController : IDisposable
     private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
 
     public event Action? PlaybackStarted;
-    public event Action? PlaybackEnded;
+    // Only MpvEndReason.Eof means the file actually played to its end; every other reason is a stop.
+    public event Action<MpvEndReason>? PlaybackEnded;
     public event Action<double>? PositionChanged;
     public event Action<string>? ErrorOccurred;
     public event Action? NextEpisodeRequested;
@@ -97,7 +98,7 @@ public class MpvController : IDisposable
             _mpvProcess.Exited += (s, e) =>
             {
                 IsPlaying = false;
-                PlaybackEnded?.Invoke();
+                PlaybackEnded?.Invoke(MpvEndReason.Quit);
             };
 
             await ConnectPipeAsync();
@@ -253,7 +254,7 @@ public class MpvController : IDisposable
                 if (IsPlaying)
                 {
                     IsPlaying = false;
-                    PlaybackEnded?.Invoke();
+                    PlaybackEnded?.Invoke(MpvEndReason.Quit);
                 }
             };
 
@@ -388,7 +389,7 @@ public class MpvController : IDisposable
         IsPlaying = false;
         if (notifyEnded && wasPlaying)
         {
-            try { PlaybackEnded?.Invoke(); } catch { }
+            try { PlaybackEnded?.Invoke(MpvEndReason.Stop); } catch { }
         }
     }
 
@@ -467,6 +468,15 @@ public class MpvController : IDisposable
     {
         await SendCommandAsync(new object[] { "show-text", text, durationMs });
     }
+
+    public static MpvEndReason ParseEndFileReason(string? reason) => reason switch
+    {
+        "eof" => MpvEndReason.Eof,
+        "stop" => MpvEndReason.Stop,
+        "quit" => MpvEndReason.Quit,
+        "error" => MpvEndReason.Error,
+        _ => MpvEndReason.Unknown
+    };
 
     public void TriggerNextEpisode() => NextEpisodeRequested?.Invoke();
     public void TriggerPreviousEpisode() => PreviousEpisodeRequested?.Invoke();
@@ -552,10 +562,12 @@ public class MpvController : IDisposable
                         }
                         else if (name == "eof-reached" && root.TryGetProperty("data", out var eofProp))
                         {
+                            // With keep-open=yes this is the only signal for a natural end of file: mpv pauses on the
+                            // last frame and emits no end-file.
                             if (eofProp.ValueKind == JsonValueKind.True)
                             {
-                                NocturneLogger.Info("MpvController", "EOF reached. Invoking next episode / completion.");
-                                NextEpisodeRequested?.Invoke();
+                                NocturneLogger.Info("MpvController", "EOF reached.");
+                                PlaybackEnded?.Invoke(MpvEndReason.Eof);
                             }
                         }
                         else if (name == "sid" && root.TryGetProperty("data", out var sidProp))
@@ -586,7 +598,9 @@ public class MpvController : IDisposable
                         _ = SendCommandAsync(new object[] { "set_property", "force-window", "no" });
                         _ = SendCommandAsync(new object[] { "set_property", "ontop", "no" });
                         IsPlaying = false;
-                        PlaybackEnded?.Invoke();
+                        var reason = ParseEndFileReason(root.TryGetProperty("reason", out var reasonProp) ? reasonProp.GetString() : null);
+                        NocturneLogger.Info("MpvController", $"end-file (reason: {reason})");
+                        PlaybackEnded?.Invoke(reason);
                     }
                 }
                 if (root.TryGetProperty("request_id", out var reqIdProp))
@@ -794,3 +808,5 @@ public class MpvController : IDisposable
         }
     }
 }
+
+public enum MpvEndReason { Eof, Stop, Quit, Error, Unknown }

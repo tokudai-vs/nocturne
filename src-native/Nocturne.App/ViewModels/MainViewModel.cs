@@ -23,6 +23,7 @@ public class MainViewModel : BaseViewModel
     private readonly ITraktSyncService _traktSync;
     private readonly ITmdbEnrichmentService _tmdbEnrichment;
     private readonly TraktQueueDrainWorker _traktDrain;
+    private readonly PlaybackSession _session;
 
     private BaseViewModel _currentViewModel;
     private WindowBackdropType _backdropType = WindowBackdropType.Mica;
@@ -46,7 +47,6 @@ public class MainViewModel : BaseViewModel
     private EmbyItem? _currentPlayingItem;
     private EmbyItem? _nextEpisodeItem;
     private EmbyItem? _prevEpisodeItem;
-    private double _lastPlaybackSeconds = 0;
     private double _currentPlaybackSeconds = 0;
     private double _totalDurationSeconds = 0;
     private bool _isPaused;
@@ -103,6 +103,7 @@ public class MainViewModel : BaseViewModel
         _traktSync = traktSync;
         _tmdbEnrichment = tmdbEnrichment;
         _traktDrain = traktDrain;
+        _session = new PlaybackSession(db);
 
         HomeVM = homeVM;
         WatchlistVM = watchlistVM;
@@ -195,7 +196,7 @@ public class MainViewModel : BaseViewModel
         // MPV position & EOF handlers
         _mpv.PositionChanged += sec =>
         {
-            _lastPlaybackSeconds = sec;
+            _session.OnPosition(sec);
             _introDb.OnPositionChanged(sec, _mpv);
             if (_watchParty.IsActive)
             {
@@ -210,6 +211,7 @@ public class MainViewModel : BaseViewModel
 
         _mpv.DurationChanged += dur =>
         {
+            _session.OnDuration(dur);
             Application.Current?.Dispatcher?.Invoke(() =>
             {
                 TotalDurationSeconds = dur;
@@ -219,6 +221,7 @@ public class MainViewModel : BaseViewModel
 
         _mpv.PauseChanged += paused =>
         {
+            _ = _session.ReportProgressAsync(paused);
             if (_watchParty.IsActive)
             {
                 if (paused) _watchParty.BroadcastPause(_mpv.CurrentPositionSeconds);
@@ -271,7 +274,7 @@ public class MainViewModel : BaseViewModel
             });
         };
 
-        _mpv.PlaybackEnded += () =>
+        _mpv.PlaybackEnded += endReason =>
         {
             if (_isStartingPlayback) return;
             var app = Application.Current;
@@ -283,14 +286,17 @@ public class MainViewModel : BaseViewModel
                 {
                     if (IsPlayerActive && !_isStartingPlayback)
                     {
-                        if (_settings.Current.AutoPlayNextEpisode && CanGoNextEpisode && _nextEpisodeItem != null)
+                        // Only a real end of file is a completion candidate; stop, quit and error are stops.
+                        var reason = endReason == MpvEndReason.Eof ? PlaybackStopReason.EndOfFile : PlaybackStopReason.Stop;
+                        if (reason == PlaybackStopReason.EndOfFile && _session.WouldComplete(reason) &&
+                            _settings.Current.AutoPlayNextEpisode && CanGoNextEpisode && _nextEpisodeItem != null)
                         {
                             NocturneLogger.Info("MainViewModel", $"Auto-advancing to next episode: {_nextEpisodeItem.Name}");
-                            await PlayNextEpisodeAsync();
+                            await PlayNextEpisodeAsync(reason);
                         }
                         else
                         {
-                            await StopPlaybackAsync(isEof: true);
+                            await StopPlaybackAsync(reason);
                         }
                     }
                 }
@@ -890,8 +896,7 @@ public class MainViewModel : BaseViewModel
         _nextEpisodeItem = null;
         _prevEpisodeItem = null;
 
-        _lastPlaybackSeconds = (double)startTicks / 10_000_000.0;
-        CurrentPlaybackSeconds = _lastPlaybackSeconds;
+        CurrentPlaybackSeconds = startTicks / 10_000_000.0;
         TotalDurationSeconds = (double)(item.RunTimeTicks ?? 0) / 10_000_000.0;
         UpdateTimeString();
 
@@ -928,6 +933,9 @@ public class MainViewModel : BaseViewModel
                             : EmbyClient.CreateForServer(srv);
 
                         var eps = await client.GetEpisodesAsync(item.SeriesId, item.SeasonId ?? "");
+                        // Live results carry no owner; stamp the server they came from so the next / previous
+                        // episode plays and finalizes against it.
+                        foreach (var ep in eps) ep.ServerId ??= srv?.Id;
                         var idx = eps.FindIndex(e => e.Id == item.Id);
                         if (idx >= 0)
                         {
@@ -1024,6 +1032,7 @@ public class MainViewModel : BaseViewModel
         bool started = false;
         Exception? lastError = null;
         EmbyClient? activeClient = null;
+        EmbyItem? activeItem = null;
         ServerConfig? activeSrv = null;
         string? activeMediaSourceId = null;
 
@@ -1053,6 +1062,7 @@ public class MainViewModel : BaseViewModel
                     subBg: _settings.Current.SubtitleBackground);
 
                 _currentPlayingItem = candidate;
+                activeItem = candidate;
                 activeClient = client;
                 activeSrv = srv;
                 activeMediaSourceId = mediaSourceId;
@@ -1066,11 +1076,13 @@ public class MainViewModel : BaseViewModel
             }
         }
 
-        if (!started || activeClient == null)
+        if (!started || activeClient == null || activeItem == null)
         {
             NocturneLogger.Error("MainViewModel", "All playback candidates and sibling servers failed to start.", lastError);
             throw lastError ?? new InvalidOperationException("Failed to start playback on any available server.");
         }
+
+        _session.Begin(activeItem, activeClient, activeMediaSourceId, startTicks);
 
         // Restore user track preferences for series / movie
         var mediaKey = GetMediaKey(item);
@@ -1145,7 +1157,8 @@ public class MainViewModel : BaseViewModel
             Application.Current?.Dispatcher?.Invoke(() => ChaptersUpdated?.Invoke());
         }
 
-        await activeClient.ReportPlaybackStartAsync(item.Id, activeMediaSourceId ?? item.Id, startTicks);
+        // Report the version that actually started (after failover it differs from the one requested).
+        await activeClient.ReportPlaybackStartAsync(activeItem.Id, activeMediaSourceId ?? activeItem.Id, startTicks);
         await _trakt.ScrobbleStartAsync(item, item.ProgressPercentage);
         if (long.TryParse(item.DedupGroupId, out var startGid) && startGid > 0)
         {
@@ -1204,16 +1217,16 @@ public class MainViewModel : BaseViewModel
         }
     }
 
-    public async Task PlayNextEpisodeAsync()
+    // reason is Next for a user skip; the auto-advance path passes EndOfFile.
+    public async Task PlayNextEpisodeAsync(PlaybackStopReason reason = PlaybackStopReason.Next)
     {
         if (_nextEpisodeItem != null)
         {
             var next = _nextEpisodeItem;
+            await FinalizeCurrentPlaybackAsync(reason);
             CurrentPlaybackSeconds = 0;
             TotalDurationSeconds = 0;
-            _lastPlaybackSeconds = 0;
             UpdateTimeString();
-            await FinalizeCurrentPlaybackAsync(isEof: true);
             await StartPlaybackAsync(next, 0);
         }
     }
@@ -1223,11 +1236,10 @@ public class MainViewModel : BaseViewModel
         if (_prevEpisodeItem != null)
         {
             var prev = _prevEpisodeItem;
+            await FinalizeCurrentPlaybackAsync(PlaybackStopReason.Previous);
             CurrentPlaybackSeconds = 0;
             TotalDurationSeconds = 0;
-            _lastPlaybackSeconds = 0;
             UpdateTimeString();
-            await FinalizeCurrentPlaybackAsync(isEof: false);
             await StartPlaybackAsync(prev, 0);
         }
     }
@@ -1245,106 +1257,32 @@ public class MainViewModel : BaseViewModel
         }
     }
 
-    private async Task FinalizeCurrentPlaybackAsync(bool isEof)
+    private async Task FinalizeCurrentPlaybackAsync(PlaybackStopReason reason)
     {
-        if (_currentPlayingItem == null) return;
-        var item = _currentPlayingItem;
         _currentPlayingItem = null;
-
-        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
-               ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
-        var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
-            ? _embyClient
-            : EmbyClient.CreateForServer(srv);
-
-        var mediaSourceId = item.MediaSources?.FirstOrDefault()?.Id ?? item.Id;
-        var positionTicks = isEof
-            ? (item.RunTimeTicks ?? (long)(_lastPlaybackSeconds * 10_000_000.0))
-            : (long)(_lastPlaybackSeconds * 10_000_000.0);
-        var progress = isEof ? 100.0 : (item.RunTimeTicks.HasValue && item.RunTimeTicks.Value > 0
-            ? Math.Clamp((double)positionTicks / item.RunTimeTicks.Value * 100.0, 0, 100)
-            : 0);
+        var result = await _session.FinalizeAsync(reason);
+        if (result == null) return;
+        var item = result.Item;
 
         try
         {
-            await _trakt.ScrobbleStopAsync(item, progress);
+            await _trakt.ScrobbleStopAsync(item, result.ProgressPercent);
         }
         catch { }
 
         if (long.TryParse(item.DedupGroupId, out var stopGid) && stopGid > 0)
         {
-            _traktScrobble.Stop(stopGid, progress);
+            _traktScrobble.Stop(stopGid, result.ProgressPercent);
             _ = _traktDrain.DrainAsync(System.Threading.CancellationToken.None);
         }
 
-        try
-        {
-            await client.ReportPlaybackStoppedAsync(item.Id, mediaSourceId, positionTicks);
-        }
-        catch { }
-
-        if (isEof || progress >= 90.0)
-        {
-            try
-            {
-                await client.MarkPlayedAsync(item.Id);
-            }
-            catch { }
-
-            if (item.UserData != null)
-            {
-                item.UserData.Played = true;
-                item.UserData.PlaybackPositionTicks = 0;
-            }
-
-            if (long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
-            {
-                _db.MarkLocalGroupPlayed(gid);
-                var siblings = _db.GetGroupVersions(gid.ToString());
-                foreach (var sib in siblings)
-                {
-                    if (sib.ServerId != item.ServerId)
-                    {
-                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, 0, markPlayed: true);
-                    }
-                }
-            }
-            else
-            {
-                _db.MarkLocalItemPlayed(item.ServerId ?? string.Empty, item.Id);
-            }
-
-            _db.RemoveFromContinueWatchingCache(item.Id);
-            _db.ClearResumeProgress(item.Id);
-            _ = DrainSiblingWriteQueueAsync();
-        }
-        else if (_lastPlaybackSeconds > 5)
-        {
-            item.UserData ??= new UserItemData();
-            item.UserData.PlaybackPositionTicks = positionTicks;
-            item.UserData.Played = false;
-
-            _db.UpdateLocalPlaybackProgress(item.ServerId ?? string.Empty, item.Id, positionTicks, false);
-
-            if (long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
-            {
-                var siblings = _db.GetGroupVersions(gid.ToString());
-                foreach (var sib in siblings)
-                {
-                    if (sib.ServerId != item.ServerId)
-                    {
-                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, positionTicks, markPlayed: false);
-                    }
-                }
-            }
-
-            _db.UpdatePlaybackProgress(item.Id, item.ServerId ?? string.Empty, positionTicks);
-            _ = DrainSiblingWriteQueueAsync();
-        }
+        _ = DrainSiblingWriteQueueAsync();
 
         try
         {
-            _db.RecordWatchEvent(item.Id, srv?.Url ?? client.BaseUrl, item.Name, item.Type, (int)_lastPlaybackSeconds, item.SeriesName, item.Genres);
+            var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
+                   ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
+            _db.RecordWatchEvent(item.Id, srv?.Url ?? _embyClient.BaseUrl, item.Name, item.Type, (int)(result.PositionTicks / 10_000_000), item.SeriesName, item.Genres);
         }
         catch { }
     }
@@ -1353,36 +1291,11 @@ public class MainViewModel : BaseViewModel
     {
         try
         {
-            var pending = _db.GetPendingSiblingWrites(limit: 50);
-            if (pending.Count == 0) return;
-
-            foreach (var write in pending)
+            await _session.DrainSiblingWritesAsync(serverId =>
             {
-                var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == write.ServerId);
-                if (srv == null)
-                {
-                    _db.RemoveSiblingWrite(write.QueueId);
-                    continue;
-                }
-
-                try
-                {
-                    var client = EmbyClient.CreateForServer(srv);
-                    if (write.MarkPlayed)
-                    {
-                        await client.MarkPlayedAsync(write.ItemId);
-                    }
-                    else if (write.PositionTicks.HasValue)
-                    {
-                        await client.ReportPlaybackStoppedAsync(write.ItemId, write.ItemId, write.PositionTicks.Value);
-                    }
-                    _db.RemoveSiblingWrite(write.QueueId);
-                }
-                catch (Exception ex)
-                {
-                    NocturneLogger.Warn("MainViewModel", $"Sibling write failed for server {srv.Name} item {write.ItemId}: {ex.Message}");
-                }
-            }
+                var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == serverId);
+                return srv == null ? null : EmbyClient.CreateForServer(srv);
+            });
         }
         catch (Exception ex)
         {
@@ -1390,7 +1303,7 @@ public class MainViewModel : BaseViewModel
         }
     }
 
-    public async Task StopPlaybackAsync(bool isEof = false)
+    public async Task StopPlaybackAsync(PlaybackStopReason reason = PlaybackStopReason.Stop)
     {
         if (!IsPlayerActive && !_mpv.IsPlaying) return;
 
@@ -1399,18 +1312,19 @@ public class MainViewModel : BaseViewModel
 
         if (_watchParty.IsActive)
         {
-            _watchParty.BroadcastPause(_lastPlaybackSeconds);
+            _watchParty.BroadcastPause(_session.PositionSeconds);
         }
 
         IsPlayerActive = false;
-        CurrentPlaybackSeconds = 0;
-        TotalDurationSeconds = 0;
-        _lastPlaybackSeconds = 0;
-        UpdateTimeString();
         _introDb.Clear();
         IsSkipPromptVisible = false;
 
-        await FinalizeCurrentPlaybackAsync(isEof);
+        // Finalize reads the position from the session, so the UI reset below cannot zero it first.
+        await FinalizeCurrentPlaybackAsync(reason);
+
+        CurrentPlaybackSeconds = 0;
+        TotalDurationSeconds = 0;
+        UpdateTimeString();
 
         await stopTask;
     }

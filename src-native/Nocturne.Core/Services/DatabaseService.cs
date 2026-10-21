@@ -2200,7 +2200,9 @@ public class DatabaseService : IDisposable
         UpdateLocalPlaybackProgress(serverId, itemId, positionTicks, runtimeTicks);
     }
 
-    public void ClearResumeProgress(string itemId)
+    // Clears the resume point without touching played state. With a serverId only that server's copy is
+    // touched; item ids are per-server and collide across servers.
+    public void ClearResumeProgress(string itemId, string? serverId = null)
     {
         lock (_dbLock)
         {
@@ -2208,8 +2210,11 @@ public class DatabaseService : IDisposable
             {
                 using var cmd = _connection?.CreateCommand();
                 if (cmd == null) return;
-                cmd.CommandText = "SELECT id, server_id, json_data FROM cached_items WHERE id = @id";
+                cmd.CommandText = string.IsNullOrEmpty(serverId)
+                    ? "SELECT id, server_id, json_data FROM cached_items WHERE id = @id"
+                    : "SELECT id, server_id, json_data FROM cached_items WHERE id = @id AND server_id = @srv";
                 cmd.Parameters.AddWithValue("@id", itemId);
+                if (!string.IsNullOrEmpty(serverId)) cmd.Parameters.AddWithValue("@srv", serverId);
                 using var reader = cmd.ExecuteReader();
                 var updates = new List<(string Id, string ServerId, string NewJson)>();
                 while (reader.Read())
@@ -2236,6 +2241,14 @@ public class DatabaseService : IDisposable
                     upCmd.Parameters.AddWithValue("@srv", uSrv);
                     upCmd.ExecuteNonQuery();
                 }
+
+                using var udCmd = _connection!.CreateCommand();
+                udCmd.CommandText = string.IsNullOrEmpty(serverId)
+                    ? "UPDATE user_data SET position_ticks = 0, updated_locally = 1 WHERE item_id = @id"
+                    : "UPDATE user_data SET position_ticks = 0, updated_locally = 1 WHERE item_id = @id AND server_id = @srv";
+                udCmd.Parameters.AddWithValue("@id", itemId);
+                if (!string.IsNullOrEmpty(serverId)) udCmd.Parameters.AddWithValue("@srv", serverId);
+                udCmd.ExecuteNonQuery();
             }
             catch (Exception ex)
             {
@@ -2280,8 +2293,12 @@ public class DatabaseService : IDisposable
                 // 2. Update cached_items
                 using (var cmd2 = _connection.CreateCommand())
                 {
-                    cmd2.CommandText = "SELECT json_data, server_id FROM cached_items WHERE id = $id;";
+                    // Scoped to the owning server when known: item ids collide across servers.
+                    cmd2.CommandText = string.IsNullOrEmpty(serverId)
+                        ? "SELECT json_data, server_id FROM cached_items WHERE id = $id;"
+                        : "SELECT json_data, server_id FROM cached_items WHERE id = $id AND server_id = $sid;";
                     cmd2.Parameters.AddWithValue("$id", itemId);
+                    if (!string.IsNullOrEmpty(serverId)) cmd2.Parameters.AddWithValue("$sid", serverId);
                     using var reader = cmd2.ExecuteReader();
                     var list = new List<(string sid, string json)>();
                     while (reader.Read())
@@ -2763,7 +2780,8 @@ public class DatabaseService : IDisposable
                 ON CONFLICT(server_id, item_id) DO UPDATE SET
                     position_ticks = excluded.position_ticks,
                     mark_played = excluded.mark_played,
-                    queued_utc = excluded.queued_utc;
+                    queued_utc = excluded.queued_utc,
+                    attempts = 0;
             ";
             cmd.Parameters.AddWithValue("$server_id", serverId);
             cmd.Parameters.AddWithValue("$item_id", itemId);
@@ -2781,7 +2799,8 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return list;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT queue_id, server_id, item_id, position_ticks, mark_played FROM sibling_write_queue ORDER BY queued_utc ASC LIMIT $limit;";
+            cmd.CommandText = "SELECT queue_id, server_id, item_id, position_ticks, mark_played FROM sibling_write_queue WHERE attempts < $max_attempts ORDER BY queued_utc ASC LIMIT $limit;";
+            cmd.Parameters.AddWithValue("$max_attempts", MaxSiblingWriteAttempts);
             cmd.Parameters.AddWithValue("$limit", limit);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
@@ -2795,6 +2814,21 @@ public class DatabaseService : IDisposable
             }
         }
         return list;
+    }
+
+    // Rows that keep failing stay in the table for diagnosis but stop blocking the head of the queue.
+    public const int MaxSiblingWriteAttempts = 10;
+
+    public void RecordSiblingWriteFailure(int queueId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "UPDATE sibling_write_queue SET attempts = attempts + 1 WHERE queue_id = $qid;";
+            cmd.Parameters.AddWithValue("$qid", queueId);
+            cmd.ExecuteNonQuery();
+        }
     }
 
     public void RemoveSiblingWrite(int queueId)

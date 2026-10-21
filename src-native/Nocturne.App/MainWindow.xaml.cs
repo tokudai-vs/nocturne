@@ -20,6 +20,7 @@ public partial class MainWindow : FluentWindow
     private PlayerOverlayWindow? _playerOverlay;
     private bool _isFullscreen = false;
     private bool _isTransitioningFullscreen = false;
+    private bool _closeAfterStop;
     private WindowState _previousState = WindowState.Normal;
     private WindowStyle _previousStyle = WindowStyle.SingleBorderWindow;
     private ResizeMode _previousResize = ResizeMode.CanResize;
@@ -373,17 +374,19 @@ public partial class MainWindow : FluentWindow
         LocationChanged += (s, e) => { if (_viewModel.IsPlayerActive && !_isTransitioningFullscreen) _playerOverlay?.SyncWithParent(); };
         SizeChanged += (s, e) => { if (_viewModel.IsPlayerActive && !_isTransitioningFullscreen) _playerOverlay?.SyncWithParent(); };
         StateChanged += OnWindowStateChanged;
-        Closing += (s, e) =>
+        Closing += async (s, e) =>
         {
-            try { _playerOverlay?.Close(); } catch { }
-            try
+            // Closing during playback: hold the close until the stop has been reported and written, otherwise
+            // process teardown races the write-back (bounded so a dead server cannot block exit).
+            if (_viewModel.IsPlayerActive && !_closeAfterStop)
             {
-                if (_viewModel.IsPlayerActive)
-                {
-                    _ = _viewModel.StopPlaybackAsync();
-                }
+                e.Cancel = true;
+                _closeAfterStop = true;
+                try { await Task.WhenAny(_viewModel.StopPlaybackAsync(), Task.Delay(5000)); } catch { }
+                Close();
+                return;
             }
-            catch { }
+            try { _playerOverlay?.Close(); } catch { }
         };
 
         // Wire embedded player host requests
