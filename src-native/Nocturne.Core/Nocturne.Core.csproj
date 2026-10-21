@@ -14,4 +14,8 @@
     <PackageReference Include="YoutubeExplode" Version="6.6.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nocturne.Tests" />
+  </ItemGroup>
+
 </Project>

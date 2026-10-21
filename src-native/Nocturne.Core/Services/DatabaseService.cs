@@ -11,6 +11,26 @@ public class DatabaseService : IDisposable
     public const string DatabaseFileName = "nocturne-v4.db";
     private const string SharedLegacyFileName = "nocturne.db";
 
+    // E2: every literal statement the methods below execute is registered at type initialization (each
+    // "private static readonly string Sql... = Checked(...)" field), and SelfCheckPreparedStatements prepares
+    // exactly this list. The earlier hand-kept list had drifted: 11 of its 23 strings were not what the code ran.
+    private static readonly List<string> CheckedStatements = new();
+    private static string Checked(string sql) { CheckedStatements.Add(sql); return sql; }
+    internal static IReadOnlyList<string> RegisteredStatements => CheckedStatements;
+
+    // E5: used as an exception filter on the read paths that fall back to null / empty. The failure is logged
+    // with the statement; in Debug builds the filter returns false so the exception propagates (tests and
+    // development see it instead of an empty result), in Release the fallback still applies.
+    private static bool QueryFailed(Exception ex, string what, [System.Runtime.CompilerServices.CallerMemberName] string method = "")
+    {
+        NocturneLogger.Error("DatabaseService", $"{method} failed: {string.Join(' ', what.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))}", ex);
+#if DEBUG
+        return false;
+#else
+        return true;
+#endif
+    }
+
     private readonly object _dbLock = new();
     private readonly string _connectionString;
     private readonly string _dbPath;
@@ -232,7 +252,7 @@ public class DatabaseService : IDisposable
                 }
             }
         }
-        catch { }
+        catch (Exception ex) when (QueryFailed(ex, "PRAGMA table_info(dedup_groups);")) { }
 
         if (isLegacyDedupGroups)
         {
@@ -491,12 +511,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public void UpsertItem(EmbyItem item, string serverId, string? parentId = null)
-    {
-        lock (_dbLock)
-        {
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
+    private static readonly string SqlUpsertItem = Checked(@"
                 INSERT INTO cached_items (
                     id, server_id, parent_id, group_id, name, type, run_time_ticks, production_year,
                     community_rating, index_number, parent_index_number, series_id, series_name,
@@ -539,7 +554,22 @@ public class DatabaseService : IDisposable
                     edition = COALESCE(excluded.edition, cached_items.edition),
                     json_data = excluded.json_data,
                     last_synced = excluded.last_synced;
-            ";
+            ");
+    private static readonly string SqlUpsertItem2 = Checked(@"
+                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
+                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 0)
+                    ON CONFLICT(server_id, item_id) DO UPDATE SET
+                        position_ticks = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.position_ticks ELSE excluded.position_ticks END,
+                        played = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.played ELSE excluded.played END,
+                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END;
+                ");
+
+    public void UpsertItem(EmbyItem item, string serverId, string? parentId = null)
+    {
+        lock (_dbLock)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlUpsertItem;
 
             int? gid = null;
             if (int.TryParse(item.DedupGroupId, out int parsedGid)) gid = parsedGid;
@@ -580,14 +610,7 @@ public class DatabaseService : IDisposable
             if (item.UserData != null)
             {
                 using var userCmd = _connection.CreateCommand();
-                userCmd.CommandText = @"
-                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
-                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 0)
-                    ON CONFLICT(server_id, item_id) DO UPDATE SET
-                        position_ticks = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.position_ticks ELSE excluded.position_ticks END,
-                        played = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.played ELSE excluded.played END,
-                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END;
-                ";
+                userCmd.CommandText = SqlUpsertItem2;
                 userCmd.Parameters.AddWithValue("$u_srv", serverId);
                 userCmd.Parameters.AddWithValue("$u_item", item.Id);
                 userCmd.Parameters.AddWithValue("$u_pos", item.UserData.PlaybackPositionTicks);
@@ -601,35 +624,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public void UpsertItems(
-        IEnumerable<EmbyItem> items,
-        string serverId,
-        string? parentId = null,
-        int? checkpointStartIndex = null,
-        int? checkpointTotalItems = null,
-        bool checkpointIsCompleted = false)
-    {
-        var list = items.ToList();
-        if (list.Count == 0 && !checkpointStartIndex.HasValue) return;
-
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-
-            const int chunkSize = 2000;
-            int totalChunks = list.Count > 0 ? (int)Math.Ceiling((double)list.Count / chunkSize) : 1;
-            int currentChunk = 0;
-
-            for (int offset = 0; offset < Math.Max(1, list.Count); offset += chunkSize)
-            {
-                currentChunk++;
-                bool isFinalChunk = currentChunk >= totalChunks;
-                var chunk = list.Skip(offset).Take(chunkSize).ToList();
-
-                using var tx = _connection.BeginTransaction();
-                using var cmd = _connection.CreateCommand();
-                cmd.Transaction = tx;
-                cmd.CommandText = @"
+    private static readonly string SqlUpsertItems = Checked(@"
                     INSERT INTO cached_items (
                         id, server_id, parent_id, group_id, name, type, run_time_ticks, production_year,
                         community_rating, index_number, parent_index_number, series_id, series_name,
@@ -672,7 +667,63 @@ public class DatabaseService : IDisposable
                         edition = COALESCE(excluded.edition, cached_items.edition),
                         json_data = excluded.json_data,
                         last_synced = excluded.last_synced;
-                ";
+                ");
+    private static readonly string SqlUpsertItems2 = Checked(@"
+                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
+                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 0)
+                    ON CONFLICT(server_id, item_id) DO UPDATE SET
+                        position_ticks = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.position_ticks ELSE excluded.position_ticks END,
+                        played = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.played ELSE excluded.played END,
+                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END;
+                ");
+    private static readonly string SqlUpsertItems3 = Checked(@"
+                    INSERT INTO watchlist_entries (source, ref, item_type, added_utc, title, year, tmdb_key)
+                    VALUES ($w_src, $w_ref, $w_type, $w_added, $w_title, $w_year, $w_tmdb)
+                    ON CONFLICT(source, ref) DO UPDATE SET
+                        item_type = excluded.item_type,
+                        title = COALESCE(excluded.title, watchlist_entries.title),
+                        year = COALESCE(excluded.year, watchlist_entries.year),
+                        tmdb_key = COALESCE(excluded.tmdb_key, watchlist_entries.tmdb_key);
+                ");
+    private static readonly string SqlUpsertItems4 = Checked(@"
+                        INSERT INTO sync_checkpoints (server_id, library_id, start_index, total_items, is_completed, last_synced)
+                        VALUES ($cs_server_id, $cs_library_id, $cs_start_index, $cs_total_items, $cs_is_completed, $cs_last_synced)
+                        ON CONFLICT(server_id, library_id) DO UPDATE SET
+                            start_index = excluded.start_index,
+                            total_items = excluded.total_items,
+                            is_completed = excluded.is_completed,
+                            last_synced = excluded.last_synced;
+                    ");
+
+    public void UpsertItems(
+        IEnumerable<EmbyItem> items,
+        string serverId,
+        string? parentId = null,
+        int? checkpointStartIndex = null,
+        int? checkpointTotalItems = null,
+        bool checkpointIsCompleted = false)
+    {
+        var list = items.ToList();
+        if (list.Count == 0 && !checkpointStartIndex.HasValue) return;
+
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+
+            const int chunkSize = 2000;
+            int totalChunks = list.Count > 0 ? (int)Math.Ceiling((double)list.Count / chunkSize) : 1;
+            int currentChunk = 0;
+
+            for (int offset = 0; offset < Math.Max(1, list.Count); offset += chunkSize)
+            {
+                currentChunk++;
+                bool isFinalChunk = currentChunk >= totalChunks;
+                var chunk = list.Skip(offset).Take(chunkSize).ToList();
+
+                using var tx = _connection.BeginTransaction();
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = SqlUpsertItems;
 
                 var pId = cmd.Parameters.Add("$id", SqliteType.Text);
                 var pServerId = cmd.Parameters.Add("$server_id", SqliteType.Text);
@@ -707,14 +758,7 @@ public class DatabaseService : IDisposable
 
                 using var userCmd = _connection.CreateCommand();
                 userCmd.Transaction = tx;
-                userCmd.CommandText = @"
-                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
-                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 0)
-                    ON CONFLICT(server_id, item_id) DO UPDATE SET
-                        position_ticks = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.position_ticks ELSE excluded.position_ticks END,
-                        played = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.played ELSE excluded.played END,
-                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END;
-                ";
+                userCmd.CommandText = SqlUpsertItems2;
                 var puSrv = userCmd.Parameters.Add("$u_srv", SqliteType.Text);
                 var puItem = userCmd.Parameters.Add("$u_item", SqliteType.Text);
                 var puPos = userCmd.Parameters.Add("$u_pos", SqliteType.Integer);
@@ -724,15 +768,7 @@ public class DatabaseService : IDisposable
 
                 using var wlCmd = _connection.CreateCommand();
                 wlCmd.Transaction = tx;
-                wlCmd.CommandText = @"
-                    INSERT INTO watchlist_entries (source, ref, item_type, added_utc, title, year, tmdb_key)
-                    VALUES ($w_src, $w_ref, $w_type, $w_added, $w_title, $w_year, $w_tmdb)
-                    ON CONFLICT(source, ref) DO UPDATE SET
-                        item_type = excluded.item_type,
-                        title = COALESCE(excluded.title, watchlist_entries.title),
-                        year = COALESCE(excluded.year, watchlist_entries.year),
-                        tmdb_key = COALESCE(excluded.tmdb_key, watchlist_entries.tmdb_key);
-                ";
+                wlCmd.CommandText = SqlUpsertItems3;
                 var pwSrc = wlCmd.Parameters.Add("$w_src", SqliteType.Text);
                 var pwRef = wlCmd.Parameters.Add("$w_ref", SqliteType.Text);
                 var pwType = wlCmd.Parameters.Add("$w_type", SqliteType.Text);
@@ -816,15 +852,7 @@ public class DatabaseService : IDisposable
                 {
                     using var cpCmd = _connection.CreateCommand();
                     cpCmd.Transaction = tx;
-                    cpCmd.CommandText = @"
-                        INSERT INTO sync_checkpoints (server_id, library_id, start_index, total_items, is_completed, last_synced)
-                        VALUES ($cs_server_id, $cs_library_id, $cs_start_index, $cs_total_items, $cs_is_completed, $cs_last_synced)
-                        ON CONFLICT(server_id, library_id) DO UPDATE SET
-                            start_index = excluded.start_index,
-                            total_items = excluded.total_items,
-                            is_completed = excluded.is_completed,
-                            last_synced = excluded.last_synced;
-                    ";
+                    cpCmd.CommandText = SqlUpsertItems4;
                     cpCmd.Parameters.AddWithValue("$cs_server_id", serverId);
                     cpCmd.Parameters.AddWithValue("$cs_library_id", parentId);
                     cpCmd.Parameters.AddWithValue("$cs_start_index", checkpointStartIndex.Value);
@@ -890,6 +918,11 @@ public class DatabaseService : IDisposable
         return items;
     }
 
+    private static readonly string SqlSaveContinueWatchingCache = Checked("DELETE FROM continue_watching_cache;");
+    private static readonly string SqlSaveContinueWatchingCache2 = Checked(@"
+                    INSERT OR REPLACE INTO continue_watching_cache (id, server_id, sort_order, json_data, updated_at)
+                    VALUES ($id, $server_id, $sort_order, $json_data, $updated_at);");
+
     public void SaveContinueWatchingCache(IEnumerable<EmbyItem> items)
     {
         var list = items.ToList();
@@ -899,7 +932,7 @@ public class DatabaseService : IDisposable
             using var tx = _connection.BeginTransaction();
             using var delCmd = _connection.CreateCommand();
             delCmd.Transaction = tx;
-            delCmd.CommandText = "DELETE FROM continue_watching_cache;";
+            delCmd.CommandText = SqlSaveContinueWatchingCache;
             delCmd.ExecuteNonQuery();
 
             for (int i = 0; i < list.Count; i++)
@@ -907,9 +940,7 @@ public class DatabaseService : IDisposable
                 var item = list[i];
                 using var cmd = _connection.CreateCommand();
                 cmd.Transaction = tx;
-                cmd.CommandText = @"
-                    INSERT OR REPLACE INTO continue_watching_cache (id, server_id, sort_order, json_data, updated_at)
-                    VALUES ($id, $server_id, $sort_order, $json_data, $updated_at);";
+                cmd.CommandText = SqlSaveContinueWatchingCache2;
                 cmd.Parameters.AddWithValue("$id", item.Id);
                 cmd.Parameters.AddWithValue("$server_id", item.ServerId ?? string.Empty);
                 cmd.Parameters.AddWithValue("$sort_order", i);
@@ -921,6 +952,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetCachedContinueWatching = Checked("SELECT json_data, server_id FROM continue_watching_cache ORDER BY sort_order ASC;");
+
     public List<EmbyItem> GetCachedContinueWatching()
     {
         var items = new List<EmbyItem>();
@@ -928,7 +961,7 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return items;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT json_data, server_id FROM continue_watching_cache ORDER BY sort_order ASC;";
+            cmd.CommandText = SqlGetCachedContinueWatching;
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -945,17 +978,21 @@ public class DatabaseService : IDisposable
         return items;
     }
 
+    private static readonly string SqlRemoveFromContinueWatchingCache = Checked("DELETE FROM continue_watching_cache WHERE id = $id;");
+
     public void RemoveFromContinueWatchingCache(string itemId)
     {
         lock (_dbLock)
         {
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM continue_watching_cache WHERE id = $id;";
+            cmd.CommandText = SqlRemoveFromContinueWatchingCache;
             cmd.Parameters.AddWithValue("$id", itemId);
             cmd.ExecuteNonQuery();
         }
     }
+
+    private static readonly string SqlGetSeriesProviderIds = Checked("SELECT json_extract(json_data, '$.ProviderIds') FROM cached_items WHERE id = $id AND server_id = $srv AND type = 'Series';");
 
     // ProviderIds of a cached Series row (same server), without deserializing the whole item.
     public Dictionary<string, string>? GetSeriesProviderIds(string serverId, string seriesId)
@@ -964,7 +1001,7 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return null;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT json_extract(json_data, '$.ProviderIds') FROM cached_items WHERE id = $id AND server_id = $srv AND type = 'Series';";
+            cmd.CommandText = SqlGetSeriesProviderIds;
             cmd.Parameters.AddWithValue("$id", seriesId);
             cmd.Parameters.AddWithValue("$srv", serverId);
             return cmd.ExecuteScalar() is string json && json.Length > 2
@@ -973,6 +1010,9 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetCachedItem = Checked("SELECT json_data FROM cached_items WHERE id = $id AND server_id = $serverId LIMIT 1;");
+    private static readonly string SqlGetCachedItem2 = Checked("SELECT json_data FROM cached_items WHERE id = $id LIMIT 1;");
+
     public EmbyItem? GetCachedItem(string itemId, string? serverId = null)
     {
         lock (_dbLock)
@@ -980,13 +1020,13 @@ public class DatabaseService : IDisposable
             using var cmd = _connection.CreateCommand();
             if (!string.IsNullOrEmpty(serverId))
             {
-                cmd.CommandText = "SELECT json_data FROM cached_items WHERE id = $id AND server_id = $serverId LIMIT 1;";
+                cmd.CommandText = SqlGetCachedItem;
                 cmd.Parameters.AddWithValue("$id", itemId);
                 cmd.Parameters.AddWithValue("$serverId", serverId);
             }
             else
             {
-                cmd.CommandText = "SELECT json_data FROM cached_items WHERE id = $id LIMIT 1;";
+                cmd.CommandText = SqlGetCachedItem2;
                 cmd.Parameters.AddWithValue("$id", itemId);
             }
 
@@ -1002,7 +1042,7 @@ public class DatabaseService : IDisposable
                 }
                 return item;
             }
-            catch
+            catch (Exception ex) when (QueryFailed(ex, $"json_data of cached item {itemId}"))
             {
                 return null;
             }
@@ -1045,7 +1085,7 @@ public class DatabaseService : IDisposable
                         items.Add(item);
                     }
                 }
-                catch { }
+                catch (Exception ex) when (QueryFailed(ex, sql)) { }
             }
         }
         return items;
@@ -1123,6 +1163,17 @@ public class DatabaseService : IDisposable
         return items;
     }
 
+    private static readonly string SqlGetGroupVersions = Checked(@"
+                    SELECT json_data, server_id, dedup_group_id,
+                           height, width, video_codec, audio_codec, bitrate, size_bytes, hdr_type, edition
+                    FROM cached_items
+                    WHERE group_id = $gid OR dedup_group_id = $group_id;");
+    private static readonly string SqlGetGroupVersions2 = Checked(@"
+                    SELECT json_data, server_id, dedup_group_id,
+                           height, width, video_codec, audio_codec, bitrate, size_bytes, hdr_type, edition
+                    FROM cached_items
+                    WHERE dedup_group_id = $group_id;");
+
     public List<EmbyItem> GetGroupVersions(string groupId)
     {
         var list = new List<EmbyItem>();
@@ -1134,21 +1185,13 @@ public class DatabaseService : IDisposable
             using var cmd = _connection.CreateCommand();
             if (long.TryParse(groupId, out var gid))
             {
-                cmd.CommandText = @"
-                    SELECT json_data, server_id, dedup_group_id,
-                           height, width, video_codec, audio_codec, bitrate, size_bytes, hdr_type, edition
-                    FROM cached_items
-                    WHERE group_id = $gid OR dedup_group_id = $group_id;";
+                cmd.CommandText = SqlGetGroupVersions;
                 cmd.Parameters.AddWithValue("$gid", gid);
                 cmd.Parameters.AddWithValue("$group_id", groupId);
             }
             else
             {
-                cmd.CommandText = @"
-                    SELECT json_data, server_id, dedup_group_id,
-                           height, width, video_codec, audio_codec, bitrate, size_bytes, hdr_type, edition
-                    FROM cached_items
-                    WHERE dedup_group_id = $group_id;";
+                cmd.CommandText = SqlGetGroupVersions2;
                 cmd.Parameters.AddWithValue("$group_id", groupId);
             }
 
@@ -1176,6 +1219,11 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    private static readonly string SqlGetSiblingVersions = Checked("SELECT COALESCE(CAST(group_id AS TEXT), dedup_group_id) FROM cached_items WHERE id = $id LIMIT 1;");
+    private static readonly string SqlGetSiblingVersions2 = Checked("SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE tmdb_id = $val AND id != $id;");
+    private static readonly string SqlGetSiblingVersions3 = Checked("SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE imdb_id = $val AND id != $id;");
+    private static readonly string SqlGetSiblingVersions4 = Checked("SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE LOWER(name) = $name AND production_year = $year AND id != $id;");
+
     public List<EmbyItem> GetSiblingVersions(EmbyItem item)
     {
         string? groupId = item.DedupGroupId;
@@ -1186,7 +1234,7 @@ public class DatabaseService : IDisposable
                 if (_connection != null)
                 {
                     using var lookupCmd = _connection.CreateCommand();
-                    lookupCmd.CommandText = "SELECT COALESCE(CAST(group_id AS TEXT), dedup_group_id) FROM cached_items WHERE id = $id LIMIT 1;";
+                    lookupCmd.CommandText = SqlGetSiblingVersions;
                     lookupCmd.Parameters.AddWithValue("$id", item.Id);
                     var res = lookupCmd.ExecuteScalar();
                     if (res != null && res != DBNull.Value) groupId = res.ToString();
@@ -1206,19 +1254,19 @@ public class DatabaseService : IDisposable
             using var cmd = _connection.CreateCommand();
             if (!string.IsNullOrEmpty(item.TmdbId))
             {
-                cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE tmdb_id = $val AND id != $id;";
+                cmd.CommandText = SqlGetSiblingVersions2;
                 cmd.Parameters.AddWithValue("$val", item.TmdbId);
                 cmd.Parameters.AddWithValue("$id", item.Id);
             }
             else if (!string.IsNullOrEmpty(item.ImdbId))
             {
-                cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE imdb_id = $val AND id != $id;";
+                cmd.CommandText = SqlGetSiblingVersions3;
                 cmd.Parameters.AddWithValue("$val", item.ImdbId);
                 cmd.Parameters.AddWithValue("$id", item.Id);
             }
             else if (!string.IsNullOrEmpty(item.Name) && item.ProductionYear.HasValue)
             {
-                cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE LOWER(name) = $name AND year = $year AND id != $id;";
+                cmd.CommandText = SqlGetSiblingVersions4;
                 cmd.Parameters.AddWithValue("$name", item.Name.ToLowerInvariant());
                 cmd.Parameters.AddWithValue("$year", item.ProductionYear.Value);
                 cmd.Parameters.AddWithValue("$id", item.Id);
@@ -1246,6 +1294,11 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    private static readonly string SqlRecordWatchEvent = Checked(@"
+                INSERT INTO watch_events (id, item_id, server_id, item_name, series_name, item_type, duration_seconds, watched_at, source, genres)
+                VALUES ($id, $item_id, $server_id, $item_name, $series_name, $item_type, $duration_seconds, $watched_at, $source, $genres);
+            ");
+
     public void RecordWatchEvent(
         string itemId,
         string serverId,
@@ -1259,10 +1312,7 @@ public class DatabaseService : IDisposable
         lock (_dbLock)
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO watch_events (id, item_id, server_id, item_name, series_name, item_type, duration_seconds, watched_at, source, genres)
-                VALUES ($id, $item_id, $server_id, $item_name, $series_name, $item_type, $duration_seconds, $watched_at, $source, $genres);
-            ";
+            cmd.CommandText = SqlRecordWatchEvent;
             cmd.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
             cmd.Parameters.AddWithValue("$item_id", itemId);
             cmd.Parameters.AddWithValue("$server_id", serverId);
@@ -1522,6 +1572,12 @@ public class DatabaseService : IDisposable
         return bars;
     }
 
+    private static readonly string SqlSaveTraktWatchlist = Checked("DELETE FROM trakt_watchlist;");
+    private static readonly string SqlSaveTraktWatchlist2 = Checked(@"
+                    INSERT INTO trakt_watchlist (id, trakt_id, tmdb_id, imdb_id, title, year, type, added_at)
+                    VALUES ($id, $trakt_id, $tmdb_id, $imdb_id, $title, $year, $type, $added_at);
+                ");
+
     public void SaveTraktWatchlist(List<TraktWatchlistItem> items)
     {
         lock (_dbLock)
@@ -1529,17 +1585,14 @@ public class DatabaseService : IDisposable
             using var tx = _connection.BeginTransaction();
             using var delCmd = _connection.CreateCommand();
             delCmd.Transaction = tx;
-            delCmd.CommandText = "DELETE FROM trakt_watchlist;";
+            delCmd.CommandText = SqlSaveTraktWatchlist;
             delCmd.ExecuteNonQuery();
 
             foreach (var item in items)
             {
                 using var cmd = _connection.CreateCommand();
                 cmd.Transaction = tx;
-                cmd.CommandText = @"
-                    INSERT INTO trakt_watchlist (id, trakt_id, tmdb_id, imdb_id, title, year, type, added_at)
-                    VALUES ($id, $trakt_id, $tmdb_id, $imdb_id, $title, $year, $type, $added_at);
-                ";
+                cmd.CommandText = SqlSaveTraktWatchlist2;
                 cmd.Parameters.AddWithValue("$id", item.Id);
                 cmd.Parameters.AddWithValue("$trakt_id", (object?)null ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tmdb_id", (object?)item.TmdbId ?? DBNull.Value);
@@ -1554,13 +1607,15 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetTraktWatchlist = Checked("SELECT id, title, year, type, tmdb_id, imdb_id, added_at FROM trakt_watchlist ORDER BY added_at DESC;");
+
     public List<TraktWatchlistItem> GetTraktWatchlist()
     {
         var list = new List<TraktWatchlistItem>();
         lock (_dbLock)
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT id, title, year, type, tmdb_id, imdb_id, added_at FROM trakt_watchlist ORDER BY added_at DESC;";
+            cmd.CommandText = SqlGetTraktWatchlist;
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1579,32 +1634,38 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    private static readonly string SqlGetCachedItemsCount = Checked("SELECT COUNT(*) FROM cached_items;");
+
     public int GetCachedItemsCount()
     {
         lock (_dbLock)
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT COUNT(*) FROM cached_items;";
+            cmd.CommandText = SqlGetCachedItemsCount;
             return Convert.ToInt32(cmd.ExecuteScalar());
         }
     }
+
+    private static readonly string SqlGetDedupGroupsCount = Checked("SELECT COUNT(*) FROM dedup_groups WHERE version_count > 1;");
 
     public int GetDedupGroupsCount()
     {
         lock (_dbLock)
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT COUNT(*) FROM dedup_groups WHERE version_count > 1;";
+            cmd.CommandText = SqlGetDedupGroupsCount;
             return Convert.ToInt32(cmd.ExecuteScalar());
         }
     }
+
+    private static readonly string SqlGetTotalDedupGroupsCount = Checked("SELECT COUNT(*) FROM dedup_groups;");
 
     public int GetTotalDedupGroupsCount()
     {
         lock (_dbLock)
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT COUNT(*) FROM dedup_groups;";
+            cmd.CommandText = SqlGetTotalDedupGroupsCount;
             return Convert.ToInt32(cmd.ExecuteScalar());
         }
     }
@@ -1623,7 +1684,10 @@ public class DatabaseService : IDisposable
             if (File.Exists(shmPath)) total += new FileInfo(shmPath).Length;
             return total;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("DatabaseService", $"Could not read the database size: {ex.Message}");
+        }
         return 0;
     }
 
@@ -1637,6 +1701,8 @@ public class DatabaseService : IDisposable
         string? ShowTmdbId, int? SeasonNumber, int? EpisodeNumber,
         long WatchedAt, long SyncedAt);
 
+    private static readonly string SqlReadAllWatchEvents = Checked("SELECT id, item_id, server_id, item_name, series_name, item_type, duration_seconds, watched_at, source, genres FROM watch_events;");
+
     private List<PreservedWatchEvent> ReadAllWatchEvents()
     {
         var list = new List<PreservedWatchEvent>();
@@ -1644,7 +1710,7 @@ public class DatabaseService : IDisposable
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT id, item_id, server_id, item_name, series_name, item_type, duration_seconds, watched_at, source, genres FROM watch_events;";
+            cmd.CommandText = SqlReadAllWatchEvents;
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1669,6 +1735,8 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    private static readonly string SqlReadAllTraktHistory = Checked("SELECT key, trakt_type, tmdb_id, imdb_id, show_tmdb_id, season_number, episode_number, watched_at, synced_at FROM trakt_watched_history;");
+
     private List<PreservedTraktHistory> ReadAllTraktHistory()
     {
         var list = new List<PreservedTraktHistory>();
@@ -1676,7 +1744,7 @@ public class DatabaseService : IDisposable
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT key, trakt_type, tmdb_id, imdb_id, show_tmdb_id, season_number, episode_number, watched_at, synced_at FROM trakt_watched_history;";
+            cmd.CommandText = SqlReadAllTraktHistory;
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1700,6 +1768,11 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    private static readonly string SqlRestoreWatchEvents = Checked(@"
+                INSERT OR IGNORE INTO watch_events (id, item_id, server_id, item_name, series_name, item_type, duration_seconds, watched_at, source, genres)
+                VALUES ($id, $item_id, $server_id, $item_name, $series_name, $item_type, $duration_seconds, $watched_at, $source, $genres);
+            ");
+
     private void RestoreWatchEvents(List<PreservedWatchEvent> events)
     {
         if (events.Count == 0 || _connection == null) return;
@@ -1708,10 +1781,7 @@ public class DatabaseService : IDisposable
             using var tx = _connection.BeginTransaction();
             using var cmd = _connection.CreateCommand();
             cmd.Transaction = tx;
-            cmd.CommandText = @"
-                INSERT OR IGNORE INTO watch_events (id, item_id, server_id, item_name, series_name, item_type, duration_seconds, watched_at, source, genres)
-                VALUES ($id, $item_id, $server_id, $item_name, $series_name, $item_type, $duration_seconds, $watched_at, $source, $genres);
-            ";
+            cmd.CommandText = SqlRestoreWatchEvents;
             var pId = cmd.Parameters.Add("$id", SqliteType.Text);
             var pItemId = cmd.Parameters.Add("$item_id", SqliteType.Text);
             var pServerId = cmd.Parameters.Add("$server_id", SqliteType.Text);
@@ -1745,6 +1815,11 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlRestoreTraktHistory = Checked(@"
+                INSERT OR IGNORE INTO trakt_watched_history (key, trakt_type, tmdb_id, imdb_id, show_tmdb_id, season_number, episode_number, watched_at, synced_at)
+                VALUES ($key, $trakt_type, $tmdb_id, $imdb_id, $show_tmdb_id, $season_number, $episode_number, $watched_at, $synced_at);
+            ");
+
     private void RestoreTraktHistory(List<PreservedTraktHistory> items)
     {
         if (items.Count == 0 || _connection == null) return;
@@ -1753,10 +1828,7 @@ public class DatabaseService : IDisposable
             using var tx = _connection.BeginTransaction();
             using var cmd = _connection.CreateCommand();
             cmd.Transaction = tx;
-            cmd.CommandText = @"
-                INSERT OR IGNORE INTO trakt_watched_history (key, trakt_type, tmdb_id, imdb_id, show_tmdb_id, season_number, episode_number, watched_at, synced_at)
-                VALUES ($key, $trakt_type, $tmdb_id, $imdb_id, $show_tmdb_id, $season_number, $episode_number, $watched_at, $synced_at);
-            ";
+            cmd.CommandText = SqlRestoreTraktHistory;
             var pKey = cmd.Parameters.Add("$key", SqliteType.Text);
             var pType = cmd.Parameters.Add("$trakt_type", SqliteType.Text);
             var pTmdb = cmd.Parameters.Add("$tmdb_id", SqliteType.Text);
@@ -1856,17 +1928,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public void ClearServerData(string serverId)
-    {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            using var tx = _connection.BeginTransaction();
-            try
-            {
-                using var cmd = _connection.CreateCommand();
-                cmd.Transaction = tx;
-                cmd.CommandText = @"
+    private static readonly string SqlClearServerData = Checked(@"
                     DELETE FROM cached_items WHERE server_id = $server_id;
                     DELETE FROM sync_checkpoints WHERE server_id = $server_id;
                     DELETE FROM sibling_write_queue WHERE server_id = $server_id;
@@ -1879,7 +1941,19 @@ public class DatabaseService : IDisposable
                     -- Update remaining version counts
                     UPDATE dedup_groups
                        SET version_count = (SELECT COUNT(*) FROM cached_items c WHERE c.group_id = dedup_groups.group_id);
-                ";
+                ");
+
+    public void ClearServerData(string serverId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var tx = _connection.BeginTransaction();
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = SqlClearServerData;
                 cmd.Parameters.AddWithValue("$server_id", serverId);
                 cmd.ExecuteNonQuery();
                 tx.Commit();
@@ -1893,13 +1967,15 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetItemsForDeduplication = Checked("SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE type IN ('Movie', 'Series', 'Episode');");
+
     public List<EmbyItem> GetItemsForDeduplication()
     {
         var items = new List<EmbyItem>();
         lock (_dbLock)
         {
             using var cmd = _connection!.CreateCommand();
-            cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE type IN ('Movie', 'Series', 'Episode');";
+            cmd.CommandText = SqlGetItemsForDeduplication;
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1916,89 +1992,22 @@ public class DatabaseService : IDisposable
                         items.Add(item);
                     }
                 }
-                catch { }
+                catch (Exception ex) when (QueryFailed(ex, SqlGetItemsForDeduplication)) { }
             }
         }
         return items;
     }
 
-    public void SaveDedupBatch(
-        List<DedupGroupRecord> dirtyGroups,
-        List<int> deletedGroupIds,
-        List<(int FromGid, int ToGid)> remappedGroups,
-        List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave,
-        List<(string ServerId, string ItemId, int GroupId)>? itemAssignments = null)
-    {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            using var tx = _connection.BeginTransaction();
-            try
-            {
-                // 1. Remap cached_items if groups were merged
-                if (remappedGroups.Count > 0)
-                {
-                    using var remapCmd = _connection.CreateCommand();
-                    remapCmd.Transaction = tx;
-                    remapCmd.CommandText = "UPDATE cached_items SET group_id = $toGid, dedup_group_id = $toGidStr WHERE group_id = $fromGid;";
-                    var pTo = remapCmd.Parameters.Add("$toGid", SqliteType.Integer);
-                    var pToStr = remapCmd.Parameters.Add("$toGidStr", SqliteType.Text);
-                    var pFrom = remapCmd.Parameters.Add("$fromGid", SqliteType.Integer);
-
-                    foreach (var (fromGid, toGid) in remappedGroups)
-                    {
-                        pFrom.Value = fromGid;
-                        pTo.Value = toGid;
-                        pToStr.Value = toGid.ToString();
-                        remapCmd.ExecuteNonQuery();
-                    }
-                }
-
-                // 2. Delete loser groups
-                if (deletedGroupIds.Count > 0)
-                {
-                    using var delCmd = _connection.CreateCommand();
-                    delCmd.Transaction = tx;
-                    delCmd.CommandText = "DELETE FROM dedup_groups WHERE group_id = $gid; DELETE FROM dedup_keys WHERE group_id = $gid;";
-                    var pDel = delCmd.Parameters.Add("$gid", SqliteType.Integer);
-                    foreach (var id in deletedGroupIds)
-                    {
-                        pDel.Value = id;
-                        delCmd.ExecuteNonQuery();
-                    }
-                }
-
-                // 3. Upsert keys
-                if (keysToSave.Count > 0)
-                {
-                    using var keyCmd = _connection.CreateCommand();
-                    keyCmd.Transaction = tx;
-                    keyCmd.CommandText = @"
+    private static readonly string SqlSaveDedupBatch = Checked("UPDATE cached_items SET group_id = $toGid, dedup_group_id = $toGidStr WHERE group_id = $fromGid;");
+    private static readonly string SqlSaveDedupBatch2 = Checked("DELETE FROM dedup_groups WHERE group_id = $gid; DELETE FROM dedup_keys WHERE group_id = $gid;");
+    private static readonly string SqlSaveDedupBatch3 = Checked(@"
                         INSERT INTO dedup_keys (key, group_id, is_authoritative)
                         VALUES ($key, $group_id, $is_auth)
                         ON CONFLICT(key) DO UPDATE SET
                             group_id = excluded.group_id,
                             is_authoritative = excluded.is_authoritative;
-                    ";
-                    var pK = keyCmd.Parameters.Add("$key", SqliteType.Text);
-                    var pG = keyCmd.Parameters.Add("$group_id", SqliteType.Integer);
-                    var pA = keyCmd.Parameters.Add("$is_auth", SqliteType.Integer);
-
-                    foreach (var (k, gid, isAuth) in keysToSave)
-                    {
-                        pK.Value = k;
-                        pG.Value = gid;
-                        pA.Value = isAuth ? 1 : 0;
-                        keyCmd.ExecuteNonQuery();
-                    }
-                }
-
-                // 4. Upsert dirty groups
-                if (dirtyGroups.Count > 0)
-                {
-                    using var grpCmd = _connection.CreateCommand();
-                    grpCmd.Transaction = tx;
-                    grpCmd.CommandText = @"
+                    ");
+    private static readonly string SqlSaveDedupBatch4 = Checked(@"
                         INSERT INTO dedup_groups (
                             group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
                             name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
@@ -2038,7 +2047,80 @@ public class DatabaseService : IDisposable
                             backdrop_item_id = excluded.backdrop_item_id,
                             backdrop_server_id = excluded.backdrop_server_id,
                             tmdb_key = excluded.tmdb_key;
-                    ";
+                    ");
+    private static readonly string SqlSaveDedupBatch5 = Checked("UPDATE cached_items SET group_id = $gid, dedup_group_id = $gidStr WHERE id = $id AND server_id = $srv;");
+
+    public void SaveDedupBatch(
+        List<DedupGroupRecord> dirtyGroups,
+        List<int> deletedGroupIds,
+        List<(int FromGid, int ToGid)> remappedGroups,
+        List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave,
+        List<(string ServerId, string ItemId, int GroupId)>? itemAssignments = null)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var tx = _connection.BeginTransaction();
+            try
+            {
+                // 1. Remap cached_items if groups were merged
+                if (remappedGroups.Count > 0)
+                {
+                    using var remapCmd = _connection.CreateCommand();
+                    remapCmd.Transaction = tx;
+                    remapCmd.CommandText = SqlSaveDedupBatch;
+                    var pTo = remapCmd.Parameters.Add("$toGid", SqliteType.Integer);
+                    var pToStr = remapCmd.Parameters.Add("$toGidStr", SqliteType.Text);
+                    var pFrom = remapCmd.Parameters.Add("$fromGid", SqliteType.Integer);
+
+                    foreach (var (fromGid, toGid) in remappedGroups)
+                    {
+                        pFrom.Value = fromGid;
+                        pTo.Value = toGid;
+                        pToStr.Value = toGid.ToString();
+                        remapCmd.ExecuteNonQuery();
+                    }
+                }
+
+                // 2. Delete loser groups
+                if (deletedGroupIds.Count > 0)
+                {
+                    using var delCmd = _connection.CreateCommand();
+                    delCmd.Transaction = tx;
+                    delCmd.CommandText = SqlSaveDedupBatch2;
+                    var pDel = delCmd.Parameters.Add("$gid", SqliteType.Integer);
+                    foreach (var id in deletedGroupIds)
+                    {
+                        pDel.Value = id;
+                        delCmd.ExecuteNonQuery();
+                    }
+                }
+
+                // 3. Upsert keys
+                if (keysToSave.Count > 0)
+                {
+                    using var keyCmd = _connection.CreateCommand();
+                    keyCmd.Transaction = tx;
+                    keyCmd.CommandText = SqlSaveDedupBatch3;
+                    var pK = keyCmd.Parameters.Add("$key", SqliteType.Text);
+                    var pG = keyCmd.Parameters.Add("$group_id", SqliteType.Integer);
+                    var pA = keyCmd.Parameters.Add("$is_auth", SqliteType.Integer);
+
+                    foreach (var (k, gid, isAuth) in keysToSave)
+                    {
+                        pK.Value = k;
+                        pG.Value = gid;
+                        pA.Value = isAuth ? 1 : 0;
+                        keyCmd.ExecuteNonQuery();
+                    }
+                }
+
+                // 4. Upsert dirty groups
+                if (dirtyGroups.Count > 0)
+                {
+                    using var grpCmd = _connection.CreateCommand();
+                    grpCmd.Transaction = tx;
+                    grpCmd.CommandText = SqlSaveDedupBatch4;
 
                     var pGroupId = grpCmd.Parameters.Add("$group_id", SqliteType.Integer);
                     var pItemType = grpCmd.Parameters.Add("$item_type", SqliteType.Text);
@@ -2106,7 +2188,7 @@ public class DatabaseService : IDisposable
                 {
                     using var assignCmd = _connection.CreateCommand();
                     assignCmd.Transaction = tx;
-                    assignCmd.CommandText = "UPDATE cached_items SET group_id = $gid, dedup_group_id = $gidStr WHERE id = $id AND server_id = $srv;";
+                    assignCmd.CommandText = SqlSaveDedupBatch5;
                     var pGid = assignCmd.Parameters.Add("$gid", SqliteType.Integer);
                     var pGidStr = assignCmd.Parameters.Add("$gidStr", SqliteType.Text);
                     var pId = assignCmd.Parameters.Add("$id", SqliteType.Text);
@@ -2133,6 +2215,17 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetDedupStateForIndex = Checked(@"
+                    SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
+                           name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
+                           date_created, series_group_id, season_number, episode_number,
+                           max_height, has_4k, max_bitrate, audio_formats,
+                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
+                    FROM dedup_groups;
+                ");
+    private static readonly string SqlGetDedupStateForIndex2 = Checked("SELECT key, group_id, is_authoritative FROM dedup_keys;");
+    private static readonly string SqlGetDedupStateForIndex3 = Checked("SELECT server_id, id, group_id FROM cached_items WHERE group_id IS NOT NULL;");
+
     public (List<DedupGroupRecord> Groups, List<(string Key, int GroupId, bool IsAuthoritative)> Keys, List<(string ServerId, string ItemId, int GroupId)> Items) GetDedupStateForIndex()
     {
         var groups = new List<DedupGroupRecord>();
@@ -2154,14 +2247,7 @@ public class DatabaseService : IDisposable
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = @"
-                    SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
-                           name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
-                           date_created, series_group_id, season_number, episode_number,
-                           max_height, has_4k, max_bitrate, audio_formats,
-                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
-                    FROM dedup_groups;
-                ";
+                cmd.CommandText = SqlGetDedupStateForIndex;
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -2203,7 +2289,7 @@ public class DatabaseService : IDisposable
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT key, group_id, is_authoritative FROM dedup_keys;";
+                cmd.CommandText = SqlGetDedupStateForIndex2;
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -2215,7 +2301,7 @@ public class DatabaseService : IDisposable
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT server_id, id, group_id FROM cached_items WHERE group_id IS NOT NULL;";
+                cmd.CommandText = SqlGetDedupStateForIndex3;
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -2231,6 +2317,8 @@ public class DatabaseService : IDisposable
     {
         UpdateLocalPlaybackProgress(serverId, itemId, positionTicks, runtimeTicks);
     }
+
+    private static readonly string SqlClearResumeProgress = Checked("UPDATE cached_items SET json_data = @json WHERE id = @id AND server_id = @srv");
 
     // Clears the resume point without touching played state. With a serverId only that server's copy is
     // touched; item ids are per-server and collide across servers.
@@ -2267,7 +2355,7 @@ public class DatabaseService : IDisposable
                 {
                     using var upCmd = _connection?.CreateCommand();
                     if (upCmd == null) continue;
-                    upCmd.CommandText = "UPDATE cached_items SET json_data = @json WHERE id = @id AND server_id = @srv";
+                    upCmd.CommandText = SqlClearResumeProgress;
                     upCmd.Parameters.AddWithValue("@json", newJson);
                     upCmd.Parameters.AddWithValue("@id", uId);
                     upCmd.Parameters.AddWithValue("@srv", uSrv);
@@ -2289,6 +2377,10 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlUpdatePlaybackProgress = Checked("SELECT json_data FROM continue_watching_cache WHERE id = $id;");
+    private static readonly string SqlUpdatePlaybackProgress2 = Checked("UPDATE continue_watching_cache SET json_data = $json, updated_at = $ts WHERE id = $id;");
+    private static readonly string SqlUpdatePlaybackProgress3 = Checked("UPDATE cached_items SET json_data = $json WHERE id = $id AND server_id = $sid;");
+
     public void UpdatePlaybackProgress(string itemId, string serverId, long positionTicks)
     {
         lock (_dbLock)
@@ -2299,7 +2391,7 @@ public class DatabaseService : IDisposable
                 // 1. Update continue_watching_cache
                 using (var cmd = _connection.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT json_data FROM continue_watching_cache WHERE id = $id;";
+                    cmd.CommandText = SqlUpdatePlaybackProgress;
                     cmd.Parameters.AddWithValue("$id", itemId);
                     var existing = cmd.ExecuteScalar() as string;
                     if (!string.IsNullOrEmpty(existing))
@@ -2313,7 +2405,7 @@ public class DatabaseService : IDisposable
                             it.UserData.LastPlayedDate = DateTime.UtcNow;
 
                             using var upCmd = _connection.CreateCommand();
-                            upCmd.CommandText = "UPDATE continue_watching_cache SET json_data = $json, updated_at = $ts WHERE id = $id;";
+                            upCmd.CommandText = SqlUpdatePlaybackProgress2;
                             upCmd.Parameters.AddWithValue("$json", JsonSerializer.Serialize(it));
                             upCmd.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                             upCmd.Parameters.AddWithValue("$id", itemId);
@@ -2350,7 +2442,7 @@ public class DatabaseService : IDisposable
                             it.UserData.LastPlayedDate = DateTime.UtcNow;
 
                             using var upCmd = _connection.CreateCommand();
-                            upCmd.CommandText = "UPDATE cached_items SET json_data = $json WHERE id = $id AND server_id = $sid;";
+                            upCmd.CommandText = SqlUpdatePlaybackProgress3;
                             upCmd.Parameters.AddWithValue("$json", JsonSerializer.Serialize(it));
                             upCmd.Parameters.AddWithValue("$id", itemId);
                             upCmd.Parameters.AddWithValue("$sid", sid);
@@ -2366,13 +2458,15 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetSyncCheckpoint = Checked("SELECT start_index, total_items, is_completed, last_synced FROM sync_checkpoints WHERE server_id = $server_id AND library_id = $library_id;");
+
     public SyncCheckpoint? GetSyncCheckpoint(string serverId, string libraryId)
     {
         lock (_dbLock)
         {
             if (_connection == null) return null;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT start_index, total_items, is_completed, last_synced FROM sync_checkpoints WHERE server_id = $server_id AND library_id = $library_id;";
+            cmd.CommandText = SqlGetSyncCheckpoint;
             cmd.Parameters.AddWithValue("$server_id", serverId);
             cmd.Parameters.AddWithValue("$library_id", libraryId);
             using var reader = cmd.ExecuteReader();
@@ -2392,13 +2486,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public void SaveSyncCheckpoint(string serverId, string libraryId, int startIndex, int totalItems, bool isCompleted)
-    {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
+    private static readonly string SqlSaveSyncCheckpoint = Checked(@"
                 INSERT INTO sync_checkpoints (server_id, library_id, start_index, total_items, is_completed, last_synced)
                 VALUES ($server_id, $library_id, $start_index, $total_items, $is_completed, $last_synced)
                 ON CONFLICT(server_id, library_id) DO UPDATE SET
@@ -2406,7 +2494,15 @@ public class DatabaseService : IDisposable
                     total_items = excluded.total_items,
                     is_completed = excluded.is_completed,
                     last_synced = excluded.last_synced;
-            ";
+            ");
+
+    public void SaveSyncCheckpoint(string serverId, string libraryId, int startIndex, int totalItems, bool isCompleted)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlSaveSyncCheckpoint;
             cmd.Parameters.AddWithValue("$server_id", serverId);
             cmd.Parameters.AddWithValue("$library_id", libraryId);
             cmd.Parameters.AddWithValue("$start_index", startIndex);
@@ -2417,6 +2513,9 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlClearSyncCheckpoints = Checked("DELETE FROM sync_checkpoints;");
+    private static readonly string SqlClearSyncCheckpoints2 = Checked("DELETE FROM sync_checkpoints WHERE server_id = $server_id;");
+
     public void ClearSyncCheckpoints(string? serverId = null)
     {
         lock (_dbLock)
@@ -2425,16 +2524,18 @@ public class DatabaseService : IDisposable
             using var cmd = _connection.CreateCommand();
             if (string.IsNullOrEmpty(serverId))
             {
-                cmd.CommandText = "DELETE FROM sync_checkpoints;";
+                cmd.CommandText = SqlClearSyncCheckpoints;
             }
             else
             {
-                cmd.CommandText = "DELETE FROM sync_checkpoints WHERE server_id = $server_id;";
+                cmd.CommandText = SqlClearSyncCheckpoints2;
                 cmd.Parameters.AddWithValue("$server_id", serverId);
             }
             cmd.ExecuteNonQuery();
         }
     }
+
+    private static readonly string SqlGetAllCachedItemsForParent = Checked("SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE parent_id = $parent_id AND server_id = $server_id;");
 
     public List<EmbyItem> GetAllCachedItemsForParent(string parentId, string serverId)
     {
@@ -2443,7 +2544,7 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return items;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE parent_id = $parent_id AND server_id = $server_id;";
+            cmd.CommandText = SqlGetAllCachedItemsForParent;
             cmd.Parameters.AddWithValue("$parent_id", parentId);
             cmd.Parameters.AddWithValue("$server_id", serverId);
             using var reader = cmd.ExecuteReader();
@@ -2462,11 +2563,14 @@ public class DatabaseService : IDisposable
                         items.Add(item);
                     }
                 }
-                catch { }
+                catch (Exception ex) when (QueryFailed(ex, SqlGetAllCachedItemsForParent)) { }
             }
         }
         return items;
     }
+
+    private static readonly string SqlGetAllCachedItems = Checked("SELECT json_data, server_id, dedup_group_id FROM cached_items;");
+    private static readonly string SqlGetAllCachedItems2 = Checked("SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE server_id = $server_id;");
 
     public List<EmbyItem> GetAllCachedItems(string? serverId = null)
     {
@@ -2477,11 +2581,11 @@ public class DatabaseService : IDisposable
             using var cmd = _connection.CreateCommand();
             if (string.IsNullOrEmpty(serverId))
             {
-                cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items;";
+                cmd.CommandText = SqlGetAllCachedItems;
             }
             else
             {
-                cmd.CommandText = "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE server_id = $server_id;";
+                cmd.CommandText = SqlGetAllCachedItems2;
                 cmd.Parameters.AddWithValue("$server_id", serverId);
             }
             using var reader = cmd.ExecuteReader();
@@ -2500,11 +2604,21 @@ public class DatabaseService : IDisposable
                         items.Add(item);
                     }
                 }
-                catch { }
+                catch (Exception ex) when (QueryFailed(ex, cmd.CommandText)) { }
             }
         }
         return items;
     }
+
+    private static readonly string SqlSaveMediaStreamPreference = Checked(@"
+                    INSERT INTO media_stream_preferences (media_key, audio_track_id, audio_language, subtitle_track_id, subtitle_language, updated_at)
+                    VALUES ($key, $aid, $alang, $sid, $slang, $updated)
+                    ON CONFLICT(media_key) DO UPDATE SET
+                        audio_track_id = COALESCE($aid, audio_track_id),
+                        audio_language = COALESCE($alang, audio_language),
+                        subtitle_track_id = COALESCE($sid, subtitle_track_id),
+                        subtitle_language = COALESCE($slang, subtitle_language),
+                        updated_at = $updated;");
 
     public void SaveMediaStreamPreference(string mediaKey, int? audioTrackId, string? audioLang, int? subtitleTrackId, string? subtitleLang)
     {
@@ -2515,15 +2629,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT INTO media_stream_preferences (media_key, audio_track_id, audio_language, subtitle_track_id, subtitle_language, updated_at)
-                    VALUES ($key, $aid, $alang, $sid, $slang, $updated)
-                    ON CONFLICT(media_key) DO UPDATE SET
-                        audio_track_id = COALESCE($aid, audio_track_id),
-                        audio_language = COALESCE($alang, audio_language),
-                        subtitle_track_id = COALESCE($sid, subtitle_track_id),
-                        subtitle_language = COALESCE($slang, subtitle_language),
-                        updated_at = $updated;";
+                cmd.CommandText = SqlSaveMediaStreamPreference;
                 cmd.Parameters.AddWithValue("$key", mediaKey);
                 cmd.Parameters.AddWithValue("$aid", (object?)audioTrackId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$alang", (object?)audioLang ?? DBNull.Value);
@@ -2539,6 +2645,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetMediaStreamPreference = Checked("SELECT audio_track_id, audio_language, subtitle_track_id, subtitle_language FROM media_stream_preferences WHERE media_key = $key;");
+
     public (int? AudioTrackId, string? AudioLanguage, int? SubtitleTrackId, string? SubtitleLanguage)? GetMediaStreamPreference(string mediaKey)
     {
         if (string.IsNullOrWhiteSpace(mediaKey)) return null;
@@ -2548,7 +2656,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "SELECT audio_track_id, audio_language, subtitle_track_id, subtitle_language FROM media_stream_preferences WHERE media_key = $key;";
+                cmd.CommandText = SqlGetMediaStreamPreference;
                 cmd.Parameters.AddWithValue("$key", mediaKey);
                 using var reader = cmd.ExecuteReader();
                 if (reader.Read())
@@ -2568,75 +2676,34 @@ public class DatabaseService : IDisposable
         return null;
     }
 
+    // Prepares every registered statement (CheckedStatements) against the open schema, so a column the code
+    // names but the schema lacks fails at startup with the statement, instead of on the call path.
     public void SelfCheckPreparedStatements()
     {
         lock (_dbLock)
         {
             if (_connection == null) return;
-
-            string[] queriesToCheck = new[]
+            var failures = new List<string>();
+            foreach (var sql in CheckedStatements)
             {
-                "SELECT json_data, server_id, dedup_group_id, height, width, video_codec, audio_codec, bitrate, size_bytes, hdr_type, edition FROM cached_items WHERE group_id = $gid OR dedup_group_id = $group_id;",
-                "SELECT COALESCE(CAST(group_id AS TEXT), dedup_group_id) FROM cached_items WHERE id = $id LIMIT 1;",
-                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE dedup_group_id = $group_id;",
-                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE tmdb_id = $val AND id != $id;",
-                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE imdb_id = $val AND id != $id;",
-                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE LOWER(name) = $name AND production_year = $year AND id != $id;",
-                "SELECT id, server_id, json_data FROM cached_items WHERE id = @id;",
-                "SELECT json_data, server_id, dedup_group_id FROM cached_items WHERE parent_id = $parent_id AND server_id = $server_id;",
-                "SELECT COUNT(*) FROM cached_items;",
-                "SELECT COUNT(*) FROM dedup_groups;",
-                "SELECT start_index, total_items, is_completed, last_synced FROM sync_checkpoints WHERE server_id = $server_id AND library_id = $library_id;",
-                "SELECT id, item_id, server_id, item_name, series_name, item_type, duration_seconds, watched_at, source, genres FROM watch_events;",
-                "SELECT key, trakt_type, tmdb_id, imdb_id, show_tmdb_id, season_number, episode_number, watched_at, synced_at FROM trakt_watched_history;",
-                "SELECT json_data, server_id FROM continue_watching_cache ORDER BY sort_order ASC;",
-                "SELECT key, group_id, is_authoritative FROM dedup_keys WHERE key = $key;",
-                "SELECT server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally FROM user_data WHERE server_id = $server_id AND item_id = $item_id;",
-                "SELECT queue_id, server_id, item_id, position_ticks, mark_played, queued_utc, attempts FROM sibling_write_queue ORDER BY queued_utc ASC LIMIT 50;",
-                @"SELECT g.group_id, g.item_type, g.primary_item_id, g.primary_server, g.is_provisional, g.version_count,
-                         g.name, g.sort_name, g.year, g.overview, g.image_tag, g.backdrop_tag, g.community_rating,
-                         g.date_created, g.series_group_id, g.season_number, g.episode_number,
-                         g.max_height, g.has_4k, g.max_bitrate, g.audio_formats,
-                         MAX(u.last_played_utc) AS latest_played,
-                         u.position_ticks, u.runtime_ticks, u.server_id, u.item_id
-                  FROM user_data u
-                  JOIN cached_items c ON c.id = u.item_id AND c.server_id = u.server_id
-                  JOIN dedup_groups g ON g.group_id = c.group_id
-                  WHERE u.position_ticks > 0 AND u.played = 0
-                  GROUP BY g.group_id
-                  ORDER BY latest_played DESC
-                  LIMIT 20;",
-                "SELECT queue_id, group_id, action, progress, payload, queued_utc, attempts FROM trakt_queue ORDER BY queued_utc ASC LIMIT 50;",
-                "SELECT source, ref, item_type, added_utc, title, year, tmdb_key, pending_op FROM watchlist_entries;",
-                "SELECT provider_key, poster_path, backdrop_path, still_path, overview, vote_average, fetched_utc, not_found FROM tmdb_metadata WHERE provider_key = $key;",
-                "SELECT name, key, value FROM integration_state WHERE name = $name;",
-                @"SELECT g.group_id, g.name, g.year, g.image_tag, g.image_server_id, g.image_item_id, g.tmdb_key,
-                         MIN(w.added_utc) AS added, 1 AS in_lib, w.source, w.ref, g.item_type, t.poster_path
-                  FROM watchlist_entries w
-                  JOIN cached_items c ON c.server_id = w.source AND c.id = w.ref
-                  JOIN dedup_groups g ON g.group_id = c.group_id
-                  LEFT JOIN tmdb_metadata t ON t.provider_key = g.tmdb_key
-                  WHERE w.source <> 'trakt' AND COALESCE(w.pending_op, '') <> 'remove'
-                  GROUP BY g.group_id;"
-            };
-
-            foreach (var sql in queriesToCheck)
-            {
-                using var cmd = _connection.CreateCommand();
-                cmd.CommandText = sql;
-                cmd.Prepare();
+                try
+                {
+                    using var cmd = _connection.CreateCommand();
+                    cmd.CommandText = sql;
+                    cmd.Prepare();
+                }
+                catch (SqliteException ex)
+                {
+                    failures.Add($"{ex.Message} in: {string.Join(' ', sql.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))}");
+                }
             }
-            NocturneLogger.Info("DatabaseService", "SelfCheckPreparedStatements passed all syntax and column validations.");
+            if (failures.Count > 0)
+                throw new InvalidOperationException($"{failures.Count} of {CheckedStatements.Count} statements do not prepare against this schema:\n{string.Join("\n", failures)}");
+            NocturneLogger.Info("DatabaseService", $"SelfCheckPreparedStatements prepared all {CheckedStatements.Count} registered statements.");
         }
     }
 
-    public void UpdateLocalPlaybackProgress(string serverId, string itemId, long positionTicks, bool played, long? runtimeTicks = null)
-    {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
+    private static readonly string SqlUpdateLocalPlaybackProgress = Checked(@"
                 INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
                 VALUES ($server_id, $item_id, $position_ticks, $runtime_ticks, $played, $last_played_utc, 1)
                 ON CONFLICT(server_id, item_id) DO UPDATE SET
@@ -2645,7 +2712,15 @@ public class DatabaseService : IDisposable
                     played = excluded.played,
                     last_played_utc = excluded.last_played_utc,
                     updated_locally = 1;
-            ";
+            ");
+
+    public void UpdateLocalPlaybackProgress(string serverId, string itemId, long positionTicks, bool played, long? runtimeTicks = null)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlUpdateLocalPlaybackProgress;
             cmd.Parameters.AddWithValue("$server_id", serverId);
             cmd.Parameters.AddWithValue("$item_id", itemId);
             cmd.Parameters.AddWithValue("$position_ticks", positionTicks);
@@ -2661,6 +2736,14 @@ public class DatabaseService : IDisposable
         UpdateLocalPlaybackProgress(serverId, itemId, positionTicks, false, runtimeTicks);
     }
 
+    private static readonly string SqlMarkLocalGroupPlayed = Checked(@"
+                UPDATE user_data
+                   SET played = 1, position_ticks = 0, last_played_utc = $now, updated_locally = 1
+                 WHERE (server_id, item_id) IN (
+                     SELECT server_id, id FROM cached_items WHERE group_id = $group_id
+                 );
+            ");
+
     public void MarkLocalGroupPlayed(long groupId)
     {
         lock (_dbLock)
@@ -2668,18 +2751,22 @@ public class DatabaseService : IDisposable
             if (_connection == null) return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
-                UPDATE user_data
-                   SET played = 1, position_ticks = 0, last_played_utc = $now, updated_locally = 1
-                 WHERE (server_id, item_id) IN (
-                     SELECT server_id, id FROM cached_items WHERE group_id = $group_id
-                 );
-            ";
+            cmd.CommandText = SqlMarkLocalGroupPlayed;
             cmd.Parameters.AddWithValue("$now", now);
             cmd.Parameters.AddWithValue("$group_id", groupId);
             cmd.ExecuteNonQuery();
         }
     }
+
+    private static readonly string SqlMarkLocalItemPlayed = Checked(@"
+                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
+                VALUES ($server_id, $item_id, 0, NULL, 1, $now, 1)
+                ON CONFLICT(server_id, item_id) DO UPDATE SET
+                    played = 1,
+                    position_ticks = 0,
+                    last_played_utc = excluded.last_played_utc,
+                    updated_locally = 1;
+            ");
 
     public void MarkLocalItemPlayed(string serverId, string itemId)
     {
@@ -2688,15 +2775,7 @@ public class DatabaseService : IDisposable
             if (_connection == null) return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
-                VALUES ($server_id, $item_id, 0, NULL, 1, $now, 1)
-                ON CONFLICT(server_id, item_id) DO UPDATE SET
-                    played = 1,
-                    position_ticks = 0,
-                    last_played_utc = excluded.last_played_utc,
-                    updated_locally = 1;
-            ";
+            cmd.CommandText = SqlMarkLocalItemPlayed;
             cmd.Parameters.AddWithValue("$server_id", serverId);
             cmd.Parameters.AddWithValue("$item_id", itemId);
             cmd.Parameters.AddWithValue("$now", now);
@@ -2704,13 +2783,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public void UpdateUserDataState(string serverId, string itemId, long positionTicks, long? runtimeTicks, bool played, long lastPlayedUtc, string origin = "local")
-    {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
+    private static readonly string SqlUpdateUserDataState = Checked(@"
                 INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, origin, updated_locally)
                 VALUES ($server_id, $item_id, $position_ticks, $runtime_ticks, $played, $last_played_utc, $origin, 1)
                 ON CONFLICT(server_id, item_id) DO UPDATE SET
@@ -2720,7 +2793,15 @@ public class DatabaseService : IDisposable
                     last_played_utc = excluded.last_played_utc,
                     origin = excluded.origin,
                     updated_locally = 1;
-            ";
+            ");
+
+    public void UpdateUserDataState(string serverId, string itemId, long positionTicks, long? runtimeTicks, bool played, long lastPlayedUtc, string origin = "local")
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlUpdateUserDataState;
             cmd.Parameters.AddWithValue("$server_id", serverId);
             cmd.Parameters.AddWithValue("$item_id", itemId);
             cmd.Parameters.AddWithValue("$position_ticks", positionTicks);
@@ -2737,15 +2818,7 @@ public class DatabaseService : IDisposable
         EnqueueSiblingPlaybackWrite(serverId, itemId, positionTicks, markPlayed);
     }
 
-    public List<EmbyItem> GetContinueWatchingItems()
-    {
-        var list = new List<EmbyItem>();
-        lock (_dbLock)
-        {
-            if (_connection == null) return list;
-            using var cmd = _connection.CreateCommand();
-            // CRITICAL SQLITE INVARIANT: Exactly ONE aggregate function MAX(u.last_played_utc)
-            cmd.CommandText = @"
+    private static readonly string SqlGetContinueWatchingItems = Checked(@"
                 SELECT g.group_id, g.item_type, g.primary_item_id, g.primary_server, g.is_provisional, g.version_count,
                        g.name, g.sort_name, g.year, g.overview, g.image_tag, g.backdrop_tag, g.community_rating,
                        g.date_created, g.series_group_id, g.season_number, g.episode_number,
@@ -2760,7 +2833,17 @@ public class DatabaseService : IDisposable
                 GROUP BY g.group_id
                 ORDER BY latest_played DESC
                 LIMIT 20;
-            ";
+            ");
+
+    public List<EmbyItem> GetContinueWatchingItems()
+    {
+        var list = new List<EmbyItem>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            using var cmd = _connection.CreateCommand();
+            // CRITICAL SQLITE INVARIANT: Exactly ONE aggregate function MAX(u.last_played_utc)
+            cmd.CommandText = SqlGetContinueWatchingItems;
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -2799,14 +2882,7 @@ public class DatabaseService : IDisposable
         return list;
     }
 
-    public void EnqueueSiblingPlaybackWrite(string serverId, string itemId, long? positionTicks, bool markPlayed)
-    {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
+    private static readonly string SqlEnqueueSiblingPlaybackWrite = Checked(@"
                 INSERT INTO sibling_write_queue(server_id, item_id, position_ticks, mark_played, queued_utc)
                 VALUES ($server_id, $item_id, $position_ticks, $mark_played, $queued_utc)
                 ON CONFLICT(server_id, item_id) DO UPDATE SET
@@ -2814,7 +2890,16 @@ public class DatabaseService : IDisposable
                     mark_played = excluded.mark_played,
                     queued_utc = excluded.queued_utc,
                     attempts = 0;
-            ";
+            ");
+
+    public void EnqueueSiblingPlaybackWrite(string serverId, string itemId, long? positionTicks, bool markPlayed)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlEnqueueSiblingPlaybackWrite;
             cmd.Parameters.AddWithValue("$server_id", serverId);
             cmd.Parameters.AddWithValue("$item_id", itemId);
             cmd.Parameters.AddWithValue("$position_ticks", (object?)positionTicks ?? DBNull.Value);
@@ -2824,6 +2909,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetPendingSiblingWrites = Checked("SELECT queue_id, server_id, item_id, position_ticks, mark_played FROM sibling_write_queue WHERE attempts < $max_attempts ORDER BY queued_utc ASC LIMIT $limit;");
+
     public List<(int QueueId, string ServerId, string ItemId, long? PositionTicks, bool MarkPlayed)> GetPendingSiblingWrites(int limit = 50)
     {
         var list = new List<(int, string, string, long?, bool)>();
@@ -2831,7 +2918,7 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return list;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT queue_id, server_id, item_id, position_ticks, mark_played FROM sibling_write_queue WHERE attempts < $max_attempts ORDER BY queued_utc ASC LIMIT $limit;";
+            cmd.CommandText = SqlGetPendingSiblingWrites;
             cmd.Parameters.AddWithValue("$max_attempts", MaxSiblingWriteAttempts);
             cmd.Parameters.AddWithValue("$limit", limit);
             using var reader = cmd.ExecuteReader();
@@ -2851,17 +2938,21 @@ public class DatabaseService : IDisposable
     // Rows that keep failing stay in the table for diagnosis but stop blocking the head of the queue.
     public const int MaxSiblingWriteAttempts = 10;
 
+    private static readonly string SqlRecordSiblingWriteFailure = Checked("UPDATE sibling_write_queue SET attempts = attempts + 1 WHERE queue_id = $qid;");
+
     public void RecordSiblingWriteFailure(int queueId)
     {
         lock (_dbLock)
         {
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "UPDATE sibling_write_queue SET attempts = attempts + 1 WHERE queue_id = $qid;";
+            cmd.CommandText = SqlRecordSiblingWriteFailure;
             cmd.Parameters.AddWithValue("$qid", queueId);
             cmd.ExecuteNonQuery();
         }
     }
+
+    private static readonly string SqlGetMigrationState = Checked("SELECT value FROM migration_state WHERE key = $key;");
 
     public string? GetMigrationState(string key)
     {
@@ -2869,11 +2960,13 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return null;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT value FROM migration_state WHERE key = $key;";
+            cmd.CommandText = SqlGetMigrationState;
             cmd.Parameters.AddWithValue("$key", key);
             return cmd.ExecuteScalar() as string;
         }
     }
+
+    private static readonly string SqlSetMigrationState = Checked("INSERT INTO migration_state (key, value) VALUES ($key, $value) ON CONFLICT(key) DO UPDATE SET value = excluded.value;");
 
     public void SetMigrationState(string key, string value)
     {
@@ -2881,12 +2974,14 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "INSERT INTO migration_state (key, value) VALUES ($key, $value) ON CONFLICT(key) DO UPDATE SET value = excluded.value;";
+            cmd.CommandText = SqlSetMigrationState;
             cmd.Parameters.AddWithValue("$key", key);
             cmd.Parameters.AddWithValue("$value", value);
             cmd.ExecuteNonQuery();
         }
     }
+
+    private static readonly string SqlRemoveSiblingWrite = Checked("DELETE FROM sibling_write_queue WHERE queue_id = $qid;");
 
     public void RemoveSiblingWrite(int queueId)
     {
@@ -2894,7 +2989,7 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM sibling_write_queue WHERE queue_id = $qid;";
+            cmd.CommandText = SqlRemoveSiblingWrite;
             cmd.Parameters.AddWithValue("$qid", queueId);
             cmd.ExecuteNonQuery();
         }
@@ -2911,6 +3006,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetCachedItemsChunk = Checked("SELECT rowid, json_data, server_id FROM cached_items NOT INDEXED WHERE rowid > $after AND type IN ('Movie', 'Series', 'Episode') ORDER BY rowid LIMIT $limit;");
+
     // Keyset paging: the caller passes the last rowid it saw. LIMIT/OFFSET re-read and re-sorted every
     // preceding row's JSON per chunk (26 s per chunk at offset 600k on the live DB; the rebuild never finished).
     // NOT INDEXED walks the rowid b-tree in order instead of sorting the type index's matches.
@@ -2922,7 +3019,7 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return (items, lastRowId);
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT rowid, json_data, server_id FROM cached_items NOT INDEXED WHERE rowid > $after AND type IN ('Movie', 'Series', 'Episode') ORDER BY rowid LIMIT $limit;";
+            cmd.CommandText = SqlGetCachedItemsChunk;
             cmd.Parameters.AddWithValue("$limit", limit);
             cmd.Parameters.AddWithValue("$after", afterRowId);
             using var reader = cmd.ExecuteReader();
@@ -3066,6 +3163,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetItemsWithNullGroupId = Checked("SELECT json_data, server_id FROM cached_items WHERE group_id IS NULL;");
+
     public List<EmbyItem> GetItemsWithNullGroupId()
     {
         var items = new List<EmbyItem>();
@@ -3073,7 +3172,7 @@ public class DatabaseService : IDisposable
         {
             if (_connection == null) return items;
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT json_data, server_id FROM cached_items WHERE group_id IS NULL;";
+            cmd.CommandText = SqlGetItemsWithNullGroupId;
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -3199,6 +3298,11 @@ public class DatabaseService : IDisposable
     // Trakt Scrobble Queue (§4.4, §7)
     // =========================================================================
 
+    private static readonly string SqlEnqueueTraktEvent = Checked(@"
+                    INSERT INTO trakt_queue (group_id, action, progress, payload, queued_utc, attempts)
+                    VALUES ($group_id, $action, $progress, $payload, $queued_utc, 0);
+                ");
+
     public void EnqueueTraktEvent(long groupId, string action, double progress, string? payload)
     {
         lock (_dbLock)
@@ -3207,10 +3311,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT INTO trakt_queue (group_id, action, progress, payload, queued_utc, attempts)
-                    VALUES ($group_id, $action, $progress, $payload, $queued_utc, 0);
-                ";
+                cmd.CommandText = SqlEnqueueTraktEvent;
                 cmd.Parameters.AddWithValue("$group_id", groupId);
                 cmd.Parameters.AddWithValue("$action", action);
                 cmd.Parameters.AddWithValue("$progress", progress);
@@ -3225,6 +3326,13 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetPendingTraktEvents = Checked(@"
+                    SELECT queue_id, group_id, action, progress, payload, queued_utc, attempts
+                    FROM trakt_queue
+                    ORDER BY queued_utc ASC
+                    LIMIT $limit;
+                ");
+
     public List<TraktQueueItem> GetPendingTraktEvents(int limit = 50)
     {
         var list = new List<TraktQueueItem>();
@@ -3234,12 +3342,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT queue_id, group_id, action, progress, payload, queued_utc, attempts
-                    FROM trakt_queue
-                    ORDER BY queued_utc ASC
-                    LIMIT $limit;
-                ";
+                cmd.CommandText = SqlGetPendingTraktEvents;
                 cmd.Parameters.AddWithValue("$limit", limit);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
@@ -3263,6 +3366,8 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    private static readonly string SqlRemoveTraktEvent = Checked("DELETE FROM trakt_queue WHERE queue_id = $id;");
+
     public void RemoveTraktEvent(long queueId)
     {
         lock (_dbLock)
@@ -3271,7 +3376,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "DELETE FROM trakt_queue WHERE queue_id = $id;";
+                cmd.CommandText = SqlRemoveTraktEvent;
                 cmd.Parameters.AddWithValue("$id", queueId);
                 cmd.ExecuteNonQuery();
             }
@@ -3282,6 +3387,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlIncrementTraktEventAttempts = Checked("UPDATE trakt_queue SET attempts = attempts + 1 WHERE queue_id = $id;");
+
     public void IncrementTraktEventAttempts(long queueId)
     {
         lock (_dbLock)
@@ -3290,7 +3397,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "UPDATE trakt_queue SET attempts = attempts + 1 WHERE queue_id = $id;";
+                cmd.CommandText = SqlIncrementTraktEventAttempts;
                 cmd.Parameters.AddWithValue("$id", queueId);
                 cmd.ExecuteNonQuery();
             }
@@ -3301,6 +3408,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetTraktQueueCount = Checked("SELECT COUNT(*) FROM trakt_queue;");
+
     public int GetTraktQueueCount()
     {
         lock (_dbLock)
@@ -3309,10 +3418,10 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "SELECT COUNT(*) FROM trakt_queue;";
+                cmd.CommandText = SqlGetTraktQueueCount;
                 return Convert.ToInt32(cmd.ExecuteScalar());
             }
-            catch { return 0; }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetTraktQueueCount)) { return 0; }
         }
     }
 
@@ -3320,15 +3429,7 @@ public class DatabaseService : IDisposable
     // Watchlist Entries (§4.2, §9)
     // =========================================================================
 
-    public void UpsertWatchlistEntry(string source, string @ref, string itemType, long addedUtc, string? title = null, int? year = null, string? tmdbKey = null, string? pendingOp = null)
-    {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            try
-            {
-                using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
+    private static readonly string SqlUpsertWatchlistEntry = Checked(@"
                     INSERT INTO watchlist_entries (source, ref, item_type, added_utc, title, year, tmdb_key, pending_op)
                     VALUES ($source, $ref, $item_type, $added_utc, $title, $year, $tmdb_key, $pending_op)
                     ON CONFLICT(source, ref) DO UPDATE SET
@@ -3338,7 +3439,17 @@ public class DatabaseService : IDisposable
                         year = COALESCE(excluded.year, watchlist_entries.year),
                         tmdb_key = COALESCE(excluded.tmdb_key, watchlist_entries.tmdb_key),
                         pending_op = excluded.pending_op;
-                ";
+                ");
+
+    public void UpsertWatchlistEntry(string source, string @ref, string itemType, long addedUtc, string? title = null, int? year = null, string? tmdbKey = null, string? pendingOp = null)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlUpsertWatchlistEntry;
                 cmd.Parameters.AddWithValue("$source", source);
                 cmd.Parameters.AddWithValue("$ref", @ref);
                 cmd.Parameters.AddWithValue("$item_type", itemType);
@@ -3356,6 +3467,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlRemoveWatchlistEntry = Checked("DELETE FROM watchlist_entries WHERE source = $source AND ref = $ref;");
+
     public void RemoveWatchlistEntry(string source, string @ref)
     {
         lock (_dbLock)
@@ -3364,7 +3477,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "DELETE FROM watchlist_entries WHERE source = $source AND ref = $ref;";
+                cmd.CommandText = SqlRemoveWatchlistEntry;
                 cmd.Parameters.AddWithValue("$source", source);
                 cmd.Parameters.AddWithValue("$ref", @ref);
                 cmd.ExecuteNonQuery();
@@ -3376,6 +3489,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlSetWatchlistPendingOp = Checked("UPDATE watchlist_entries SET pending_op = $pending_op WHERE source = $source AND ref = $ref;");
+
     public void SetWatchlistPendingOp(string source, string @ref, string? pendingOp)
     {
         lock (_dbLock)
@@ -3384,7 +3499,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "UPDATE watchlist_entries SET pending_op = $pending_op WHERE source = $source AND ref = $ref;";
+                cmd.CommandText = SqlSetWatchlistPendingOp;
                 cmd.Parameters.AddWithValue("$source", source);
                 cmd.Parameters.AddWithValue("$ref", @ref);
                 cmd.Parameters.AddWithValue("$pending_op", (object?)pendingOp ?? DBNull.Value);
@@ -3397,16 +3512,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public List<WatchlistCard> GetMergedWatchlist()
-    {
-        var list = new List<WatchlistCard>();
-        lock (_dbLock)
-        {
-            if (_connection == null) return list;
-            try
-            {
-                using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
+    private static readonly string SqlGetMergedWatchlist = Checked(@"
                     SELECT g.group_id, g.name, g.year, g.image_tag, g.image_server_id, g.image_item_id, g.tmdb_key,
                            MIN(w.added_utc) AS added, 1 AS in_lib, w.source, w.ref, g.item_type, t.poster_path
                     FROM watchlist_entries w
@@ -3435,7 +3541,18 @@ public class DatabaseService : IDisposable
                     WHERE w.source = 'trakt' AND COALESCE(w.pending_op, '') <> 'remove'
                       AND NOT EXISTS (SELECT 1 FROM dedup_keys k WHERE k.key = w.ref)
                     ORDER BY added DESC;
-                ";
+                ");
+
+    public List<WatchlistCard> GetMergedWatchlist()
+    {
+        var list = new List<WatchlistCard>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlGetMergedWatchlist;
                 using var reader = cmd.ExecuteReader();
                 var seenGroups = new HashSet<long>();
                 var seenRefs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -3491,6 +3608,14 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    private static readonly string SqlIsInWatchlist = Checked(@"
+                    SELECT 1 FROM watchlist_entries w
+                    JOIN cached_items c ON c.server_id = w.source AND c.id = w.ref
+                    WHERE c.group_id = $gid AND COALESCE(w.pending_op, '') <> 'remove'
+                    LIMIT 1;
+                ");
+    private static readonly string SqlIsInWatchlist2 = Checked("SELECT 1 FROM watchlist_entries WHERE tmdb_key = $key AND COALESCE(pending_op, '') <> 'remove' LIMIT 1;");
+
     public bool IsInWatchlist(long groupId, string? tmdbKey = null)
     {
         lock (_dbLock)
@@ -3499,12 +3624,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT 1 FROM watchlist_entries w
-                    JOIN cached_items c ON c.server_id = w.source AND c.id = w.ref
-                    WHERE c.group_id = $gid AND COALESCE(w.pending_op, '') <> 'remove'
-                    LIMIT 1;
-                ";
+                cmd.CommandText = SqlIsInWatchlist;
                 cmd.Parameters.AddWithValue("$gid", groupId);
                 var res = cmd.ExecuteScalar();
                 if (res != null) return true;
@@ -3512,12 +3632,12 @@ public class DatabaseService : IDisposable
                 if (!string.IsNullOrEmpty(tmdbKey))
                 {
                     using var cmd2 = _connection.CreateCommand();
-                    cmd2.CommandText = "SELECT 1 FROM watchlist_entries WHERE tmdb_key = $key AND COALESCE(pending_op, '') <> 'remove' LIMIT 1;";
+                    cmd2.CommandText = SqlIsInWatchlist2;
                     cmd2.Parameters.AddWithValue("$key", tmdbKey);
                     return cmd2.ExecuteScalar() != null;
                 }
             }
-            catch { }
+            catch (Exception ex) when (QueryFailed(ex, SqlIsInWatchlist + " / " + SqlIsInWatchlist2)) { }
         }
         return false;
     }
@@ -3526,15 +3646,7 @@ public class DatabaseService : IDisposable
     // TMDB Fallback Metadata (§4.3, §10)
     // =========================================================================
 
-    public void UpsertTmdbMetadata(TmdbMetadata metadata)
-    {
-        lock (_dbLock)
-        {
-            if (_connection == null) return;
-            try
-            {
-                using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
+    private static readonly string SqlUpsertTmdbMetadata = Checked(@"
                     INSERT INTO tmdb_metadata (
                         provider_key, poster_path, backdrop_path, still_path, overview, vote_average, fetched_utc, not_found
                     ) VALUES (
@@ -3548,7 +3660,17 @@ public class DatabaseService : IDisposable
                         vote_average = excluded.vote_average,
                         fetched_utc = excluded.fetched_utc,
                         not_found = excluded.not_found;
-                ";
+                ");
+
+    public void UpsertTmdbMetadata(TmdbMetadata metadata)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlUpsertTmdbMetadata;
                 cmd.Parameters.AddWithValue("$provider_key", metadata.ProviderKey);
                 cmd.Parameters.AddWithValue("$poster_path", (object?)metadata.PosterPath ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$backdrop_path", (object?)metadata.BackdropPath ?? DBNull.Value);
@@ -3566,6 +3688,12 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetTmdbMetadata = Checked(@"
+                    SELECT provider_key, poster_path, backdrop_path, still_path, overview, vote_average, fetched_utc, not_found
+                    FROM tmdb_metadata
+                    WHERE provider_key = $key;
+                ");
+
     public TmdbMetadata? GetTmdbMetadata(string providerKey)
     {
         lock (_dbLock)
@@ -3574,11 +3702,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT provider_key, poster_path, backdrop_path, still_path, overview, vote_average, fetched_utc, not_found
-                    FROM tmdb_metadata
-                    WHERE provider_key = $key;
-                ";
+                cmd.CommandText = SqlGetTmdbMetadata;
                 cmd.Parameters.AddWithValue("$key", providerKey);
                 using var reader = cmd.ExecuteReader();
                 if (reader.Read())
@@ -3604,17 +3728,7 @@ public class DatabaseService : IDisposable
         return null;
     }
 
-    public List<(int GroupId, string ItemType, string TmdbKey, string? Title, int? Year, int? SeasonNumber, int? EpisodeNumber)> GetGroupsNeedingTmdbArt(int limit = 1000)
-    {
-        var list = new List<(int GroupId, string ItemType, string TmdbKey, string? Title, int? Year, int? SeasonNumber, int? EpisodeNumber)>();
-        lock (_dbLock)
-        {
-            if (_connection == null) return list;
-            try
-            {
-                long staleCutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (30 * 86400); // 30 days
-                using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
+    private static readonly string SqlGetGroupsNeedingTmdbArt = Checked(@"
                     SELECT g.group_id, g.item_type, g.tmdb_key, g.name, g.year, g.season_number, g.episode_number
                     FROM dedup_groups g
                     WHERE g.image_tag IS NULL
@@ -3625,7 +3739,19 @@ public class DatabaseService : IDisposable
                             AND (t.not_found = 1 OR t.fetched_utc > $staleCutoff)
                       )
                     LIMIT $limit;
-                ";
+                ");
+
+    public List<(int GroupId, string ItemType, string TmdbKey, string? Title, int? Year, int? SeasonNumber, int? EpisodeNumber)> GetGroupsNeedingTmdbArt(int limit = 1000)
+    {
+        var list = new List<(int GroupId, string ItemType, string TmdbKey, string? Title, int? Year, int? SeasonNumber, int? EpisodeNumber)>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            try
+            {
+                long staleCutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (30 * 86400); // 30 days
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlGetGroupsNeedingTmdbArt;
                 cmd.Parameters.AddWithValue("$staleCutoff", staleCutoff);
                 cmd.Parameters.AddWithValue("$limit", limit);
                 using var reader = cmd.ExecuteReader();
@@ -3650,6 +3776,16 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    private static readonly string SqlGetTmdbEnrichmentStats = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 0;");
+    private static readonly string SqlGetTmdbEnrichmentStats2 = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 1;");
+    private static readonly string SqlGetTmdbEnrichmentStats3 = Checked(@"
+                        SELECT COUNT(*)
+                        FROM dedup_groups g
+                        WHERE g.image_tag IS NULL
+                          AND g.tmdb_key IS NOT NULL
+                          AND NOT EXISTS (SELECT 1 FROM tmdb_metadata t WHERE t.provider_key = g.tmdb_key);
+                    ");
+
     public (int EnrichedCount, int PendingCount, int NotFoundCount) GetTmdbEnrichmentStats()
     {
         lock (_dbLock)
@@ -3661,35 +3797,35 @@ public class DatabaseService : IDisposable
                 int notFound = 0;
                 using (var cmd = _connection.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 0;";
+                    cmd.CommandText = SqlGetTmdbEnrichmentStats;
                     enriched = Convert.ToInt32(cmd.ExecuteScalar());
                 }
                 using (var cmd = _connection.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 1;";
+                    cmd.CommandText = SqlGetTmdbEnrichmentStats2;
                     notFound = Convert.ToInt32(cmd.ExecuteScalar());
                 }
                 int pending = 0;
                 using (var cmd = _connection.CreateCommand())
                 {
-                    cmd.CommandText = @"
-                        SELECT COUNT(*)
-                        FROM dedup_groups g
-                        WHERE g.image_tag IS NULL
-                          AND g.tmdb_key IS NOT NULL
-                          AND NOT EXISTS (SELECT 1 FROM tmdb_metadata t WHERE t.provider_key = g.tmdb_key);
-                    ";
+                    cmd.CommandText = SqlGetTmdbEnrichmentStats3;
                     pending = Convert.ToInt32(cmd.ExecuteScalar());
                 }
                 return (enriched, pending, notFound);
             }
-            catch { return (0, 0, 0); }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetTmdbEnrichmentStats)) { return (0, 0, 0); }
         }
     }
 
     // =========================================================================
     // Integration State (§4.5)
     // =========================================================================
+
+    private static readonly string SqlSetIntegrationState = Checked(@"
+                    INSERT INTO integration_state (name, key, value)
+                    VALUES ($name, $key, $value)
+                    ON CONFLICT(name, key) DO UPDATE SET value = excluded.value;
+                ");
 
     public void SetIntegrationState(string name, string key, string value)
     {
@@ -3699,11 +3835,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT INTO integration_state (name, key, value)
-                    VALUES ($name, $key, $value)
-                    ON CONFLICT(name, key) DO UPDATE SET value = excluded.value;
-                ";
+                cmd.CommandText = SqlSetIntegrationState;
                 cmd.Parameters.AddWithValue("$name", name);
                 cmd.Parameters.AddWithValue("$key", key);
                 cmd.Parameters.AddWithValue("$value", value);
@@ -3716,6 +3848,8 @@ public class DatabaseService : IDisposable
         }
     }
 
+    private static readonly string SqlGetIntegrationState = Checked("SELECT value FROM integration_state WHERE name = $name AND key = $key;");
+
     public string? GetIntegrationState(string name, string key)
     {
         lock (_dbLock)
@@ -3724,15 +3858,17 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "SELECT value FROM integration_state WHERE name = $name AND key = $key;";
+                cmd.CommandText = SqlGetIntegrationState;
                 cmd.Parameters.AddWithValue("$name", name);
                 cmd.Parameters.AddWithValue("$key", key);
                 var res = cmd.ExecuteScalar();
                 return res as string;
             }
-            catch { return null; }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetIntegrationState)) { return null; }
         }
     }
+
+    private static readonly string SqlGetAllIntegrationState = Checked("SELECT key, value FROM integration_state WHERE name = $name;");
 
     public Dictionary<string, string> GetAllIntegrationState(string name)
     {
@@ -3743,7 +3879,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "SELECT key, value FROM integration_state WHERE name = $name;";
+                cmd.CommandText = SqlGetAllIntegrationState;
                 cmd.Parameters.AddWithValue("$name", name);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
@@ -3751,7 +3887,7 @@ public class DatabaseService : IDisposable
                     dict[reader.GetString(0)] = reader.GetString(1);
                 }
             }
-            catch { }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetAllIntegrationState)) { }
         }
         return dict;
     }
@@ -3759,6 +3895,12 @@ public class DatabaseService : IDisposable
     // =========================================================================
     // User Data & Group Identity Helpers (§7, §8)
     // =========================================================================
+
+    private static readonly string SqlGetUserData = Checked(@"
+                    SELECT position_ticks, runtime_ticks, played, last_played_utc, origin
+                    FROM user_data
+                    WHERE server_id = $srv AND item_id = $id;
+                ");
 
     public UserItemData? GetUserData(string serverId, string itemId)
     {
@@ -3768,11 +3910,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT position_ticks, runtime_ticks, played, last_played_utc, origin
-                    FROM user_data
-                    WHERE server_id = $srv AND item_id = $id;
-                ";
+                cmd.CommandText = SqlGetUserData;
                 cmd.Parameters.AddWithValue("$srv", serverId);
                 cmd.Parameters.AddWithValue("$id", itemId);
                 using var reader = cmd.ExecuteReader();
@@ -3786,10 +3924,12 @@ public class DatabaseService : IDisposable
                     };
                 }
             }
-            catch { }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetUserData)) { }
         }
         return null;
     }
+
+    private static readonly string SqlGetUserDataOrigin = Checked("SELECT origin FROM user_data WHERE server_id = $srv AND item_id = $id;");
 
     public string? GetUserDataOrigin(string serverId, string itemId)
     {
@@ -3799,15 +3939,17 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "SELECT origin FROM user_data WHERE server_id = $srv AND item_id = $id;";
+                cmd.CommandText = SqlGetUserDataOrigin;
                 cmd.Parameters.AddWithValue("$srv", serverId);
                 cmd.Parameters.AddWithValue("$id", itemId);
                 return cmd.ExecuteScalar() as string;
             }
-            catch { }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetUserDataOrigin)) { }
         }
         return null;
     }
+
+    private static readonly string SqlGetGroupItemIds = Checked("SELECT server_id, id FROM cached_items WHERE group_id = $gid;");
 
     public List<(string ServerId, string ItemId)> GetGroupItemIds(int groupId)
     {
@@ -3818,7 +3960,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "SELECT server_id, id FROM cached_items WHERE group_id = $gid;";
+                cmd.CommandText = SqlGetGroupItemIds;
                 cmd.Parameters.AddWithValue("$gid", groupId);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
@@ -3826,10 +3968,12 @@ public class DatabaseService : IDisposable
                     list.Add((reader.GetString(0), reader.GetString(1)));
                 }
             }
-            catch { }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetGroupItemIds)) { }
         }
         return list;
     }
+
+    private static readonly string SqlGetGroupIdForDedupKey = Checked("SELECT group_id FROM dedup_keys WHERE key = $key;");
 
     public int? GetGroupIdForDedupKey(string key)
     {
@@ -3839,7 +3983,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = "SELECT group_id FROM dedup_keys WHERE key = $key;";
+                cmd.CommandText = SqlGetGroupIdForDedupKey;
                 cmd.Parameters.AddWithValue("$key", key);
                 var res = cmd.ExecuteScalar();
                 if (res != null && res != DBNull.Value)
@@ -3847,10 +3991,20 @@ public class DatabaseService : IDisposable
                     return Convert.ToInt32(res);
                 }
             }
-            catch { }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetGroupIdForDedupKey)) { }
         }
         return null;
     }
+
+    private static readonly string SqlGetDedupGroup = Checked(@"
+                    SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
+                           name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
+                           date_created, series_group_id, season_number, episode_number,
+                           max_height, has_4k, max_bitrate, audio_formats,
+                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
+                    FROM dedup_groups
+                    WHERE group_id = $gid;
+                ");
 
     public DedupGroupRecord? GetDedupGroup(long groupId)
     {
@@ -3860,15 +4014,7 @@ public class DatabaseService : IDisposable
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
-                           name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
-                           date_created, series_group_id, season_number, episode_number,
-                           max_height, has_4k, max_bitrate, audio_formats,
-                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
-                    FROM dedup_groups
-                    WHERE group_id = $gid;
-                ";
+                cmd.CommandText = SqlGetDedupGroup;
                 cmd.Parameters.AddWithValue("$gid", groupId);
                 using var reader = cmd.ExecuteReader();
                 if (reader.Read())
@@ -3905,7 +4051,7 @@ public class DatabaseService : IDisposable
                     };
                 }
             }
-            catch { }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetDedupGroup)) { }
         }
         return null;
     }
