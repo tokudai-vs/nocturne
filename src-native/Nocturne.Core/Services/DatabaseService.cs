@@ -12,7 +12,7 @@ public class DatabaseService : IDisposable
     private readonly string _connectionString;
     private SqliteConnection? _connection;
 
-    public DatabaseService() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Nocturne", "nocturne.db"))
+    public DatabaseService() : this(Path.Combine(AppPaths.DataDirectory, "nocturne.db"))
     {
     }
 
@@ -1558,8 +1558,7 @@ public class DatabaseService : IDisposable
     {
         try
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var dir = Path.Combine(appData, "Nocturne");
+            var dir = AppPaths.DataDirectory;
             long total = 0;
             var dbPath = Path.Combine(dir, "nocturne.db");
             var walPath = Path.Combine(dir, "nocturne.db-wal");
@@ -1820,8 +1819,7 @@ public class DatabaseService : IDisposable
 
                 try
                 {
-                    var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                    var imgDir = Path.Combine(appData, "Nocturne", "image-cache");
+                    var imgDir = Path.Combine(AppPaths.DataDirectory, "image-cache");
                     if (Directory.Exists(imgDir))
                     {
                         Directory.Delete(imgDir, recursive: true);
@@ -2117,13 +2115,21 @@ public class DatabaseService : IDisposable
         var keys = new List<(string Key, int GroupId, bool IsAuthoritative)>();
         var items = new List<(string ServerId, string ItemId, int GroupId)>();
 
-        lock (_dbLock)
+        // Own private-cache, read-only connection: the full load takes seconds on a large library and must not
+        // hold _dbLock (which every UI read waits on). One read transaction gives a consistent WAL snapshot.
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString)
         {
-            if (_connection == null) return (groups, keys, items);
+            Mode = SqliteOpenMode.ReadOnly,
+            Cache = SqliteCacheMode.Private
+        }.ToString());
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+        {
 
             // 1. Load groups
-            using (var cmd = _connection.CreateCommand())
+            using (var cmd = conn.CreateCommand())
             {
+                cmd.Transaction = tx;
                 cmd.CommandText = @"
                     SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
                            name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
@@ -2170,8 +2176,9 @@ public class DatabaseService : IDisposable
             }
 
             // 2. Load keys
-            using (var cmd = _connection.CreateCommand())
+            using (var cmd = conn.CreateCommand())
             {
+                cmd.Transaction = tx;
                 cmd.CommandText = "SELECT key, group_id, is_authoritative FROM dedup_keys;";
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
@@ -2181,8 +2188,9 @@ public class DatabaseService : IDisposable
             }
 
             // 3. Load items
-            using (var cmd = _connection.CreateCommand())
+            using (var cmd = conn.CreateCommand())
             {
+                cmd.Transaction = tx;
                 cmd.CommandText = "SELECT server_id, id, group_id FROM cached_items WHERE group_id IS NOT NULL;";
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())

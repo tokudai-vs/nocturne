@@ -561,6 +561,21 @@ public class MainViewModel : BaseViewModel
         set => SetProperty(ref _splashStatusText, value);
     }
 
+    private bool _isStartupFailed;
+
+    // Startup error state: the splash stops spinning and says what failed instead of waiting forever.
+    public bool IsStartupFailed
+    {
+        get => _isStartupFailed;
+        private set => SetProperty(ref _isStartupFailed, value);
+    }
+
+    public void ShowStartupError(Exception ex)
+    {
+        IsStartupFailed = true;
+        SplashStatusText = $"Nocturne could not finish starting: {ex.Message}\nDetails are in nocturne.log.";
+    }
+
     public bool IsNavigationVisible
     {
         get => _isNavigationVisible;

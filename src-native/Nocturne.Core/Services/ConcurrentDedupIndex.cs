@@ -115,6 +115,7 @@ public class ConcurrentDedupIndex
     /// </summary>
     public void InitializeFromDb(DatabaseService db)
     {
+        var loadClock = System.Diagnostics.Stopwatch.StartNew();
         lock (_lock)
         {
             _keyToGroup.Clear();
@@ -150,7 +151,7 @@ public class ConcurrentDedupIndex
                     }
                 }
 
-                NocturneLogger.Info("ConcurrentDedupIndex", $"Initialized hash index with {_groups.Count} existing groups and {_keyToGroup.Count} keys.");
+                NocturneLogger.Info("ConcurrentDedupIndex", $"Initialized hash index with {_groups.Count} existing groups and {_keyToGroup.Count} keys in {loadClock.ElapsedMilliseconds} ms.");
             }
             catch (Exception ex)
             {

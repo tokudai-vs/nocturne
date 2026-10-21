@@ -11,8 +11,7 @@ public static class NocturneLogger
     {
         try
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var dir = Path.Combine(appData, "Nocturne");
+            var dir = AppPaths.DataDirectory;
             Directory.CreateDirectory(dir);
             _logPath = Path.Combine(dir, "nocturne.log");
         }

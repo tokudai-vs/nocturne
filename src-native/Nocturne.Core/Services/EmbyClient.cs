@@ -114,8 +114,7 @@ public class EmbyClient
     {
         try
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var dir = Path.Combine(appData, "Nocturne");
+            var dir = AppPaths.DataDirectory;
             Directory.CreateDirectory(dir);
             var devPath = Path.Combine(dir, "device.json");
             if (File.Exists(devPath))

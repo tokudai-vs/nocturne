@@ -13,8 +13,7 @@ public class WatchPartyBinaryManager
 
     public WatchPartyBinaryManager()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        BinDir = Path.Combine(appData, "Nocturne", "bin");
+        BinDir = Path.Combine(Nocturne.Core.Utils.AppPaths.DataDirectory, "bin");
     }
 
     public string GetFfmpegPath()

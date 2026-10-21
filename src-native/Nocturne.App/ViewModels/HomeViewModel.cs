@@ -100,12 +100,23 @@ public class HomeViewModel : BaseViewModel
     public bool IsLoading
     {
         get => _isLoading;
-        set => SetProperty(ref _isLoading, value);
+        set
+        {
+            if (SetProperty(ref _isLoading, value)) OnPropertyChanged(nameof(ShowSkeleton));
+        }
     }
 
     public bool IsEmpty => !IsLoading && ContinueWatching.Count == 0 && NextUp.Count == 0 && LatestMovies.Count == 0 && LatestEpisodes.Count == 0;
 
-    public async Task LoadAsync()
+    // Placeholder shelves while the first load is in flight and nothing is on screen yet.
+    public bool ShowSkeleton => IsLoading && ContinueWatching.Count == 0 && NextUp.Count == 0 && LatestMovies.Count == 0 && LatestEpisodes.Count == 0;
+
+    private Task? _loadInFlight;
+
+    // Single-flight: HomePage.Loaded and MainViewModel.InitializeAsync both request the first load.
+    public Task LoadAsync() => _loadInFlight is { IsCompleted: false } running ? running : (_loadInFlight = LoadCoreAsync());
+
+    private async Task LoadCoreAsync()
     {
         if (!_embyClient.IsAuthenticated && _settings.Current.Servers.Count == 0) return;
 
@@ -119,10 +130,13 @@ public class HomeViewModel : BaseViewModel
             {
                 if (ContinueWatching.Count == 0 && LatestMovies.Count == 0 && LatestEpisodes.Count == 0)
                 {
-                    var cachedResume = _db.GetContinueWatchingItems();
-                    if (cachedResume.Count == 0) cachedResume = _db.GetCachedContinueWatching();
-                    var cachedMovies = _db.GetCachedItems("Movie", limit: 20);
-                    var cachedEpisodes = _db.GetCachedItems("Episode", limit: 20);
+                    // Off the UI thread: on a large cache these reads take seconds and would freeze first paint.
+                    var (cachedResume, cachedMovies, cachedEpisodes) = await Task.Run(() =>
+                    {
+                        var resume = _db.GetContinueWatchingItems();
+                        if (resume.Count == 0) resume = _db.GetCachedContinueWatching();
+                        return (resume, _db.GetCachedItems("Movie", limit: 20), _db.GetCachedItems("Episode", limit: 20));
+                    });
 
                     if (cachedResume.Count > 0 || cachedMovies.Count > 0 || cachedEpisodes.Count > 0)
                     {
@@ -172,6 +186,7 @@ public class HomeViewModel : BaseViewModel
                                     HeroBackdropUrl = _embyClient.BuildImageUrl(heroCandidate.Id, "Backdrop", 1920, tag, srv?.Url, srv?.AccessToken);
                                 }
                             }
+                            OnPropertyChanged(nameof(ShowSkeleton));
                         });
                     }
                 }

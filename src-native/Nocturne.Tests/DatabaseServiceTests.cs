@@ -193,6 +193,24 @@ public class DatabaseServiceTests : IDisposable
     }
 
     [Fact]
+    public void DedupIndexLoad_ReadsCommittedStateThroughItsOwnConnection()
+    {
+        var a = new EmbyItem { Id = "a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
+        var b = new EmbyItem { Id = "b", ServerId = "s2", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
+        _db.UpsertItem(a, "s1");
+        _db.UpsertItem(b, "s2");
+        var writer = new ConcurrentDedupIndex();
+        writer.SetConnectedServerCount(2);
+        writer.ProcessBatch(new List<EmbyItem> { a, b }, _db);
+
+        var reloaded = new ConcurrentDedupIndex();
+        reloaded.InitializeFromDb(_db);
+
+        Assert.Equal(1, reloaded.TotalGroupsCount);
+        Assert.Equal(1, reloaded.MultiVersionGroupsCount);
+    }
+
+    [Fact]
     public void SiblingWriteQueue_EnqueueDrainAndRemove_WorksReliably()
     {
         _db.EnqueueSiblingPlaybackWrite("srv_b", "item_999", 500_000_000, false);

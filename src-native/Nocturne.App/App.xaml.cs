@@ -5,6 +5,7 @@ using Wpf.Ui.Appearance;
 using Nocturne.App.Services;
 using Nocturne.App.ViewModels;
 using Nocturne.Core.Services;
+using Nocturne.Core.Utils;
 
 namespace Nocturne.App;
 
@@ -51,8 +52,7 @@ public partial class App : Application
     {
         try
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var dir = Path.Combine(appData, "Nocturne");
+            var dir = AppPaths.DataDirectory;
             Directory.CreateDirectory(dir);
             var logPath = Path.Combine(dir, "crash.log");
             File.AppendAllText(logPath, $"[{DateTime.UtcNow:O}] [{source}]\n{details}\n\n");
@@ -66,19 +66,34 @@ public partial class App : Application
 
         try
         {
+            // Startup timing: one log line per step, so a slow launch can be attributed from nocturne.log.
+            var processStart = System.Diagnostics.Process.GetCurrentProcess().StartTime;
+            NocturneLogger.Info("Startup", $"runtime + WPF ready: {(DateTime.Now - processStart).TotalMilliseconds:F0} ms after process start");
+            var step = System.Diagnostics.Stopwatch.StartNew();
+            void Timed(string name) { NocturneLogger.Info("Startup", $"{name}: {step.ElapsedMilliseconds} ms"); step.Restart(); }
+
             var services = new ServiceCollection();
             ConfigureServices(services);
             _serviceProvider = services.BuildServiceProvider();
 
             // Apply theme and accent color before mainWindow is instantiated and shown
             var settings = _serviceProvider.GetRequiredService<SettingsService>();
-            ApplyAppTheme(settings.Current.Theme);
+            Timed("settings load");
+            _serviceProvider.GetRequiredService<DatabaseService>();
+            Timed("DatabaseService.Initialize (schema, migrations, self-check)");
 
+            // ApplyAppTheme also constructs the view model graph (via MainViewModel.UpdateTopBarColors).
+            ApplyAppTheme(settings.Current.Theme);
             var themeColors = _serviceProvider.GetRequiredService<ThemeColorService>();
             themeColors.ApplyColor(settings.Current.AccentColor);
+            Timed("theme + view model graph construction");
 
             var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
+            Timed("MainWindow construction");
+            mainWindow.ContentRendered += (_, _) =>
+                NocturneLogger.Info("Startup", $"first render: {(DateTime.Now - processStart).TotalMilliseconds:F0} ms after process start");
             mainWindow.Show();
+            Timed("MainWindow.Show");
 
             // Live real-time system theme watcher across Windows theme toggle
             Microsoft.Win32.SystemEvents.UserPreferenceChanged += (s, ev) =>

@@ -1897,7 +1897,7 @@ public class SettingsViewModel : BaseViewModel
     // ── About & Logging ──────────────────────────────────────────────────
     public string AppVersion => "v4.0.0 (Native Windows Edition)";
     public string RuntimeInfo => $".NET {Environment.Version} ({System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture})";
-    public string LogsDirectoryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Nocturne");
+    public string LogsDirectoryPath => Nocturne.Core.Utils.AppPaths.DataDirectory;
 
     public void OpenLogsFolder()
     {

@@ -474,6 +474,7 @@ public partial class MainWindow : FluentWindow
             catch (Exception ex)
             {
                 NocturneLogger.Error("MainWindow", "Init error", ex);
+                _viewModel.ShowStartupError(ex);
             }
         };
 

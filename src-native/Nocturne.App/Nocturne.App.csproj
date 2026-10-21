@@ -24,5 +24,10 @@
     <ProjectReference Include="..\Nocturne.Core\Nocturne.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Native splash: drawn before the CLR and WPF finish initialising; closes when startup completes. -->
+    <SplashScreen Include="Resources\splash.png" />
+  </ItemGroup>
+
 </Project>
 

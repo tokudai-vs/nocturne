@@ -13,8 +13,7 @@ public class SettingsService
 
     public SettingsService()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var dir = Path.Combine(appData, "Nocturne");
+        var dir = Nocturne.Core.Utils.AppPaths.DataDirectory;
         Directory.CreateDirectory(dir);
         _settingsPath = Path.Combine(dir, "nocturne-settings.json");
         _settings = Load();

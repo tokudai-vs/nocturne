@@ -355,12 +355,13 @@
                 <!-- Loading Ring -->
                 <ui:ProgressRing IsIndeterminate="True" Width="32" Height="32"
                                  Foreground="{DynamicResource NocturneAmberBrush}"
-                                 HorizontalAlignment="Center" Margin="0,0,0,18" />
+                                 HorizontalAlignment="Center" Margin="0,0,0,18"
+                                 Visibility="{Binding IsStartupFailed, Converter={StaticResource InvertBoolToVisibility}}" />
 
                 <!-- Status Text -->
                 <TextBlock Text="{Binding SplashStatusText}" FontSize="12"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           HorizontalAlignment="Center" />
+                           HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="520" />
             </StackPanel>
         </Grid>
     </Grid>
