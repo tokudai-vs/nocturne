@@ -230,6 +230,29 @@ public class DatabaseServiceTests : IDisposable
         Assert.Equal(new[] { "m1", "m2", "m3", "m4", "m5" }, seen);
     }
 
+    // Item 3 (#19, audit 4.3): group ids restart at 1 on a rebuild, so a queued Trakt event kept naming its old id,
+    // which now belongs to an unrelated group.
+    [Fact]
+    public void RebuildIndex_RemapsQueuedTraktEvents_ToTheirGroupsNewId()
+    {
+        EmbyItem M(string id, string srv, string tmdb) => new() { Id = id, ServerId = srv, Name = "Movie " + tmdb, Type = "Movie", ProviderIds = new() { { "Tmdb", tmdb } } };
+        var a = M("a", "s1", "100"); var b = M("b", "s2", "100");
+        var c = M("c", "s1", "200"); var d = M("d", "s2", "200");
+        foreach (var it in new[] { a, b, c, d }) _db.UpsertItem(it, it.ServerId!);
+        var index = new ConcurrentDedupIndex();
+        index.ProcessBatch(new List<EmbyItem> { c, d }, _db); // c/d -> group 1, a/b -> group 2; the rebuild flips them
+        index.ProcessBatch(new List<EmbyItem> { a, b }, _db);
+        _db.EnqueueTraktEvent(long.Parse(a.DedupGroupId!), "stop", 95, "{}");
+        _db.EnqueueTraktEvent(999, "stop", 95, "{}"); // a group that no longer exists
+
+        new DedupEngine().RebuildIndex(_db);
+
+        var events = _db.GetPendingTraktEvents();
+        var aGroup = _db.GetGroupIdForDedupKey("tmdb:movie:100");
+        Assert.Equal(1, aGroup);
+        Assert.Equal(new long[] { 1, 0 }, events.Select(e => e.GroupId));
+    }
+
     [Fact]
     public void RebuildIndex_RemapsLegacyGroupColumn_SoSiblingLookupsStayInTheGroup()
     {

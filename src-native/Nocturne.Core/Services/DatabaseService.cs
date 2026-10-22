@@ -3278,6 +3278,14 @@ public class DatabaseService : IDisposable
                     ALTER TABLE dedup_keys RENAME TO dedup_keys_old;
                     ALTER TABLE dedup_groups_rebuild RENAME TO dedup_groups;
                     ALTER TABLE dedup_keys_rebuild RENAME TO dedup_keys;
+
+                    -- Queued Trakt events name a group, and group ids restart at 1: follow each one to the new group of
+                    -- its old group's primary item, or 0 (never a group id) when that item has none.
+                    UPDATE trakt_queue
+                       SET group_id = COALESCE((SELECT r.group_id FROM dedup_groups_old o
+                                                  JOIN item_group_rebuild r ON r.id = o.primary_item_id AND r.server_id = o.primary_server
+                                                 WHERE o.group_id = trakt_queue.group_id), 0);
+
                     DROP TABLE dedup_groups_old;
                     DROP TABLE dedup_keys_old;
 
