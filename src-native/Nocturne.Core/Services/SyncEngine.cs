@@ -124,6 +124,7 @@ public class SyncEngine
             await RunFullSyncCoreAsync(ct, forceResync);
             if (!ct.IsCancellationRequested)
             {
+                if (_settings.Current.SyncStatus != "failed" && DeletionSweepDue()) await DeletionSweepCoreAsync(ct);
                 await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
                 if (FeatureFlags.DedupAlert(_db) is { } alert) DedupAlertRaised?.Invoke(alert);
             }
@@ -132,6 +133,81 @@ public class SyncEngine
         {
             _dedup.WriterGate.Release();
         }
+    }
+
+    // The deletion sweep (#21 item 1). An incremental pass asks what was saved since the last one, and a deleted item is
+    // never saved again, so its row would stay forever. Weekly after a sync, and from Settings.
+    public const string DeletionSweepKey = "deletion_sweep_utc";
+    public static readonly TimeSpan DeletionSweepInterval = TimeSpan.FromDays(7);
+    // More of a library missing than this reads as an unmounted share or a server fault, not deletions: left alone.
+    public const double DeletionSweepMaxShare = 0.2;
+
+    public record DeletionSweepResult(int Libraries, int Removed, int Skipped);
+
+    private bool DeletionSweepDue() =>
+        !DateTime.TryParse(_db.GetMigrationState(DeletionSweepKey), null, System.Globalization.DateTimeStyles.RoundtripKind, out var last)
+        || DateTime.UtcNow - last >= DeletionSweepInterval;
+
+    public async Task<DeletionSweepResult> RunDeletionSweepAsync(CancellationToken ct = default)
+    {
+        await _dedup.WriterGate.WaitAsync(ct);
+        try
+        {
+            var result = await DeletionSweepCoreAsync(ct);
+            if (result.Removed > 0) await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
+            return result;
+        }
+        finally
+        {
+            _dedup.WriterGate.Release();
+        }
+    }
+
+    // Per library: list every id (minimal fields), diff against the cache, ask the server by id about each one missing
+    // (an item added or removed mid-listing shifts the paging), and remove what it confirms gone. A library whose
+    // listing fails, or with more than DeletionSweepMaxShare of it missing, is skipped.
+    private async Task<DeletionSweepResult> DeletionSweepCoreAsync(CancellationToken ct)
+    {
+        int libraries = 0, removed = 0, skipped = 0;
+        var priority = _settings.Current.PreferredServerPriority;
+        foreach (var server in _settings.Current.Servers)
+        {
+            var client = _clientFor(server);
+            foreach (var view in await client.GetViewsAsync())
+            {
+                if (ct.IsCancellationRequested) return new(libraries, removed, skipped);
+                var cached = _db.GetLibraryItemIds(server.Id, view.Id);
+                if (cached.Count == 0) continue;
+                var clock = Stopwatch.StartNew();
+                var listed = await client.GetLibraryItemIdsAsync(view.Id, ct: ct);
+                libraries++;
+                if (listed == null)
+                {
+                    skipped++;
+                    continue;
+                }
+                var missing = cached.Where(id => !listed.Contains(id)).ToList();
+                if (missing.Count > cached.Count * DeletionSweepMaxShare)
+                {
+                    NocturneLogger.Warn("SyncEngine", $"Deletion sweep: {server.Name}/{view.Name} lists {missing.Count:N0} of {cached.Count:N0} cached items as missing; left alone.");
+                    skipped++;
+                    continue;
+                }
+                if (missing.Count > 0)
+                {
+                    if (await client.GetExistingItemIdsAsync(missing, ct) is not { } stillThere)
+                    {
+                        skipped++;
+                        continue;
+                    }
+                    missing.RemoveAll(stillThere.Contains);
+                    removed += _db.RemoveDeletedItems(server.Id, missing, priority);
+                }
+                NocturneLogger.Info("SyncEngine", $"Deletion sweep: {server.Name}/{view.Name}: {listed.Count:N0} ids listed in {clock.ElapsedMilliseconds:N0} ms, {missing.Count:N0} removed.");
+            }
+        }
+        _db.SetMigrationState(DeletionSweepKey, DateTime.UtcNow.ToString("o"));
+        return new(libraries, removed, skipped);
     }
 
     // A library's Series rows, paged and written before the library itself (not checkpointed: a resumed sync

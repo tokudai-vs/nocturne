@@ -206,6 +206,14 @@ public partial class SettingsPage : UserControl
         }
     }
 
+    private async void OnDeletionSweepClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.RunDeletionSweepAsync();
+        }
+    }
+
     private async void OnAutoMapCombinedClick(object sender, RoutedEventArgs e)
     {
         if (ViewModel != null)

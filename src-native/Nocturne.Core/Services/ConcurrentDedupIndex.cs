@@ -924,7 +924,7 @@ public class ConcurrentDedupIndex
         }
     }
 
-    private static void UpdatePrimary(DedupGroupRecord g, EmbyItem item, int score)
+    internal static void UpdatePrimary(DedupGroupRecord g, EmbyItem item, int score)
     {
         g.PrimaryItemId = item.Id;
         g.PrimaryServerId = item.ServerId ?? string.Empty;

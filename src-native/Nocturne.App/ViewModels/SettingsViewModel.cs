@@ -7,6 +7,7 @@ using Wpf.Ui.Appearance;
 using Nocturne.App.Services;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
+using Nocturne.Core.Utils;
 
 namespace Nocturne.App.ViewModels;
 
@@ -1275,6 +1276,25 @@ public class SettingsViewModel : BaseViewModel
         RefreshDatabaseStats();
         IsSyncing = false;
         SyncStatusText = FeatureFlags.DedupAlert(_db) ?? "Deduplication index rebuild complete.";
+    }
+
+    public async Task RunDeletionSweepAsync()
+    {
+        IsSyncing = true;
+        SyncStatusText = "Checking every library for deleted items...";
+        try
+        {
+            var r = await _sync.RunDeletionSweepAsync();
+            SyncStatusText = $"Checked {r.Libraries} libraries: removed {r.Removed:N0} deleted item(s)" +
+                             (r.Skipped > 0 ? $"; {r.Skipped} skipped (listing failed or too much missing, see the log)." : ".");
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Error("SettingsViewModel", "Deletion sweep failed", ex);
+            SyncStatusText = $"Deleted-item check failed: {ex.Message}";
+        }
+        RefreshDatabaseStats();
+        IsSyncing = false;
     }
 
     // Playback & Skip Segments

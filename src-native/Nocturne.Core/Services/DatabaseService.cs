@@ -2072,149 +2072,7 @@ public class DatabaseService : IDisposable
             using var tx = _connection.BeginTransaction();
             try
             {
-                // 1. Remap cached_items if groups were merged
-                if (remappedGroups.Count > 0)
-                {
-                    using var remapCmd = _connection.CreateCommand();
-                    remapCmd.Transaction = tx;
-                    remapCmd.CommandText = SqlSaveDedupBatch;
-                    var pTo = remapCmd.Parameters.Add("$toGid", SqliteType.Integer);
-                    var pToStr = remapCmd.Parameters.Add("$toGidStr", SqliteType.Text);
-                    var pFrom = remapCmd.Parameters.Add("$fromGid", SqliteType.Integer);
-
-                    foreach (var (fromGid, toGid) in remappedGroups)
-                    {
-                        pFrom.Value = fromGid;
-                        pTo.Value = toGid;
-                        pToStr.Value = toGid.ToString();
-                        remapCmd.ExecuteNonQuery();
-                    }
-                }
-
-                // 2. Delete loser groups
-                if (deletedGroupIds.Count > 0)
-                {
-                    using var delCmd = _connection.CreateCommand();
-                    delCmd.Transaction = tx;
-                    delCmd.CommandText = SqlSaveDedupBatch2;
-                    var pDel = delCmd.Parameters.Add("$gid", SqliteType.Integer);
-                    foreach (var id in deletedGroupIds)
-                    {
-                        pDel.Value = id;
-                        delCmd.ExecuteNonQuery();
-                    }
-                }
-
-                // 3. Upsert keys
-                if (keysToSave.Count > 0)
-                {
-                    using var keyCmd = _connection.CreateCommand();
-                    keyCmd.Transaction = tx;
-                    keyCmd.CommandText = SqlSaveDedupBatch3;
-                    var pK = keyCmd.Parameters.Add("$key", SqliteType.Text);
-                    var pG = keyCmd.Parameters.Add("$group_id", SqliteType.Integer);
-                    var pA = keyCmd.Parameters.Add("$is_auth", SqliteType.Integer);
-
-                    foreach (var (k, gid, isAuth) in keysToSave)
-                    {
-                        pK.Value = k;
-                        pG.Value = gid;
-                        pA.Value = isAuth ? 1 : 0;
-                        keyCmd.ExecuteNonQuery();
-                    }
-                }
-
-                // 4. Upsert dirty groups
-                if (dirtyGroups.Count > 0)
-                {
-                    using var grpCmd = _connection.CreateCommand();
-                    grpCmd.Transaction = tx;
-                    grpCmd.CommandText = SqlSaveDedupBatch4;
-
-                    var pGroupId = grpCmd.Parameters.Add("$group_id", SqliteType.Integer);
-                    var pItemType = grpCmd.Parameters.Add("$item_type", SqliteType.Text);
-                    var pPrimaryItemId = grpCmd.Parameters.Add("$primary_item_id", SqliteType.Text);
-                    var pPrimaryServer = grpCmd.Parameters.Add("$primary_server", SqliteType.Text);
-                    var pIsProvisional = grpCmd.Parameters.Add("$is_provisional", SqliteType.Integer);
-                    var pVersionCount = grpCmd.Parameters.Add("$version_count", SqliteType.Integer);
-                    var pName = grpCmd.Parameters.Add("$name", SqliteType.Text);
-                    var pSortName = grpCmd.Parameters.Add("$sort_name", SqliteType.Text);
-                    var pYear = grpCmd.Parameters.Add("$year", SqliteType.Integer);
-                    var pOverview = grpCmd.Parameters.Add("$overview", SqliteType.Text);
-                    var pImageTag = grpCmd.Parameters.Add("$image_tag", SqliteType.Text);
-                    var pBackdropTag = grpCmd.Parameters.Add("$backdrop_tag", SqliteType.Text);
-                    var pCommunityRating = grpCmd.Parameters.Add("$community_rating", SqliteType.Real);
-                    var pDateCreated = grpCmd.Parameters.Add("$date_created", SqliteType.Integer);
-                    var pSeriesGroupId = grpCmd.Parameters.Add("$series_group_id", SqliteType.Integer);
-                    var pSeasonNumber = grpCmd.Parameters.Add("$season_number", SqliteType.Integer);
-                    var pEpisodeNumber = grpCmd.Parameters.Add("$episode_number", SqliteType.Integer);
-                    var pMaxHeight = grpCmd.Parameters.Add("$max_height", SqliteType.Integer);
-                    var pHas4k = grpCmd.Parameters.Add("$has_4k", SqliteType.Integer);
-                    var pMaxBitrate = grpCmd.Parameters.Add("$max_bitrate", SqliteType.Integer);
-                    var pAudioFormats = grpCmd.Parameters.Add("$audio_formats", SqliteType.Text);
-                    var pImageItemId = grpCmd.Parameters.Add("$image_item_id", SqliteType.Text);
-                    var pImageServerId = grpCmd.Parameters.Add("$image_server_id", SqliteType.Text);
-                    var pBackdropItemId = grpCmd.Parameters.Add("$backdrop_item_id", SqliteType.Text);
-                    var pBackdropServerId = grpCmd.Parameters.Add("$backdrop_server_id", SqliteType.Text);
-                    var pTmdbKey = grpCmd.Parameters.Add("$tmdb_key", SqliteType.Text);
-                    var pPrimaryScore = grpCmd.Parameters.Add("$primary_score", SqliteType.Integer);
-
-                    foreach (var g in dirtyGroups)
-                    {
-                        pGroupId.Value = g.GroupId;
-                        pItemType.Value = g.ItemType;
-                        pPrimaryItemId.Value = g.PrimaryItemId;
-                        pPrimaryServer.Value = g.PrimaryServerId;
-                        pIsProvisional.Value = g.IsProvisional;
-                        pVersionCount.Value = g.VersionCount;
-                        pName.Value = g.Name;
-                        pSortName.Value = (object?)g.SortName ?? DBNull.Value;
-                        pYear.Value = (object?)g.Year ?? DBNull.Value;
-                        pOverview.Value = (object?)g.Overview ?? DBNull.Value;
-                        pImageTag.Value = (object?)g.ImageTag ?? DBNull.Value;
-                        pBackdropTag.Value = (object?)g.BackdropTag ?? DBNull.Value;
-                        pCommunityRating.Value = (object?)g.CommunityRating ?? DBNull.Value;
-                        pDateCreated.Value = (object?)g.DateCreated ?? DBNull.Value;
-                        pSeriesGroupId.Value = (object?)g.SeriesGroupId ?? DBNull.Value;
-                        pSeasonNumber.Value = (object?)g.SeasonNumber ?? DBNull.Value;
-                        pEpisodeNumber.Value = (object?)g.EpisodeNumber ?? DBNull.Value;
-                        pMaxHeight.Value = (object?)g.MaxHeight ?? DBNull.Value;
-                        pHas4k.Value = g.Has4k;
-                        pMaxBitrate.Value = (object?)g.MaxBitrate ?? DBNull.Value;
-                        pAudioFormats.Value = (object?)g.AudioFormats ?? DBNull.Value;
-                        pImageItemId.Value = (object?)g.ImageItemId ?? DBNull.Value;
-                        pImageServerId.Value = (object?)g.ImageServerId ?? DBNull.Value;
-                        pBackdropItemId.Value = (object?)g.BackdropItemId ?? DBNull.Value;
-                        pBackdropServerId.Value = (object?)g.BackdropServerId ?? DBNull.Value;
-                        pTmdbKey.Value = (object?)g.TmdbKey ?? DBNull.Value;
-                        pPrimaryScore.Value = g.PrimaryScore;
-
-                        grpCmd.ExecuteNonQuery();
-                        g.IsDirty = false;
-                    }
-                }
-
-                // 5. Update cached_items group assignment
-                if (itemAssignments != null && itemAssignments.Count > 0)
-                {
-                    using var assignCmd = _connection.CreateCommand();
-                    assignCmd.Transaction = tx;
-                    assignCmd.CommandText = SqlSaveDedupBatch5;
-                    var pGid = assignCmd.Parameters.Add("$gid", SqliteType.Integer);
-                    var pGidStr = assignCmd.Parameters.Add("$gidStr", SqliteType.Text);
-                    var pId = assignCmd.Parameters.Add("$id", SqliteType.Text);
-                    var pSrv = assignCmd.Parameters.Add("$srv", SqliteType.Text);
-
-                    foreach (var (srv, id, gid) in itemAssignments)
-                    {
-                        pGid.Value = gid;
-                        pGidStr.Value = gid.ToString();
-                        pId.Value = id;
-                        pSrv.Value = srv;
-                        assignCmd.ExecuteNonQuery();
-                    }
-                }
-
+                ApplyDedupBatch(tx, dirtyGroups, deletedGroupIds, remappedGroups, keysToSave, itemAssignments);
                 tx.Commit();
             }
             catch (Exception ex)
@@ -2222,6 +2080,158 @@ public class DatabaseService : IDisposable
                 tx.Rollback();
                 NocturneLogger.Error("DatabaseService", "Failed to save dedup batch", ex);
                 throw;
+            }
+        }
+    }
+
+    private void ApplyDedupBatch(
+        SqliteTransaction tx,
+        List<DedupGroupRecord> dirtyGroups,
+        List<int> deletedGroupIds,
+        List<(int FromGid, int ToGid)> remappedGroups,
+        List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave,
+        List<(string ServerId, string ItemId, int GroupId)>? itemAssignments)
+    {
+        // 1. Remap cached_items if groups were merged
+        if (remappedGroups.Count > 0)
+        {
+            using var remapCmd = tx.Connection!.CreateCommand();
+            remapCmd.Transaction = tx;
+            remapCmd.CommandText = SqlSaveDedupBatch;
+            var pTo = remapCmd.Parameters.Add("$toGid", SqliteType.Integer);
+            var pToStr = remapCmd.Parameters.Add("$toGidStr", SqliteType.Text);
+            var pFrom = remapCmd.Parameters.Add("$fromGid", SqliteType.Integer);
+
+            foreach (var (fromGid, toGid) in remappedGroups)
+            {
+                pFrom.Value = fromGid;
+                pTo.Value = toGid;
+                pToStr.Value = toGid.ToString();
+                remapCmd.ExecuteNonQuery();
+            }
+        }
+
+        // 2. Delete loser groups
+        if (deletedGroupIds.Count > 0)
+        {
+            using var delCmd = tx.Connection!.CreateCommand();
+            delCmd.Transaction = tx;
+            delCmd.CommandText = SqlSaveDedupBatch2;
+            var pDel = delCmd.Parameters.Add("$gid", SqliteType.Integer);
+            foreach (var id in deletedGroupIds)
+            {
+                pDel.Value = id;
+                delCmd.ExecuteNonQuery();
+            }
+        }
+
+        // 3. Upsert keys
+        if (keysToSave.Count > 0)
+        {
+            using var keyCmd = tx.Connection!.CreateCommand();
+            keyCmd.Transaction = tx;
+            keyCmd.CommandText = SqlSaveDedupBatch3;
+            var pK = keyCmd.Parameters.Add("$key", SqliteType.Text);
+            var pG = keyCmd.Parameters.Add("$group_id", SqliteType.Integer);
+            var pA = keyCmd.Parameters.Add("$is_auth", SqliteType.Integer);
+
+            foreach (var (k, gid, isAuth) in keysToSave)
+            {
+                pK.Value = k;
+                pG.Value = gid;
+                pA.Value = isAuth ? 1 : 0;
+                keyCmd.ExecuteNonQuery();
+            }
+        }
+
+        // 4. Upsert dirty groups
+        if (dirtyGroups.Count > 0)
+        {
+            using var grpCmd = tx.Connection!.CreateCommand();
+            grpCmd.Transaction = tx;
+            grpCmd.CommandText = SqlSaveDedupBatch4;
+
+            var pGroupId = grpCmd.Parameters.Add("$group_id", SqliteType.Integer);
+            var pItemType = grpCmd.Parameters.Add("$item_type", SqliteType.Text);
+            var pPrimaryItemId = grpCmd.Parameters.Add("$primary_item_id", SqliteType.Text);
+            var pPrimaryServer = grpCmd.Parameters.Add("$primary_server", SqliteType.Text);
+            var pIsProvisional = grpCmd.Parameters.Add("$is_provisional", SqliteType.Integer);
+            var pVersionCount = grpCmd.Parameters.Add("$version_count", SqliteType.Integer);
+            var pName = grpCmd.Parameters.Add("$name", SqliteType.Text);
+            var pSortName = grpCmd.Parameters.Add("$sort_name", SqliteType.Text);
+            var pYear = grpCmd.Parameters.Add("$year", SqliteType.Integer);
+            var pOverview = grpCmd.Parameters.Add("$overview", SqliteType.Text);
+            var pImageTag = grpCmd.Parameters.Add("$image_tag", SqliteType.Text);
+            var pBackdropTag = grpCmd.Parameters.Add("$backdrop_tag", SqliteType.Text);
+            var pCommunityRating = grpCmd.Parameters.Add("$community_rating", SqliteType.Real);
+            var pDateCreated = grpCmd.Parameters.Add("$date_created", SqliteType.Integer);
+            var pSeriesGroupId = grpCmd.Parameters.Add("$series_group_id", SqliteType.Integer);
+            var pSeasonNumber = grpCmd.Parameters.Add("$season_number", SqliteType.Integer);
+            var pEpisodeNumber = grpCmd.Parameters.Add("$episode_number", SqliteType.Integer);
+            var pMaxHeight = grpCmd.Parameters.Add("$max_height", SqliteType.Integer);
+            var pHas4k = grpCmd.Parameters.Add("$has_4k", SqliteType.Integer);
+            var pMaxBitrate = grpCmd.Parameters.Add("$max_bitrate", SqliteType.Integer);
+            var pAudioFormats = grpCmd.Parameters.Add("$audio_formats", SqliteType.Text);
+            var pImageItemId = grpCmd.Parameters.Add("$image_item_id", SqliteType.Text);
+            var pImageServerId = grpCmd.Parameters.Add("$image_server_id", SqliteType.Text);
+            var pBackdropItemId = grpCmd.Parameters.Add("$backdrop_item_id", SqliteType.Text);
+            var pBackdropServerId = grpCmd.Parameters.Add("$backdrop_server_id", SqliteType.Text);
+            var pTmdbKey = grpCmd.Parameters.Add("$tmdb_key", SqliteType.Text);
+            var pPrimaryScore = grpCmd.Parameters.Add("$primary_score", SqliteType.Integer);
+
+            foreach (var g in dirtyGroups)
+            {
+                pGroupId.Value = g.GroupId;
+                pItemType.Value = g.ItemType;
+                pPrimaryItemId.Value = g.PrimaryItemId;
+                pPrimaryServer.Value = g.PrimaryServerId;
+                pIsProvisional.Value = g.IsProvisional;
+                pVersionCount.Value = g.VersionCount;
+                pName.Value = g.Name;
+                pSortName.Value = (object?)g.SortName ?? DBNull.Value;
+                pYear.Value = (object?)g.Year ?? DBNull.Value;
+                pOverview.Value = (object?)g.Overview ?? DBNull.Value;
+                pImageTag.Value = (object?)g.ImageTag ?? DBNull.Value;
+                pBackdropTag.Value = (object?)g.BackdropTag ?? DBNull.Value;
+                pCommunityRating.Value = (object?)g.CommunityRating ?? DBNull.Value;
+                pDateCreated.Value = (object?)g.DateCreated ?? DBNull.Value;
+                pSeriesGroupId.Value = (object?)g.SeriesGroupId ?? DBNull.Value;
+                pSeasonNumber.Value = (object?)g.SeasonNumber ?? DBNull.Value;
+                pEpisodeNumber.Value = (object?)g.EpisodeNumber ?? DBNull.Value;
+                pMaxHeight.Value = (object?)g.MaxHeight ?? DBNull.Value;
+                pHas4k.Value = g.Has4k;
+                pMaxBitrate.Value = (object?)g.MaxBitrate ?? DBNull.Value;
+                pAudioFormats.Value = (object?)g.AudioFormats ?? DBNull.Value;
+                pImageItemId.Value = (object?)g.ImageItemId ?? DBNull.Value;
+                pImageServerId.Value = (object?)g.ImageServerId ?? DBNull.Value;
+                pBackdropItemId.Value = (object?)g.BackdropItemId ?? DBNull.Value;
+                pBackdropServerId.Value = (object?)g.BackdropServerId ?? DBNull.Value;
+                pTmdbKey.Value = (object?)g.TmdbKey ?? DBNull.Value;
+                pPrimaryScore.Value = g.PrimaryScore;
+
+                grpCmd.ExecuteNonQuery();
+                g.IsDirty = false;
+            }
+        }
+
+        // 5. Update cached_items group assignment
+        if (itemAssignments != null && itemAssignments.Count > 0)
+        {
+            using var assignCmd = tx.Connection!.CreateCommand();
+            assignCmd.Transaction = tx;
+            assignCmd.CommandText = SqlSaveDedupBatch5;
+            var pGid = assignCmd.Parameters.Add("$gid", SqliteType.Integer);
+            var pGidStr = assignCmd.Parameters.Add("$gidStr", SqliteType.Text);
+            var pId = assignCmd.Parameters.Add("$id", SqliteType.Text);
+            var pSrv = assignCmd.Parameters.Add("$srv", SqliteType.Text);
+
+            foreach (var (srv, id, gid) in itemAssignments)
+            {
+                pGid.Value = gid;
+                pGidStr.Value = gid.ToString();
+                pId.Value = id;
+                pSrv.Value = srv;
+                assignCmd.ExecuteNonQuery();
             }
         }
     }
@@ -3352,6 +3362,131 @@ public class DatabaseService : IDisposable
         }
     }
 
+    // "+server_id": by the parent index; the planner otherwise picks ix_items_server_sync and walks every row of the
+    // server (25 s a library on the live DB).
+    private static readonly string SqlGetLibraryItemIds = Checked("SELECT id FROM cached_items WHERE +server_id = $srv AND parent_id = $lib;");
+
+    public List<string> GetLibraryItemIds(string serverId, string libraryId)
+    {
+        var ids = new List<string>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return ids;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlGetLibraryItemIds;
+            cmd.Parameters.AddWithValue("$srv", serverId);
+            cmd.Parameters.AddWithValue("$lib", libraryId);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) ids.Add(reader.GetString(0));
+        }
+        return ids;
+    }
+
+    private static readonly string SqlRemoveDeletedItem = Checked(@"
+                DELETE FROM cached_items WHERE id = $id AND server_id = $srv;
+                DELETE FROM user_data WHERE item_id = $id AND server_id = $srv;
+                DELETE FROM continue_watching_cache WHERE id = $id AND server_id = $srv;
+                DELETE FROM sibling_write_queue WHERE item_id = $id AND server_id = $srv;
+                DELETE FROM watchlist_entries WHERE source = $srv AND ref = $id;
+                DELETE FROM dedup_keys WHERE key = 'item:' || $srv || ':' || $id;
+            ");
+    private static readonly string SqlDropTraktEvents = Checked("DELETE FROM trakt_queue WHERE group_id = $gid;");
+
+    // The plan's §5 delete lifecycle, for items the server no longer has (SyncEngine.RunDeletionSweepAsync): the rows
+    // go with everything keyed by them; a group left empty goes with its keys and queued Trakt events; a group with
+    // members left recounts, and passes the primary, poster and backdrop on if the removed item held them.
+    // ponytail: provider keys the removed item brought stay with its group until the next rebuild.
+    public int RemoveDeletedItems(string serverId, IReadOnlyCollection<string> itemIds, IList<string>? serverPriority = null)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null || itemIds.Count == 0) return 0;
+            var gone = itemIds.ToHashSet();
+            var dirty = new List<DedupGroupRecord>();
+            var dropped = new List<int>();
+            foreach (var g in itemIds.Select(id => GroupIdOfItem(serverId, id)).OfType<long>().Distinct().Select(GetDedupGroup).OfType<DedupGroupRecord>())
+            {
+                var left = GetGroupVersions(g.GroupId.ToString()).Where(m => m.ServerId != serverId || !gone.Contains(m.Id)).ToList();
+                if (left.Count == 0) { dropped.Add(g.GroupId); continue; }
+                RecountAfterRemoval(g, left, serverPriority);
+                dirty.Add(g);
+            }
+
+            using var tx = _connection.BeginTransaction();
+            try
+            {
+                using (var cmd = _connection.CreateCommand())
+                {
+                    cmd.Transaction = tx;
+                    cmd.CommandText = SqlRemoveDeletedItem;
+                    cmd.Parameters.AddWithValue("$srv", serverId);
+                    var pId = cmd.Parameters.Add("$id", SqliteType.Text);
+                    foreach (var id in itemIds)
+                    {
+                        pId.Value = id;
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                ApplyDedupBatch(tx, dirty, dropped, new(), new(), null);
+                using (var cmd = _connection.CreateCommand())
+                {
+                    cmd.Transaction = tx;
+                    cmd.CommandText = SqlDropTraktEvents;
+                    var pGid = cmd.Parameters.Add("$gid", SqliteType.Integer);
+                    foreach (var gid in dropped)
+                    {
+                        pGid.Value = gid;
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                tx.Commit();
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                NocturneLogger.Error("DatabaseService", $"Failed to remove {itemIds.Count} deleted item(s) of {serverId}", ex);
+                throw;
+            }
+            NocturneLogger.Info("DatabaseService", $"Removed {itemIds.Count} deleted item(s) of {serverId}: {dropped.Count} group(s) dropped, {dirty.Count} recounted.");
+            return itemIds.Count;
+        }
+    }
+
+    // By ProcessBatch's rules: the highest-scoring member is primary (the first, on a tie), and a poster or backdrop
+    // comes from the highest-priority server's member, then the lowest "server:id".
+    private static void RecountAfterRemoval(DedupGroupRecord g, List<EmbyItem> left, IList<string>? priority)
+    {
+        int Rank(EmbyItem m)
+        {
+            var i = priority?.IndexOf(m.ServerId ?? string.Empty) ?? -1;
+            return i >= 0 ? i : 999;
+        }
+        bool Has(EmbyItem m, string? srv, string? id) => m.ServerId == srv && m.Id == id;
+
+        g.VersionCount = left.Count;
+        g.MaxHeight = left.Max(m => m.Height ?? 0);
+        g.MaxBitrate = left.Max(m => m.MeasuredBitrate ?? 0);
+        g.Has4k = left.Any(m => (m.Height ?? 0) >= 2160 || (m.Width ?? 0) >= 3800) ? 1 : 0;
+        var audio = left.Select(m => m.AudioCodec).Where(a => !string.IsNullOrWhiteSpace(a)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        g.AudioFormats = audio.Count > 0 ? string.Join(",", audio) : null;
+
+        if (!left.Any(m => Has(m, g.PrimaryServerId, g.PrimaryItemId)))
+        {
+            var best = left.OrderByDescending(m => DedupEngine.ScorePrimaryItem(m, priority)).First();
+            ConcurrentDedupIndex.UpdatePrimary(g, best, DedupEngine.ScorePrimaryItem(best, priority));
+        }
+        if (!left.Any(m => Has(m, g.ImageServerId, g.ImageItemId)))
+        {
+            var m = left.Where(m => !string.IsNullOrEmpty(m.ImageTag)).OrderBy(Rank).ThenBy(m => $"{m.ServerId}:{m.Id}", StringComparer.Ordinal).FirstOrDefault();
+            (g.ImageTag, g.ImageItemId, g.ImageServerId) = (m?.ImageTag, m?.Id, m?.ServerId);
+        }
+        if (!left.Any(m => Has(m, g.BackdropServerId, g.BackdropItemId)))
+        {
+            var m = left.Where(m => !string.IsNullOrEmpty(m.BackdropTag)).OrderBy(Rank).ThenBy(m => $"{m.ServerId}:{m.Id}", StringComparer.Ordinal).FirstOrDefault();
+            (g.BackdropTag, g.BackdropItemId, g.BackdropServerId) = (m?.BackdropTag, m?.Id, m?.ServerId);
+        }
+    }
+
     // Non-null while one of the rebuild's long write transactions runs on its own connection (WithWritesQueued):
     // writes on _connection wait here instead of failing with SQLITE_BUSY after busy_timeout. Checked under _dbLock,
     // which the window takes to open, so no write can be mid-statement when it starts.
@@ -4292,7 +4427,7 @@ public class DatabaseService : IDisposable
                            name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
                            date_created, series_group_id, season_number, episode_number,
                            max_height, has_4k, max_bitrate, audio_formats,
-                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
+                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key, primary_score
                     FROM dedup_groups
                     WHERE group_id = $gid;
                 ");
@@ -4338,6 +4473,7 @@ public class DatabaseService : IDisposable
                         BackdropItemId = reader.IsDBNull(23) ? null : reader.GetString(23),
                         BackdropServerId = reader.IsDBNull(24) ? null : reader.GetString(24),
                         TmdbKey = reader.IsDBNull(25) ? null : reader.GetString(25),
+                        PrimaryScore = reader.GetInt32(26),
                         IsDirty = false
                     };
                 }

@@ -747,8 +747,13 @@
                             </Border>
                         </Grid>
 
-                        <Button Content="Rebuild Dedup Index" Click="OnRebuildDedupClick" HorizontalAlignment="Left"
-                                IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Rebuild Dedup Index" Click="OnRebuildDedupClick"
+                                    IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
+                            <Button Content="Check for Deleted Items" Click="OnDeletionSweepClick" Margin="8,0,0,0"
+                                    ToolTip="Lists every library's item ids and removes cached items the server no longer has (also runs weekly after a sync)"
+                                    IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
             </StackPanel>

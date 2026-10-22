@@ -79,7 +79,12 @@ public class EmbyClient
 
     public EmbyClient()
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        // gzip: a listing is about a sixth of its size compressed (an id-only page: 392 bytes an item as JSON, 62 on
+        // the wire); the client used to ask for neither encoding.
+        _http = new HttpClient(new HttpClientHandler { AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate })
+        {
+            Timeout = TimeSpan.FromSeconds(30)
+        };
         _standalone = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _deviceId = GetOrCreateDeviceId();
     }
@@ -439,6 +444,59 @@ public class EmbyClient
             NocturneLogger.Warn("EmbyClient", $"GetUserAsync failed: {ex.Message}");
         }
         return null;
+    }
+
+    private sealed class IdOnly { public string Id { get; set; } = string.Empty; }
+
+    // Every item id in a library, for the deletion sweep: the leanest listing Emby offers (no fields, images or user
+    // data). Null if any page fails: a partial list must never be read as deletions.
+    public async Task<HashSet<string>?> GetLibraryItemIdsAsync(string parentId, int pageSize = 50000, CancellationToken ct = default)
+    {
+        if (!IsAuthenticated) return null;
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        for (int start = 0; ; start += pageSize)
+        {
+            try
+            {
+                var url = BuildUrl($"/Users/{_userId}/Items?ParentId={HttpUtility.UrlEncode(parentId)}&Recursive=true&Fields=&EnableImages=false&EnableUserData=false&SortBy=SortName&SortOrder=Ascending&StartIndex={start}&Limit={pageSize}");
+                using var resp = await _http.GetAsync(url, ct);
+                if (!resp.IsSuccessStatusCode) return null;
+                var page = await resp.Content.ReadFromJsonAsync<ItemsResult<IdOnly>>(cancellationToken: ct);
+                if (page == null) return null;
+                foreach (var item in page.Items) ids.Add(item.Id);
+                if (page.Items.Count < pageSize) return ids;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                NocturneLogger.Warn("EmbyClient", $"Id listing of library {parentId} failed at {start}: {ex.Message}");
+                return null;
+            }
+        }
+    }
+
+    // Which of these ids still exist for this user (asked by id, not by paging). Null if a request fails.
+    public async Task<HashSet<string>?> GetExistingItemIdsAsync(IReadOnlyCollection<string> ids, CancellationToken ct = default)
+    {
+        if (!IsAuthenticated) return null;
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var chunk in ids.Chunk(100))
+        {
+            try
+            {
+                var url = BuildUrl($"/Users/{_userId}/Items?Ids={string.Join(",", chunk.Select(HttpUtility.UrlEncode))}&Fields=&EnableImages=false&EnableUserData=false");
+                using var resp = await _http.GetAsync(url, ct);
+                if (!resp.IsSuccessStatusCode) return null;
+                var page = await resp.Content.ReadFromJsonAsync<ItemsResult<IdOnly>>(cancellationToken: ct);
+                if (page == null) return null;
+                foreach (var item in page.Items) found.Add(item.Id);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                NocturneLogger.Warn("EmbyClient", $"Item existence check failed: {ex.Message}");
+                return null;
+            }
+        }
+        return found;
     }
 
     public async Task<List<EmbyItem>> GetViewsAsync()
