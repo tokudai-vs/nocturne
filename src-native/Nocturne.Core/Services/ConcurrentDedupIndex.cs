@@ -136,13 +136,13 @@ public class ConcurrentDedupIndex
     // With a database the index is a per-batch cache of it: one indexed lookup per candidate key, then each reached
     // group's row, keys and members, replacing what the previous batch held. A resident copy of every group took
     // 54 s and gigabytes at each sync start (#19 item 6). Without a database (a rebuild) the index stays resident.
-    private void LoadWorkingSet(IList<EmbyItem> batch, DatabaseService db, bool deferUntagged)
+    private void LoadWorkingSet(IList<EmbyItem> batch, DatabaseService db, bool skipUntagged)
     {
         var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in batch)
         {
             if (item.Type != "Movie" && item.Type != "Series" && item.Type != "Episode") continue;
-            if (deferUntagged && IsUntaggedEpisode(item)) continue;
+            if (skipUntagged && IsUntaggedEpisode(item)) continue;
             foreach (var ck in GenerateCandidateKeys(item)) wanted.Add(ck.Key);
             wanted.Add(IdentityKey(item).Key);
         }
@@ -263,8 +263,8 @@ public class ConcurrentDedupIndex
     private static bool IsPositionalKey(string key) => key.StartsWith("ep:", StringComparison.OrdinalIgnoreCase);
 
     // An episode with no id of its own matches only by season/episode, and the positional rule can judge that
-    // only once its server's tagged copies are in their groups. Callers hold these back to the end of a sync or
-    // rebuild (ProcessBatch deferUntagged); an untagged file that arrived first joined by number unchecked.
+    // only once its server's tagged copies are in their groups. Callers place these after everything else in a sync
+    // or rebuild (ProcessBatch UntaggedEpisodes); an untagged file that arrived first joined by number unchecked.
     public static bool IsUntaggedEpisode(EmbyItem item) =>
         PositionOf(item) != null && !GenerateCandidateKeys(item).Any(k => k.IsAuthoritative && !IsPositionalKey(k.Key));
 
@@ -434,7 +434,8 @@ public class ConcurrentDedupIndex
         string? itemTmdbKey,
         List<(string Key, int GroupId, bool IsAuthoritative)> keysToSave,
         List<(string ServerId, string ItemId, int GroupId)> itemAssignments,
-        List<DedupGroupRecord> dirtyGroups)
+        List<DedupGroupRecord> dirtyGroups,
+        bool held = false)
     {
         int newGid = _nextGroupId++;
         var newGroup = new DedupGroupRecord
@@ -469,12 +470,19 @@ public class ConcurrentDedupIndex
         newGroup.ItemIds[(item.ServerId ?? string.Empty, item.Id)] = PositionOf(item);
         _groups[newGid] = newGroup;
 
-        // An item split off (conflict or cap) whose keys other groups hold gets its identity key, so the next
-        // ingest finds this group instead of minting another.
-        if (!ClaimKeys(newGroup, candidateKeys, keysToSave) || newGroup.Keys.Count == 0)
-            ClaimKeys(newGroup, new[] { IdentityKey(item) }, keysToSave);
-        newGroup.IsProvisional = newGroup.Keys.Any(k => _keyToGroup[k].IsAuthoritative) ? 0 : 1;
-        RecordEvidence(newGroup, item, keysToSave);
+        if (held)
+        {
+            newGroup.IsProvisional = HeldGroup; // no keys, not even the identity key: the end pass places the item
+        }
+        else
+        {
+            // An item split off (conflict or cap) whose keys other groups hold gets its identity key, so the next
+            // ingest finds this group instead of minting another.
+            if (!ClaimKeys(newGroup, candidateKeys, keysToSave) || newGroup.Keys.Count == 0)
+                ClaimKeys(newGroup, new[] { IdentityKey(item) }, keysToSave);
+            newGroup.IsProvisional = newGroup.Keys.Any(k => _keyToGroup[k].IsAuthoritative) ? 0 : 1;
+            RecordEvidence(newGroup, item, keysToSave);
+        }
 
         item.DedupGroupId = newGid.ToString();
         itemAssignments.Add((item.ServerId ?? string.Empty, item.Id, newGid));
@@ -514,9 +522,14 @@ public class ConcurrentDedupIndex
     /// - Assigns DedupGroupId directly on each item before SQLite writes.
     /// - Upserts modified groups and remapped keys to SQLite atomically.
     /// </summary>
-    // deferUntagged: untagged episodes (IsUntaggedEpisode) are skipped and left without a group; the caller
-    // passes them in again once the rest is placed.
-    public void ProcessBatch(IEnumerable<EmbyItem> items, DatabaseService? db = null, bool deferUntagged = false)
+    // What a batch does with untagged episodes (IsUntaggedEpisode). Defer skips them (the rebuild keeps them for
+    // its last pass). Hold, for a sync, writes each into a held group of its own (IsProvisional = HeldGroup) so it
+    // shows in lists at once: the group has no keys, so nothing matches into it, and the sync's end pass releases
+    // it and places the item exactly as a deferred one, keeping the partition a rebuild produces.
+    public enum UntaggedEpisodes { Match, Defer, Hold }
+    public const int HeldGroup = 2;
+
+    public void ProcessBatch(IEnumerable<EmbyItem> items, DatabaseService? db = null, UntaggedEpisodes untagged = UntaggedEpisodes.Match)
     {
         var dirtyGroups = new List<DedupGroupRecord>();
         var deletedGroupIds = new List<int>();
@@ -528,7 +541,7 @@ public class ConcurrentDedupIndex
         if (db != null)
         {
             ResolveSeriesProviderIds(batch, db);
-            LoadWorkingSet(batch, db, deferUntagged);
+            LoadWorkingSet(batch, db, untagged != UntaggedEpisodes.Match);
         }
 
         lock (_lock)
@@ -539,7 +552,6 @@ public class ConcurrentDedupIndex
             {
                 // Movies, Series, and Episodes participate in deduplication (B1 Option A)
                 if (item.Type != "Movie" && item.Type != "Series" && item.Type != "Episode") continue;
-                if (deferUntagged && IsUntaggedEpisode(item)) continue;
 
                 var candidateKeys = GenerateCandidateKeys(item);
 
@@ -549,6 +561,13 @@ public class ConcurrentDedupIndex
                 int is4k = (height >= 2160 || (item.Width ?? 0) >= 3800) ? 1 : 0;
                 string? audio = item.AudioCodec;
                 string? itemTmdbKey = ExtractTmdbKey(item);
+
+                if (untagged != UntaggedEpisodes.Match && IsUntaggedEpisode(item))
+                {
+                    if (untagged == UntaggedEpisodes.Hold)
+                        CreateGroup(item, new List<CandidateKey>(), score, height, bitrate, is4k, audio, itemTmdbKey, keysToSave, itemAssignments, dirtyGroups, held: true);
+                    continue;
+                }
 
                 // An item holding an identity key was split off earlier (or has no usable key): it stays there.
                 // ponytail: a server-side id fix doesn't re-merge it until the next rebuild.

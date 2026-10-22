@@ -3279,6 +3279,50 @@ public class DatabaseService : IDisposable
         return items;
     }
 
+    // The sync's end pass: untagged episodes held in their own group during the sync (ConcurrentDedupIndex.HeldGroup),
+    // plus any Movie/Series/Episode row an interrupted sync left ungrouped, in the order they were first written.
+    private static readonly string SqlGetItemsToPlace = Checked(@"
+                SELECT c.json_data, c.server_id FROM cached_items c
+                WHERE c.type IN ('Movie', 'Series', 'Episode')
+                  AND (c.group_id IS NULL OR c.group_id IN (SELECT group_id FROM dedup_groups WHERE is_provisional = 2))
+                ORDER BY c.rowid;
+            ");
+    private static readonly string SqlDeleteEmptyHeldGroups = Checked(@"
+                DELETE FROM dedup_groups
+                WHERE is_provisional = 2 AND NOT EXISTS (SELECT 1 FROM cached_items c WHERE c.group_id = dedup_groups.group_id);
+            ");
+
+    public List<EmbyItem> GetItemsToPlace()
+    {
+        var items = new List<EmbyItem>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return items;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlGetItemsToPlace;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var item = JsonSerializer.Deserialize<EmbyItem>(reader.GetString(0));
+                if (item == null) continue;
+                item.ServerId = reader.GetString(1);
+                items.Add(item);
+            }
+        }
+        return items;
+    }
+
+    public int DeleteEmptyHeldGroups()
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return 0;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlDeleteEmptyHeldGroups;
+            return cmd.ExecuteNonQuery();
+        }
+    }
+
     // The build step reads chunks and fills the *_rebuild tables through the normal methods, each taking _dbLock
     // briefly, so UI reads interleave with it; holding the lock for the whole build froze the UI for minutes on
     // a large library. Only the swap holds it. Callers exclude sync via DedupEngine.WriterGate.

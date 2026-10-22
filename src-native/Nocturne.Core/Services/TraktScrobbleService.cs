@@ -35,7 +35,7 @@ public class TraktScrobbleService : ITraktScrobbleService
             return;
 
         // Rule: Provisional groups cannot be scrobbled (§7.3)
-        if (group.IsProvisional == 1)
+        if (group.IsProvisional != 0) // fuzzy-only (1) or an untagged episode held until the sync ends (2)
         {
             _skippedProvisionalCount++;
             return;

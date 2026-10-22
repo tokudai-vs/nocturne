@@ -299,7 +299,7 @@ public class DedupEngine
                 var (batch, lastRowId) = db.GetCachedItemsChunk(afterRowId, chunkSize);
                 if (lastRowId == afterRowId) break;
                 dedupIndex.ResolveSeriesProviderIds(batch, db);
-                dedupIndex.ProcessBatch(batch, null, deferUntagged: true);
+                dedupIndex.ProcessBatch(batch, null, ConcurrentDedupIndex.UntaggedEpisodes.Defer);
                 untagged.AddRange(batch.Where(ConcurrentDedupIndex.IsUntaggedEpisode));
                 afterRowId = lastRowId;
             }

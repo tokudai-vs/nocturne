@@ -317,7 +317,7 @@ public class SyncEngine
 
                         // Concurrent incremental hash-index deduplication:
                         // Matches items across servers in real time and assigns DedupGroupId prior to DB write
-                        _dedupIndex.ProcessBatch(batch.Items, _db, deferUntagged: true);
+                        _dedupIndex.ProcessBatch(batch.Items, _db, ConcurrentDedupIndex.UntaggedEpisodes.Hold);
 
                         if (batch.IsSeriesPrefetch)
                         {
@@ -593,10 +593,15 @@ public class SyncEngine
             channel.Writer.Complete();
             await writerTask;
 
-            // Untagged episodes were written without a group (ConcurrentDedupIndex.IsUntaggedEpisode); place them
-            // now that every tagged copy is in. Also picks up any an interrupted sync left ungrouped.
-            var ungrouped = _db.GetItemsWithNullGroupId();
-            if (ungrouped.Count > 0) _dedupIndex.ProcessBatch(ungrouped, _db);
+            // Untagged episodes sat in held groups of their own during the sync (ConcurrentDedupIndex.HeldGroup):
+            // place them now that every tagged copy is in, then drop the emptied held groups. Also picks up rows an
+            // interrupted sync left held or ungrouped.
+            var toPlace = _db.GetItemsToPlace();
+            if (toPlace.Count > 0)
+            {
+                _dedupIndex.ProcessBatch(toPlace, _db);
+                NocturneLogger.Info("SyncEngine", $"Placed {toPlace.Count:N0} held episodes; {_db.DeleteEmptyHeldGroups():N0} held groups released.");
+            }
 
             syncSw.Stop();
 

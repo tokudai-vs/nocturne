@@ -407,12 +407,58 @@ public class DedupInputGuardTests
         var index = new ConcurrentDedupIndex();
         var (raptor, untagged, tagged) = UntaggedArrivingFirst();
 
-        index.ProcessBatch(new[] { raptor, untagged, tagged }, deferUntagged: true);
+        index.ProcessBatch(new[] { raptor, untagged, tagged }, untagged: ConcurrentDedupIndex.UntaggedEpisodes.Defer);
         Assert.Null(untagged.DedupGroupId);
         index.ProcessBatch(new[] { untagged });
 
         Assert.Equal(raptor.DedupGroupId, tagged.DedupGroupId);
         Assert.NotEqual(raptor.DedupGroupId, untagged.DedupGroupId);
+    }
+
+    // #20 item 3: during a sync the untagged episode is shown at once, in a group of its own that nothing can match
+    // into, and the end pass places it exactly as a deferred one.
+    [Fact]
+    public void HeldUntaggedEpisode_HasAGroupAtOnce_AndIsPlacedAtTheEnd()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DatabaseService(dbPath);
+            var (raptor, untagged, tagged) = UntaggedArrivingFirst();
+            var index = new ConcurrentDedupIndex();
+            var batch = new[] { raptor, untagged, tagged };
+
+            index.ProcessBatch(batch, db, ConcurrentDedupIndex.UntaggedEpisodes.Hold);
+            foreach (var it in batch) db.UpsertItem(it, it.ServerId!);
+
+            var held = untagged.DedupGroupId;
+            Assert.NotNull(held);
+            Assert.NotEqual(raptor.DedupGroupId, held);
+            Assert.Equal(ConcurrentDedupIndex.HeldGroup, db.GetDedupGroup(long.Parse(held!))!.IsProvisional);
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath};Mode=ReadOnly"))
+            {
+                conn.Open();
+                using var count = conn.CreateCommand();
+                count.CommandText = "SELECT COUNT(*) FROM dedup_keys WHERE group_id = $g;";
+                count.Parameters.AddWithValue("$g", long.Parse(held!));
+                Assert.Equal(0L, (long)count.ExecuteScalar()!); // no keys, so nothing can match into it
+            }
+            Assert.Equal(raptor.DedupGroupId, tagged.DedupGroupId);
+
+            var toPlace = db.GetItemsToPlace();
+            Assert.Equal(new[] { "vu" }, toPlace.Select(i => i.Id));
+            index.ProcessBatch(toPlace, db);
+            Assert.Equal(1, db.DeleteEmptyHeldGroups());
+
+            var placed = db.GetGroupVersions(db.GetGroupIdForDedupKey("tvdb:ep:9057492")!.Value.ToString()).Select(v => v.Id).OrderBy(x => x);
+            Assert.Equal(new[] { "r", "vt" }, placed); // as with deferral: refused from the renumbered pair
+            Assert.Null(db.GetDedupGroup(long.Parse(held!)));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { File.Delete(dbPath); } catch { }
+        }
     }
 
     [Fact]
@@ -447,7 +493,7 @@ public class DedupInputGuardTests
             using var db = new DatabaseService(Path.Combine(dir, "a.db"));
             var (raptor, untagged, tagged) = UntaggedArrivingFirst();
             foreach (var it in new[] { raptor, untagged, tagged }) db.UpsertItem(it, it.ServerId!);
-            new ConcurrentDedupIndex().ProcessBatch(new[] { raptor, untagged, tagged }, db, deferUntagged: true);
+            new ConcurrentDedupIndex().ProcessBatch(new[] { raptor, untagged, tagged }, db, ConcurrentDedupIndex.UntaggedEpisodes.Defer);
             Assert.Single(db.GetItemsWithNullGroupId()); // as an interrupted sync leaves it
 
             var settings = new SettingsService(Path.Combine(dir, SettingsService.SettingsFileName));
