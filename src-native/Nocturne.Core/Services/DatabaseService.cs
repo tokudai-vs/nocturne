@@ -87,11 +87,12 @@ public class DatabaseService : IDisposable
         {
             Directory.CreateDirectory(dir);
         }
+        // Private cache (the default): with WAL and one writer, a shared cache bought nothing, and its table locks made
+        // the rebuild's swap block every reader on the cache (#21 item 3).
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
             DefaultTimeout = 5
         }.ToString();
 
@@ -3091,11 +3092,7 @@ public class DatabaseService : IDisposable
     {
         try
         {
-            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString)
-            {
-                Mode = SqliteOpenMode.ReadOnly,
-                Cache = SqliteCacheMode.Private
-            }.ToString());
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Mode = SqliteOpenMode.ReadOnly }.ToString());
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = SqlCountUnsharedRenumberedGroups;
@@ -3578,8 +3575,8 @@ public class DatabaseService : IDisposable
     private volatile bool _abortWindow;
     internal Action<SqliteConnection>? SwapHeldForTest;
 
-    // Runs work on a connection of its own (private cache: on the shared cache _connection uses, its table locks would
-    // block reads) with writes queued, then applies them in order under _dbLock before any newer write. For the rebuild's state write and swap, which held _dbLock, and so every UI read, for minutes
+    // Runs work on a connection of its own with writes queued, then applies them in order under _dbLock before any
+    // newer write. For the rebuild's state write and swap, which held _dbLock, and so every UI read, for minutes
     // (#20 item 4). The WAL is checkpointed inside the window: a first rebuild rewrites every row, and the next UI
     // write's auto-checkpoint copied those gigabytes back under _dbLock (93 s, every read waiting behind it).
     private void WithWritesQueued(string what, Action<SqliteConnection> work)
@@ -3592,7 +3589,7 @@ public class DatabaseService : IDisposable
         }
         try
         {
-            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Cache = SqliteCacheMode.Private, Pooling = false }.ToString());
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Pooling = false }.ToString());
             conn.Open();
             using (var pragma = conn.CreateCommand())
             {
