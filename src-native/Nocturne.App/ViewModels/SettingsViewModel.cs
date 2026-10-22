@@ -1312,6 +1312,8 @@ public class SettingsViewModel : BaseViewModel
     public async Task LoadConflictSplitsAsync()
     {
         SyncStatusText = "Looking for titles with conflicting provider ids...";
+        ConflictSplits.Clear();
+        ConflictSplits.Add("Looking for titles with conflicting provider ids (15-60 s on a large library)..."); // the status line is on another tab
         var splits = await Task.Run(() => _db.GetConflictSplits());
         ConflictSplits.Clear();
         if (splits == null)
