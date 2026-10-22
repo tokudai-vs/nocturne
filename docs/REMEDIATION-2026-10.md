@@ -725,3 +725,72 @@ rebuild resets it to 0, and any drift raises the dedup alert, which names Rebuil
   rebuild. Settings → Rebuild Dedup Index fixes all three. The first rebuild there takes about 11 min and can hold
   a UI read for about 7 s.
 - The weekly job (sweep + drift) adds about 7–8 min of background work and a 4 GB peak once a week, after a sync.
+
+---
+
+## 10. Follow-up pass 4 (#22), 2026-10-22: closing the repair arc
+
+### 10.2 Item 2 — classifying the split pairs, and the proposed guard refinement
+
+**Correction to §9.2:** "1,949 same-server pairs" was a count of collapsed *rows*. Per pair, 3,193 of the 9,220
+have the same server set on both sides (episodes 3,045, series 108, movies 40).
+
+**Hand classification**, 50 pairs (seeded random: 30 same-server, 20 cross-server), read from titles, numbering,
+runtimes, file names and overviews. "Same" means one work wrongly kept apart; "different" means the guard was right.
+
+| | same work | different works |
+|---|---|---|
+| same-server (30) | 6 | 24 |
+| cross-server (20) | 12 | 8 |
+| total | **18 (36%)** | **32 (64%)** |
+
+Same-server pairs are mostly correct splits:
+- adjacent episodes that Raptor and Valkyrie number one apart (ANTM S07E11/E12, Henry Danger, 8 Out of 10 Cats);
+- different shows sharing a wrong id (Dairugger XV / Voltron, Sooty / The Sooty Show, Spring / Holiday Baking
+  Championship).
+
+Cross-server pairs are mostly true duplicates that one wrong series id keeps apart.
+
+**The rule as proposed** (agree on at least one provider type, disagree on exactly one, merge only if normalized
+title and year match) would merge **3,435 of the 9,220**: movies 180, series 126, episodes 3,129. In the hand sample
+it merged 16: 14 right and **2 wrong**:
+- Magnum P.I. "Deja Vu (1)" + "Deja Vu (2)";
+- "Power" (2014, the drama) + "Power (2017)" (a German documentary series dated 2014).
+
+Both are because `DedupEngine.NormalizeTitle` strips bracketed text. It also missed 4 true duplicates where one copy
+is mis-titled ("TBA", Raptor's "Man Eaters" for Heathers, a file name as title).
+
+Variants measured on all 9,220, each spot-checked on 30 random merges:
+
+| variant | merges | spot check (30) | the false merge |
+|---|---|---|---|
+| as proposed | 3,435 | (sample above: 2 of 16 wrong) | part numbers, year disambiguators |
+| title kept verbatim (case/punctuation only) | 3,384 | 29 right, 1 wrong | a 94-min file Raptor calls "AEW Revolution 2026", merged with the 335-min event |
+| + runtimes within 10% (min 3 min) | 3,289 | 29 right, 1 wrong | Raptor's "Banged Up Abroad S03E04 'Pakistan'" is the file "Locked Up Abroad S03E04 Puerto Vallarta": same title, year and runtime, different episode (the servers follow different numberings) |
+
+**Recommendation: do not ship the refinement.**
+- At the observed 1 false merge in 30–45 (95% upper bound about 12%), 3,289 merges means roughly 75 false merges,
+  possibly several hundred.
+- A false merge plays one title under another's card. With the sibling cascade on, it also writes watch state onto
+  the unrelated title: the harm the guard exists to prevent.
+- The false merges it makes are the ones no metadata check can see (identical title, year and runtime over
+  different files).
+- What it gains is cosmetic: duplicate cards.
+
+**What the data points to instead:**
+- **Truncated ids on Raptor.** 1,206 pairs (13%) disagree only because one id is a strict prefix of the other
+  (TMDb 43 vs 43982 for Line of Duty; 469 vs 46910 for Catfish; IMDb tt1364102 vs tt13641028), or doubled
+  (7499687499 vs 749968).
+  - The short id is Raptor's in 992 pairs, Valkyrie's in 203, and both servers' in 11.
+  - Raptor's API returns it so (`Tmdb=43` for Line of Duty, checked directly). The truncated id resolves to a real,
+    unrelated TMDb entry, so Raptor shows that entry's overview, e.g. an adult-film synopsis on "Alien Overlords".
+  - Spot check, 40 truncation pairs: 39 the same work, 1 uncertain (runtimes 84 vs 108 min).
+  - They roll up to **68 rows (38 series, 30 movies)**. Re-identifying those on Raptor clears all 1,206 pairs and
+    its wrong overviews.
+  - If the app should tolerate it, "a conflicting id that is a strict prefix of the other counts as agreement" is
+    the narrow rule the evidence supports. Not shipped: it changes grouping, so it needs its own before/after
+    rebuild.
+- **The roll-up (item 1):** 183 series hold 80% of the affected episodes.
+
+Method: a scratch tool calling the guard's own `IdsOfKeys`/`FindConflict` on a rebuilt copy of the live DB (engine
+4); samples seeded and reproducible; titles, runtimes and file names only.
