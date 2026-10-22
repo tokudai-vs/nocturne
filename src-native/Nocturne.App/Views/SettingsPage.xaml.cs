@@ -206,6 +206,14 @@ public partial class SettingsPage : UserControl
         }
     }
 
+    private async void OnMeasureDriftClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.MeasureDriftAsync();
+        }
+    }
+
     private async void OnConflictSplitsClick(object sender, RoutedEventArgs e)
     {
         if (ViewModel != null)

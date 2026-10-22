@@ -767,6 +767,12 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
+
+                        <TextBlock Text="{Binding DriftText}" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <Button Content="Measure Drift" Click="OnMeasureDriftClick" Margin="0,8,0,0" HorizontalAlignment="Left"
+                                ToolTip="Groups every item as a rebuild would, in memory, and counts the items the stored groups place otherwise"
+                                IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
                     </StackPanel>
                 </Border>
             </StackPanel>

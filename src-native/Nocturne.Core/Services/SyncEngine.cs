@@ -124,7 +124,11 @@ public class SyncEngine
             await RunFullSyncCoreAsync(ct, forceResync);
             if (!ct.IsCancellationRequested)
             {
-                if (_settings.Current.SyncStatus != "failed" && DeletionSweepDue()) await DeletionSweepCoreAsync(ct);
+                if (_settings.Current.SyncStatus != "failed" && DeletionSweepDue())
+                {
+                    await DeletionSweepCoreAsync(ct);
+                    await Task.Run(() => DedupEngine.MeasureDriftCore(_db, _settings.Current.PreferredServerPriority, _settings.Current.Servers.Count), CancellationToken.None);
+                }
                 await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
                 if (FeatureFlags.DedupAlert(_db) is { } alert) DedupAlertRaised?.Invoke(alert);
             }
@@ -136,7 +140,8 @@ public class SyncEngine
     }
 
     // The deletion sweep (#21 item 1). An incremental pass asks what was saved since the last one, and a deleted item is
-    // never saved again, so its row would stay forever. Weekly after a sync, and from Settings.
+    // never saved again, so its row would stay forever. Weekly after a sync, followed by the drift measurement
+    // (DedupEngine.MeasureDrift, item 5), and from Settings.
     public const string DeletionSweepKey = "deletion_sweep_utc";
     public static readonly TimeSpan DeletionSweepInterval = TimeSpan.FromDays(7);
     // More of a library missing than this reads as an unmounted share or a server fault, not deletions: left alone.

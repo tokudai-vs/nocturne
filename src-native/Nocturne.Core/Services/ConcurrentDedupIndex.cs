@@ -104,6 +104,20 @@ public class ConcurrentDedupIndex
         }
     }
 
+    // M6: a fuzzy match attaches to a group only below this many versions.
+    public static int GroupSizeCap(int servers) => 4 * Math.Max(2, servers);
+
+    // The partition a resident index holds, as PartitionOracle compares it (DedupEngine.MeasureDrift).
+    public List<PartitionOracle.Group> Partition()
+    {
+        lock (_lock)
+        {
+            return _groups.Values.Where(g => g.ItemIds.Count > 0)
+                .Select(g => { var members = g.ItemIds.Keys.ToList(); return new PartitionOracle.Group(PartitionOracle.HashOf(members), g.GroupId, members); })
+                .ToList();
+        }
+    }
+
     public int TotalGroupsCount
     {
         get
@@ -549,7 +563,7 @@ public class ConcurrentDedupIndex
 
         lock (_lock)
         {
-            int maxGroupCap = 4 * Math.Max(2, _connectedServerCount);
+            int maxGroupCap = GroupSizeCap(_connectedServerCount);
 
             foreach (var item in batch)
             {

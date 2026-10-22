@@ -36,11 +36,17 @@ public static class FeatureFlags
         if (DedupAlert(db) is { } alert) NocturneLogger.Warn("FeatureFlags", alert);
     }
 
-    // Non-null when the last measurement's broader count is above its known level.
-    public static string? DedupAlert(DatabaseService db) =>
-        int.TryParse(db.GetMigrationState(SpanningUnsharedGroupsKey), out var n) && n > SpanningUnsharedBaseline
-            ? $"Dedup check: {n} episode groups mix numberings without a shared episode id (known: {SpanningUnsharedBaseline}). The sibling cascade's gate still decides; this may be a new kind of over-merge."
-            : null;
+    // Non-null when the last measurement's broader count is above its known level, or the last drift measurement
+    // found items grouped otherwise than a rebuild would (#21 item 5).
+    public static string? DedupAlert(DatabaseService db)
+    {
+        var alerts = new List<string>();
+        if (int.TryParse(db.GetMigrationState(SpanningUnsharedGroupsKey), out var n) && n > SpanningUnsharedBaseline)
+            alerts.Add($"Dedup check: {n} episode groups mix numberings without a shared episode id (known: {SpanningUnsharedBaseline}). The sibling cascade's gate still decides; this may be a new kind of over-merge.");
+        if (int.TryParse(db.GetMigrationState(DedupEngine.DriftItemsKey), out var drift) && drift > 0)
+            alerts.Add($"Dedup drift: {drift:N0} item(s) are grouped otherwise than a rebuild would group them. Rebuild Dedup Index in Settings to correct it.");
+        return alerts.Count > 0 ? string.Join(" ", alerts) : null;
+    }
 }
 
 public enum PlaybackStopReason

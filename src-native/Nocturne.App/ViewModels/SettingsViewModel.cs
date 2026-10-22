@@ -650,6 +650,7 @@ public class SettingsViewModel : BaseViewModel
             DedupGroupsCount = _db.GetDedupGroupsCount();
             var sizeBytes = _db.GetDatabaseSize();
             DatabaseSizeText = FormatBytes(sizeBytes);
+            RefreshDriftText();
         }
         catch { }
     }
@@ -1277,6 +1278,34 @@ public class SettingsViewModel : BaseViewModel
         RefreshDatabaseStats();
         IsSyncing = false;
         SyncStatusText = FeatureFlags.DedupAlert(_db) ?? "Deduplication index rebuild complete.";
+    }
+
+    // #21 item 5: the drift counter (items grouped otherwise than a rebuild would) and the groups over the size cap.
+    private string _driftText = string.Empty;
+    public string DriftText
+    {
+        get => _driftText;
+        set => SetProperty(ref _driftText, value);
+    }
+
+    public void RefreshDriftText()
+    {
+        var measured = DateTime.TryParse(_db.GetMigrationState(DedupEngine.DriftMeasuredKey), null, System.Globalization.DateTimeStyles.RoundtripKind, out var at)
+            ? $"{_db.GetMigrationState(DedupEngine.DriftItemsKey)} item(s) in {_db.GetMigrationState(DedupEngine.DriftGroupsKey)} group(s) grouped otherwise than a rebuild would (measured {at.ToLocalTime():g}; weekly after a sync)."
+            : "Drift not measured yet (weekly after a sync).";
+        var over = _db.GetMigrationState(DedupEngine.OverCapKey);
+        DriftText = $"Drift: {measured}" + (over == null ? "" :
+                    $"\nGroups over the size cap of {ConcurrentDedupIndex.GroupSizeCap(_settings.Current.Servers.Count)}: {(over == "0" ? "none" : $"{over}: {_db.GetMigrationState(DedupEngine.OverCapNamesKey)}")}.");
+    }
+
+    public async Task MeasureDriftAsync()
+    {
+        IsSyncing = true;
+        SyncStatusText = "Measuring drift: grouping every item as a rebuild would (several minutes on a large library)...";
+        var drift = await Task.Run(() => _dedup.MeasureDrift(_db, _settings.Current.PreferredServerPriority, _settings.Current.Servers.Count));
+        RefreshDriftText();
+        IsSyncing = false;
+        SyncStatusText = drift == null ? "Drift measurement failed (see the log)." : FeatureFlags.DedupAlert(_db) ?? "Drift measured: groups match a rebuild.";
     }
 
     // #21 item 2: titles the conflict guard keeps apart because the servers give them different ids of one provider.
