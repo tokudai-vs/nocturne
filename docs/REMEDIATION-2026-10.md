@@ -298,24 +298,195 @@ risk); binaries were trusted on `File.Exists` and also taken from PATH; the gues
 
 - **Trakt production client ID** (I1) — waiting on you.
 - **Watch Party with real remote guests** through a public link — flagged for you.
-- **Rebuild UI block** — a first rebuild still blocks UI reads ~3.8 min (swap transaction under `_dbLock`;
-  measured on the 711k-row copy, likely longer at the fresh DB's 1.67 M rows, not measured).
+- **Rebuild UI block** — a rebuild still blocks UI reads while its swap holds `_dbLock`: 233–507 s on the 1.67 M-row
+  DB (§7.6 item 18; 3.8 min on the 711k-row copy).
   Deferred, kept on the list: the dedup plan's periodic reconcile needs rebuild to be usable. Taking the swap off
   `_dbLock` means running it on its own connection, which turns UI writes into `SQLITE_BUSY` after 5 s; now that E5
   surfaces DB failures, that is the next step. (The 26 s/chunk rebuild read was fixed in C.)
-- `trakt_queue.group_id` is not remapped by a rebuild (audit 4.3).
-- **Six episode groups wrongly merged on clean data** (§2). An episode with no provider ids matches by season and
-  episode number into a group whose members carry another episode's id. A fix would refuse a positional (`sXXeYY`)
-  match into a group where the same server already has a member under different numbering, or where every member
-  carries an episode id. Not done in this pass.
+- ~~`trakt_queue.group_id` is not remapped by a rebuild (audit 4.3).~~ Done, §7.2 (`86dae59`).
+- ~~**Six episode groups wrongly merged on clean data** (§2).~~ Done, §7.1 (items 1, 1b, 1c; the gate in 2, 2b).
 - Deep-offset sync requests still take 13–20 s each (Emby `StartIndex` paging) and occasionally pass the 30 s
   timeout. G sizes around it; a sync request timeout above 30 s, or paging that avoids large offsets, would be
   the next step.
-- The dedup index loads at every sync start: 57 s for 5.36 M keys on the fresh DB (off the UI thread).
+- ~~The dedup index loads at every sync start: 57 s for 5.36 M keys on the fresh DB (off the UI thread).~~ Gone,
+  §7.5 (`ad6c72b`): sync start 4 ms.
 - Same-server over-merge from bad server numbering (e.g. ten AEW Dynamite episodes all tagged S20E22 on Valkyrie)
   is invisible to the conflict guard; the cascade writes there are local-only and the server wins on the next sync.
 - The live `nocturne.log` that held 19 Emby `api_key` values was deleted with the database; the rotated
   `nocturne.log.1` going forward is redacted.
-- Sibling position writes still go through `Sessions/Playing/Stopped` on sibling servers, not the user-data
-  endpoint (plan §7C); sibling drain runs only after playback.
+- ~~Sibling position writes still go through `Sessions/Playing/Stopped` on sibling servers~~ — user-data endpoint
+  since §7.3 (`00339be`). The sibling drain still runs only after playback.
+- **Cascade on your live profile:** its groups were built by the old engine (marker `"2"`, 6 wrong groups); this build
+  is engine `"3"`, so the cascade stays off there until Settings → Rebuild (4–8½ min UI block, above) or a fresh sync.
+- **336,776 IMDb ids unread** because of `"IMDB"` key casing (§7.6 item 14). Fix: case-insensitive provider-id
+  lookup; then bump the engine marker and re-measure.
+- **Count-equality library check** re-fetches a whole library on any change in its item count (§7.6 item 19);
+  Valkyrie's TV library costs 19 min per added episode. Incremental paging (e.g. `MinDateLastSaved`) would be the
+  next step.
 - B5 covers the startup path only.
+
+---
+
+## 7. Follow-up pass (#19), 2026-10-22
+
+Six items, in the order given, one commit each; three extra commits (1b, 1c, 2b) came out of measuring them, and one
+fix (the scrobble key read) was found on the way. Commits are on `main`.
+
+| Item | Commit | Tests after |
+|---|---|---|
+| 1 — refuse a positional match into a group the server numbers differently | `052a737` | 197/197 |
+| 1b — two numberings of one episode are not conflicting ids | `89ea527` | 200/200 |
+| 2 — widen the cascade gate to renumbered episode groups | `8716ab7` | 204/204 |
+| 1c — place untagged episodes after every tagged one | `5bd5573` | 207/207 |
+| 2b — the gate counts a server contradicting its own numbering | `e4158ef` | 208/208 |
+| 3 — remap `trakt_queue.group_id` in the rebuild swap | `86dae59` | 209/209 |
+| 4 — sibling position writes through the user-data endpoint | `00339be` | 211/211 |
+| fix — scrobble payload reads one group's keys, not the whole index | `4425cc0` | 212/212 |
+| 5 — the library-setup prompt, run in the app; stop it blocking the sync | `c3f101c` | 212/212 |
+| 6 — sync dedups against SQLite, not a resident index | `ad6c72b` | 213/213 |
+
+**How the dedup items were measured.** Two harnesses over a copy of the live DB. A *replay* feeds the live DB's
+1,493,660 Movie/Series/Episode rows in rowid order (the order the original sync inserted them) through
+`ProcessBatch` + `UpsertItems` into a fresh DB, 2,000 items per batch, as the sync's writer does. A *rebuild* is
+`DedupEngine.RebuildIndex` on the copy. The replay with the pre-change engine reproduces the live sync (1,129,354
+groups / 321,418 multi-version against 1,129,251 / 321,498 live) and exactly its 6 wrong groups, so it stands in for
+"a fresh sync" without four hours of Emby paging. Grouping metrics are `scripts/dedup-baseline.sql`.
+
+### 7.1 Items 1, 1b, 1c, 2, 2b — season/episode over-merges and the gate
+
+| State | Order | Ep. groups spanning > 1 (S, E) | Gate as specified | Gate per server (final) | Contradicted untagged joins | Multi-version groups |
+|---|---|---|---|---|---|---|
+| old engine (= live) | sync | 1,575 | **6** | 6 | 21 | 321,418 |
+| item 1 | sync | 1,575 | 0 | 0 | **16** | 321,418 |
+| item 1 | rebuild | 10 | 0 | — | — | 317,670 |
+| 1 + 1b | sync | 3,522 | 8 | 8 | 8 | 323,002 |
+| 1 + 1b | rebuild | 3,519 | 11 | — | 10 | 320,500 |
+| 1 + 1b + 1c | sync | 3,522 | 1 | **0** | **0** | 322,985 |
+| 1 + 1b + 1c | rebuild | 3,519 | 1 | **0** | **0** | 320,500 |
+
+- **Item 1** as you specified (first clause only). In sync order it removes exactly the 6 wrong groups and nothing
+  else. It cannot judge an untagged file that arrives *before* its own server's tagged copy, and it could not see
+  that case when C4 had split the tagged copy into another group.
+- **The rebuild disagreed with the sync, which hid wrong merges from the gate.** C4 compared
+  `ep:tvdb:{series}:sXXeYY` keys by full value, so two numberings of one episode read as conflicting ids. A rebuild
+  resolves every series id up front, refused those merges and demoted the shared `tvdb:ep` key: it left 10 groups
+  spanning numberings where the sync had 1,575 legitimate ones. In the original sync they had merged only because
+  the Series row often arrived after its episodes. With the pair split, Super Friends' untagged S09E09 joined
+  Raptor's S09E09 alone, and the gate (0) could not see it. **1b** compares season/episode keys by series id in the conflict guard (Shameless US/UK still conflict).
+- **1c** holds untagged episodes (no id of their own) until every tagged item is placed: the sync writes them
+  ungrouped and places all ungrouped rows once the writer drains (which also recovers rows an interrupted sync left);
+  the rebuild processes them after the last chunk. 26,626 held-back items, 12–16 s at the end of a full replay.
+  Cost: on a first sync the ~31k untagged episodes (2.4 %) appear in group-based lists only when the sync ends.
+- **Item 2** gate as specified ("spanning > 1 (S, E) and not every item shares one episode id") ended at **1** after
+  1c in both orders. That group is legitimate: Valkyrie keeps Ben Fogle "Spain" (Tvdb 11035496) as 19x8, 19x9 and
+  20x9, and Raptor's untagged 55-minute S20E09 joined the 20x9. **2b** gates on the structure item 1 refuses — one
+  server holding two items under different numbering that share no episode id. It agrees with the specified count on
+  every wrong group measured and differs only on that one. The specified count stays in the baseline script as an
+  informational row, next to the new contradicted-join count (a JSON scan of every episode, so a baseline row rather
+  than part of the per-sync gate).
+- **Re-verified through the app's own measurement** (`FeatureFlags.MeasureCascadeGate`, every sync and rebuild):
+  old-engine data 6 → cascade off; item 1 + 1b + 1c in both orders 0 → on; in the Release app on the test profile
+  (item 5) 0 → on. One measurement takes 6–22 s on its own read-only connection.
+- **Live DB:** its groups were built by the old engine (marker `"2"`); this build's engine is `"3"`, so the cascade
+  is off on your profile until a rebuild (Settings → Rebuild) or a fresh sync. Neither was run on the live DB.
+
+### 7.2 Item 3
+
+`trakt_queue` rows follow their old group's primary item to its new group in the swap transaction; a row whose old
+group or primary has no new group gets 0 (never a group id). Nothing reads the column after insert today (the drain
+sends the payload built at enqueue time), so this fixes a column that lies, not a misdirected scrobble. The live
+queue is empty.
+
+### 7.3 Item 4 — and an Emby behaviour to know about
+
+Checked live on Raptor (Emby 4.9.5) before changing anything: a `POST /Users/{user}/Items/{item}/UserData` whose
+body holds only `PlaybackPositionTicks` **turned a played episode unplayed** (PlayCount and LastPlayedDate kept). Its
+full user data was posted back at once; the item is as it was. So `EmbyClient.SetPlaybackPositionAsync` reads the
+item's current user data and sends it whole with only the position changed. Verified live through that method: a
+played episode written with its own position stays played/count/favourite/last-played unchanged; an unplayed one
+set to 10 min shows the position and **no session playing it** on the server, then set back to 0. The sibling drain
+uses it for resume positions and Remove-from-CW; mark-played already used `PlayedItems`.
+
+### 7.4 Item 5
+
+Run in the Release build on a fresh profile (`NOCTURNE_DATA_DIR`): settings as onboarding leaves them after a second
+server (both servers, `FirstLaunchComplete = false`, no mappings, nothing from Trakt) and a copy of the rebuilt DB so
+the first sync was incremental. Your profile was not touched (file timestamps compared before and after). The first
+completed sync raised the prompt (a Win32 message box) listing the derived grouping — Movies: 8 Valkyrie + 9 Raptor
+libraries, Shows: 5 + 7; "Sports (PPV)" lands in Movies and "xMasterclass" in Shows; xAudiobooks, xSports and
+"Sports (Use Folder View)" in neither. **Yes** persisted `combined` / `FirstLaunchComplete = true`; after resetting the
+flag, **No** persisted `separate`. 0 ERROR lines.
+
+Found running it (my Stage H bug): `SyncCompleted` fires on the sync thread inside `DedupEngine.WriterGate`, and the
+handler showed the modal prompt through a synchronous `Dispatcher.Invoke`. While the prompt stood unanswered the
+sync held the gate (no rebuild or sync could start) and the cascade-gate measurement waited: first run, prompt at
+10:25:37, click at 10:27:06, measurement only after it. Now `BeginInvoke`; second run, sync done 10:50:25, gate
+measured 10:50:46 with the prompt still open.
+
+### 7.5 Item 6 — measured, then done
+
+- **Why the index exists:** it came in with `5706ab6` (#13) to replace a blocking post-sync pass that deserialized
+  every cached item. No benchmark of SQLite lookups is on record, at any cache size. `cache_size` was indeed never
+  set: a new connection reports **-2000 (2 MB)** against a 7.6 GB database.
+- **(b) 100k random `dedup_keys` lookups on the live DB** (5,376,837 keys, 4 KiB pages), per lookup:
+
+  | cache_size | cold hit mean / p50 | warm hit mean / p50 / p99 | warm miss mean |
+  |---|---|---|---|
+  | -2000 (default) | 77 / 20 µs | 15.5 / 14.5 / 38 µs | 17–19 µs |
+  | -262144 (256 MB) | 20 / 7.9 µs | **6.1 / 5.3 / 15 µs** | 8–9.5 µs |
+
+- **(c) Full ingest, one run at a time** (1,493,660 items, sync order):
+
+  | Index | Cache | Total | Dedup (of which SQLite reads) | Item writes | Peak working set |
+  |---|---|---|---|---|---|
+  | resident (before) | 2 MB | 1,271 s | 830 s | 361 s | 5,846 MB |
+  | resident | 256 MB | 1,018 s | 644 s | 293 s | 4,762 MB |
+  | per-batch | 256 MB | 1,104 s | 742 s (101 s, 9.35 M queries) | 284 s | **629 MB** |
+  | per-batch | 2 MB | 1,391 s | 963 s (145 s) | 351 s | 296 MB |
+  | committed (per-batch, 256 MB) | 256 MB | 1,070 s | 717 s | 276 s | 892 MB (two DBs open, each with the cache) |
+
+  **Sync start** on the same 1.13 M-group DB: resident load **61 s, working set 36 → 3,180 MB**; committed **4 ms,
+  37 MB**. In the app on the test profile the old build's sync starts logged 65.7 s and 62.7 s (6.65 M keys).
+- **Equivalence:** the committed code's run against the resident run, item by item — all 1,493,660 items in the same
+  group ids, all 1,127,399 groups with the same primary item, primary server and version count.
+- **Recommendation and what was done:** the numbers support it. The cache alone makes the old design 20 % faster;
+  dropping the resident index costs 52–86 s more CPU-side per full 1.49 M-item ingest (under 1 % of a 4-hour,
+  network-bound full sync), saves ~61 s at the start of every sync, and cuts peak memory by ~4–5 GB. Done in
+  `ad6c72b`: `cache_size = -262144` on the writer; with a database the index is a per-batch cache (one indexed lookup
+  per candidate key, then each reached group's row, keys and members — no select-update-select per item); sync start
+  reads only `MAX(group_id)` and throws if it cannot (D1 stays closed); the full-state load is gone. The rebuild keeps
+  its resident pass, as you suggested. Found doing it: the primary's score was never stored, so the resident index
+  reset it at every sync start and the first copy to attach replaced a better primary; a per-batch index re-elected
+  primaries in 279,647 groups of the same ingest until `dedup_groups.primary_score` was stored (now 0).
+- **In the app** (Release, the item 5 test profile, real syncs against both servers; Valkyrie's 677k-item TV library
+  was re-fetched in both runs, the new build re-fetched 10 libraries to the old build's 2):
+
+  | Build | Index load at sync start | Working set before the first batch | Peak working set | Private bytes after the sync |
+  |---|---|---|---|---|
+  | `c3f101c` (resident index) | 66.7 s (1.13 M groups, 6.65 M keys) | ~3.4 GB | 5,168 MB | 3,087 MB |
+  | `ad6c72b` (per-batch) | none | ~0.6 GB | **2,162 MB** | **688 MB** |
+
+  Both ended "completed successfully" with the gate at 0 → cascade on. The new build's remaining peak comes while the
+  large TV library streams in (batches of up to ~17k items in flight); not investigated further.
+
+### 7.6 Found on the way (worse than recorded)
+
+13. **The scrobble payload loaded the whole dedup index** (every group, key and item) to read one group's keys, on
+    every scrobble start, pause and stop, synchronously on the playback path: 54 s and a 2.5 GB peak on the live-size
+    DB. Unreached so far only because Trakt is not connected. Fixed (`4425cc0`), 0 ms.
+14. **A third of a million IMDb ids are invisible to dedup.** `EmbyItem.ImdbId` reads `ProviderIds["Imdb"]` from a
+    case-sensitive dictionary; servers also write `"IMDB"`: Raptor 219,744 of 289,297 episodes, 7,683 of 8,400
+    series, 11,827 movies; Valkyrie 96,571 episodes, 951 series (336,776 items). Those items carry no IMDb key for
+    matching or for the conflict guard, and Raptor series tagged that way give their episodes no `ep:imdb` keys. TVDB
+    and TMDB never appear upper-case. Not fixed: it changes grouping for those items and needs its own
+    measure/rebuild/re-measure cycle.
+15. **Emby 4.9 resets Played** when a user-data POST leaves it out (§7.3). Any future user-data write must send the
+    whole object.
+16. **The rebuild and the sync grouped differently** (§7.1, 1b), and the difference hid a wrong merge from the gate.
+17. **The library-setup prompt blocked the sync thread inside the writer gate** (§7.4; my Stage H code).
+18. **The rebuild UI block, measured at full size:** the swap held `_dbLock` 233–507 s across four rebuilds of the
+    1.67 M-row DB (410 s for the first, run alone), against 3.8 min on 711k rows. Peak working set of a rebuild:
+    3.7–3.8 GB.
+19. **One new episode re-fetches a whole library.** A library counts as up to date only when its item count matches
+    the checkpoint; Valkyrie's TV library went from 676,869 to 676,870 items between two syncs and was fetched in full
+    again (19 min).
