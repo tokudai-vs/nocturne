@@ -230,6 +230,21 @@ public class DatabaseServiceTests : IDisposable
         Assert.Equal(new[] { "m1", "m2", "m3", "m4", "m5" }, seen);
     }
 
+    // The scrobble payload read one group's keys by loading every group, key and item in the database (57 s and
+    // over a gigabyte on the live library) on each start, pause and stop.
+    [Fact]
+    public void GetAuthoritativeKeys_ReturnsOnlyThatGroupsAuthoritativeKeys()
+    {
+        var a = new EmbyItem { Id = "a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProductionYear = 2016, ProviderIds = new() { { "Tmdb", "329865" }, { "Imdb", "tt2543164" } } };
+        var b = new EmbyItem { Id = "b", ServerId = "s1", Name = "Dune", Type = "Movie", ProviderIds = new() { { "Tmdb", "438631" } } };
+        foreach (var it in new[] { a, b }) _db.UpsertItem(it, "s1");
+        new ConcurrentDedupIndex().ProcessBatch(new List<EmbyItem> { a, b }, _db);
+
+        var keys = _db.GetAuthoritativeKeys(int.Parse(a.DedupGroupId!)).OrderBy(k => k).ToList();
+
+        Assert.Equal(new[] { "imdb:movie:tt2543164", "tmdb:movie:329865" }, keys); // not the fuzzy name key, not Dune's
+    }
+
     // Item 3 (#19, audit 4.3): group ids restart at 1 on a rebuild, so a queued Trakt event kept naming its old id,
     // which now belongs to an unrelated group.
     [Fact]

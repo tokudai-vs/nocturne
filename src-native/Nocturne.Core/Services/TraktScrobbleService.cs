@@ -65,7 +65,7 @@ public class TraktScrobbleService : ITraktScrobbleService
         var isEpisode = string.Equals(group.ItemType, "Episode", StringComparison.OrdinalIgnoreCase);
 
         // Fetch authoritative keys for this group
-        var authKeys = GetAuthoritativeKeys(group.GroupId);
+        var authKeys = _db.GetAuthoritativeKeys(group.GroupId);
 
         if (isEpisode)
         {
@@ -210,26 +210,5 @@ public class TraktScrobbleService : ITraktScrobbleService
 
             return JsonSerializer.Serialize(payloadObj);
         }
-    }
-
-    private List<string> GetAuthoritativeKeys(int groupId)
-    {
-        var keys = new List<string>();
-        try
-        {
-            var (_, allKeys, _) = _db.GetDedupStateForIndex();
-            foreach (var (k, gid, isAuth) in allKeys)
-            {
-                if (gid == groupId && isAuth)
-                {
-                    keys.Add(k);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            NocturneLogger.Warn("TraktScrobbleService", $"GetAuthoritativeKeys failed for group {groupId}: {ex.Message}");
-        }
-        return keys;
     }
 }

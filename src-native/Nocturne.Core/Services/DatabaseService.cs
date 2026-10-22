@@ -4056,6 +4056,27 @@ public class DatabaseService : IDisposable
         return null;
     }
 
+    private static readonly string SqlGetAuthoritativeKeys = Checked("SELECT key FROM dedup_keys WHERE group_id = $gid AND is_authoritative = 1;");
+
+    public List<string> GetAuthoritativeKeys(int groupId)
+    {
+        var keys = new List<string>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return keys;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlGetAuthoritativeKeys;
+                cmd.Parameters.AddWithValue("$gid", groupId);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read()) keys.Add(reader.GetString(0));
+            }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetAuthoritativeKeys)) { }
+        }
+        return keys;
+    }
+
     private static readonly string SqlGetDedupGroup = Checked(@"
                     SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
                            name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
