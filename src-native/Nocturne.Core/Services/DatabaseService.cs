@@ -3559,7 +3559,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    // By ProcessBatch's rules: the highest-scoring member is primary (the first, on a tie), and a poster or backdrop
+    // By ProcessBatch's rules: the highest-scoring member is primary (ElectPrimary), and a poster or backdrop
     // comes from the highest-priority server's member, then the lowest "server:id".
     private static void RecountAfterRemoval(DedupGroupRecord g, List<EmbyItem> left, IList<string>? priority)
     {
@@ -3579,7 +3579,7 @@ public class DatabaseService : IDisposable
 
         if (!left.Any(m => Has(m, g.PrimaryServerId, g.PrimaryItemId)))
         {
-            var best = left.OrderByDescending(m => DedupEngine.ScorePrimaryItem(m, priority)).First();
+            var best = ConcurrentDedupIndex.ElectPrimary(left, priority);
             ConcurrentDedupIndex.UpdatePrimary(g, best, DedupEngine.ScorePrimaryItem(best, priority));
         }
         if (!left.Any(m => Has(m, g.ImageServerId, g.ImageItemId)))

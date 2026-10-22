@@ -30,8 +30,9 @@ public class PartitionOracleTests : IDisposable
     [Fact]
     public void Hash_IgnoresMemberOrder_AndSeparatesServers()
     {
-        Assert.Equal(PartitionOracle.HashOf(new[] { ("s1", "a"), ("s2", "b") }), PartitionOracle.HashOf(new[] { ("s2", "b"), ("s1", "a") }));
-        Assert.NotEqual(PartitionOracle.HashOf(new[] { ("s1", "a") }), PartitionOracle.HashOf(new[] { ("s2", "a") }));
+        Assert.Equal(PartitionOracle.HashOf(new[] { ("s1", "a"), ("s2", "b") }, ("s1", "a")), PartitionOracle.HashOf(new[] { ("s2", "b"), ("s1", "a") }, ("s1", "a")));
+        Assert.NotEqual(PartitionOracle.HashOf(new[] { ("s1", "a") }, null), PartitionOracle.HashOf(new[] { ("s2", "a") }, null));
+        Assert.NotEqual(PartitionOracle.HashOf(new[] { ("s1", "a"), ("s2", "b") }, ("s1", "a")), PartitionOracle.HashOf(new[] { ("s1", "a"), ("s2", "b") }, ("s2", "b")));
     }
 
     [Fact]
@@ -53,6 +54,29 @@ public class PartitionOracleTests : IDisposable
 
         Assert.Equal(new[] { "x+y", "z" }, d.OnlyInA.Select(Ids).OrderBy(x => x));
         Assert.Equal(new[] { "w", "x", "y+z" }, d.OnlyInB.Select(Ids).OrderBy(x => x)); // w: ungrouped, a group of one
+    }
+
+    // #22 item 3: Settings' rebuild passed no server priority, so it elected other primaries (the card, its poster and
+    // title) than a sync, with the grouping unchanged; the oracle compared members only and could not see it.
+    [Fact]
+    public void ARebuildWithoutTheServerPriority_ElectsOtherPrimaries_AndTheOracleSeesIt()
+    {
+        string Rebuilt(string name, IList<string>? priority)
+        {
+            var path = Path.Combine(_dir, name);
+            using var db = new DatabaseService(path);
+            foreach (var srv in new[] { "s1", "s2" })
+                db.UpsertItem(new EmbyItem { Id = "m-" + srv, ServerId = srv, Name = "Arrival", Type = "Movie", ProviderIds = new() { ["Tmdb"] = "329865" } }, srv);
+            new DedupEngine().RebuildIndex(db, priority);
+            return path;
+        }
+        var without = PartitionOracle.Read(Rebuilt("a.db", null));
+        var with = PartitionOracle.Read(Rebuilt("b.db", new List<string> { "s2", "s1" }));
+
+        Assert.Equal(Ids(Assert.Single(without)), Ids(Assert.Single(with)));      // same grouping
+        Assert.Equal(("s1", "m-s1"), without[0].Primary);                       // first come
+        Assert.Equal(("s2", "m-s2"), with[0].Primary);                          // the preferred server's copy
+        Assert.False(PartitionOracle.Compare(without, with).Identical);
     }
 
     private static string Ids(PartitionOracle.Group g) => string.Join("+", g.Members.Select(m => m.ItemId).OrderBy(x => x));

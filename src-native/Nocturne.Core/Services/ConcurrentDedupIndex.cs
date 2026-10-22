@@ -113,7 +113,12 @@ public class ConcurrentDedupIndex
         lock (_lock)
         {
             return _groups.Values.Where(g => g.ItemIds.Count > 0)
-                .Select(g => { var members = g.ItemIds.Keys.ToList(); return new PartitionOracle.Group(PartitionOracle.HashOf(members), g.GroupId, members); })
+                .Select(g =>
+                {
+                    var members = g.ItemIds.Keys.ToList();
+                    (string, string) primary = (g.PrimaryServerId, g.PrimaryItemId);
+                    return new PartitionOracle.Group(PartitionOracle.HashOf(members, primary), g.GroupId, members, primary);
+                })
                 .ToList();
         }
     }
@@ -732,6 +737,11 @@ public class ConcurrentDedupIndex
                     AttachItemToGroupRecord(fuzzyTarget, item, height, bitrate, is4k, audio, score, itemTmdbKey, candidateKeys, keysToSave, itemAssignments, dirtyGroups);
                 }
             }
+
+            // A resident index (the rebuild) sees each item once, so only a working-set batch re-elects.
+            if (db != null)
+                foreach (var g in _reelect.Where(g => _groups.TryGetValue(g.GroupId, out var live) && live == g)) Reelect(g, batch, db);
+            _reelect.Clear();
         }
 
         // Flush modified groups, remapped keys, and item group assignments to SQLite in a single transaction
@@ -843,6 +853,14 @@ public class ConcurrentDedupIndex
     {
         deletedGroupIds.Add(loser.GroupId);
         remappedGroups.Add((loser.GroupId, winner.GroupId));
+        if (BeatsPrimary(winner, loser.PrimaryServerId, loser.PrimaryItemId, loser.PrimaryScore))
+        {
+            (winner.PrimaryItemId, winner.PrimaryServerId, winner.PrimaryScore) = (loser.PrimaryItemId, loser.PrimaryServerId, loser.PrimaryScore);
+            (winner.Name, winner.SortName) = (loser.Name, loser.SortName);
+            winner.Year = loser.Year ?? winner.Year;
+            winner.Overview = loser.Overview ?? winner.Overview;
+            winner.CommunityRating = loser.CommunityRating ?? winner.CommunityRating;
+        }
         foreach (var (itm, position) in loser.ItemIds) winner.ItemIds[itm] = position;
         foreach (var k in loser.Keys)
         {
@@ -912,7 +930,14 @@ public class ConcurrentDedupIndex
             target.TmdbKey = itemTmdbKey;
         }
 
-        if (score > target.PrimaryScore)
+        if (target.PrimaryServerId == (item.ServerId ?? string.Empty) && target.PrimaryItemId == item.Id)
+        {
+            // The primary itself again (an incremental pass): refresh it, and if it now scores lower (a poster gone),
+            // another member may beat it; the batch's end re-elects among them all.
+            if (score < target.PrimaryScore) _reelect.Add(target);
+            UpdatePrimary(target, item, score);
+        }
+        else if (BeatsPrimary(target, item.ServerId, item.Id, score))
         {
             UpdatePrimary(target, item, score);
         }
@@ -939,6 +964,36 @@ public class ConcurrentDedupIndex
         {
             g.AudioFormats = $"{g.AudioFormats},{audio}";
         }
+    }
+
+    // #22 item 3: the primary (the card, its poster and title) is the highest-scoring member, ties to the lowest
+    // "server:id", whatever order the members arrived or merged in: a sync, a rebuild and a deletion elect alike. It
+    // was the first member to reach the top score, so ties followed arrival order, and a primary whose score fell (a
+    // poster gone) stayed primary until a rebuild.
+    private static bool BeatsPrimary(DedupGroupRecord g, string? serverId, string itemId, int score) =>
+        score > g.PrimaryScore ||
+        (score == g.PrimaryScore && string.CompareOrdinal($"{serverId}:{itemId}", $"{g.PrimaryServerId}:{g.PrimaryItemId}") < 0);
+
+    internal static EmbyItem ElectPrimary(IEnumerable<EmbyItem> members, IList<string>? priority) =>
+        members.OrderByDescending(m => DedupEngine.ScorePrimaryItem(m, priority)).ThenBy(m => $"{m.ServerId}:{m.Id}", StringComparer.Ordinal).First();
+
+    // Groups whose primary scored lower when it came again in this batch (AttachItemToGroupRecord).
+    private readonly HashSet<DedupGroupRecord> _reelect = new();
+
+    // Among the group's members as they are now: the database's rows, with this batch's items (written after the
+    // batch) in place of theirs.
+    private void Reelect(DedupGroupRecord g, IList<EmbyItem> batch, DatabaseService db)
+    {
+        var fresh = new Dictionary<(string, string), EmbyItem>();
+        foreach (var i in batch) fresh[(i.ServerId ?? string.Empty, i.Id)] = i;
+        var members = db.GetGroupVersions(g.GroupId.ToString())
+            .Where(m => !fresh.ContainsKey((m.ServerId ?? string.Empty, m.Id)))
+            .Concat(fresh.Values)
+            .Where(m => g.ItemIds.ContainsKey((m.ServerId ?? string.Empty, m.Id)))
+            .ToList();
+        if (members.Count == 0) return;
+        var best = ElectPrimary(members, _serverPriority);
+        UpdatePrimary(g, best, DedupEngine.ScorePrimaryItem(best, _serverPriority));
     }
 
     internal static void UpdatePrimary(DedupGroupRecord g, EmbyItem item, int score)

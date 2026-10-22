@@ -1273,7 +1273,7 @@ public class SettingsViewModel : BaseViewModel
         SyncStatusText = "Rebuilding multi-server deduplication index...";
         await Task.Run(() =>
         {
-            _dedup.RebuildIndex(_db);
+            _dedup.RebuildIndex(_db, _settings.Current.PreferredServerPriority); // as a sync elects: the cards' primaries follow it
         });
         RefreshDatabaseStats();
         IsSyncing = false;

@@ -65,6 +65,48 @@ public class SyncIdentityTests : IDisposable
         Assert.DoesNotContain(afterSync, g => g.Members.Any(m => m.ItemId == "er") && g.Members.Any(m => m.ItemId == "ev"));
     }
 
+    // #22 item 3: a primary that comes again scoring lower (its poster gone) is re-elected, as a rebuild would elect.
+    // It used to stay primary, so the card lost its poster until a rebuild changed it.
+    [Fact]
+    public async Task APrimaryThatLosesItsPoster_IsReelected_LikeARebuild()
+    {
+        EmbyItem Movie(string id, bool art) => new()
+        {
+            Id = id, Name = "Back to School", Type = "Movie", ProductionYear = 1986, Overview = art ? "Rodney" : null,
+            ProviderIds = new() { ["Tmdb"] = "17170" },
+            ImageTags = art ? new() { ["Primary"] = "p" + id } : null, BackdropImageTags = art ? new() { "b" + id } : null,
+        };
+        var fake = new FakeEmbyServer();
+        fake.Libraries["raptor.test"] = new() { Movie("r", art: true) };
+        fake.Libraries["valkyrie.test"] = new() { Movie("v", art: false) };
+        fake.Libraries["valkyrie.test"][0].ImageTags = new() { ["Primary"] = "pv" }; // a poster, no backdrop
+        foreach (var id in new[] { "r", "v" }) fake.Saved[id] = DateTime.UtcNow.AddDays(-10);
+
+        var dbPath = Path.Combine(_dir, "a.db");
+        using var db = new DatabaseService(dbPath);
+        var settings = new SettingsService(Path.Combine(_dir, SettingsService.SettingsFileName));
+        settings.Update(s =>
+        {
+            s.Servers.Add(new ServerConfig { Id = "raptor", Name = "Raptor", Url = "http://raptor.test", AccessToken = "t", UserId = "u" });
+            s.Servers.Add(new ServerConfig { Id = "valkyrie", Name = "Valkyrie", Url = "http://valkyrie.test", AccessToken = "t", UserId = "u" });
+        });
+        EmbyClient ClientFor(ServerConfig s) { var c = new EmbyClient(fake); c.Configure(s.Url, s.AccessToken, s.UserId); return c; }
+        var sync = new SyncEngine(new EmbyClient(), db, new DedupEngine(), new TraktService(new TraktAuthService(db)), settings, ClientFor);
+        long Group() { using var c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath};Mode=ReadOnly"); c.Open(); using var q = c.CreateCommand(); q.CommandText = "SELECT group_id FROM cached_items WHERE id = 'v'"; return (long)q.ExecuteScalar()!; }
+
+        await sync.RunFullSyncAsync().WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.Equal("r", db.GetDedupGroup(Group())!.PrimaryItemId);
+
+        fake.Libraries["raptor.test"][0] = Movie("r", art: false);
+        fake.Saved["r"] = DateTime.UtcNow;
+        await sync.RunFullSyncAsync().WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.Equal("v", db.GetDedupGroup(Group())!.PrimaryItemId);
+        var afterSync = PartitionOracle.Read(dbPath);
+        new DedupEngine().RebuildIndex(db);
+        Assert.True(PartitionOracle.Compare(afterSync, PartitionOracle.Read(dbPath)).Identical);
+    }
+
     // #20 item 3: an untagged episode is written into a held group of its own, so it shows during the sync, and is
     // placed at the end (90 Day Diaries: Valkyrie's untagged S03E08 pages before its tagged copy, numbered S03E06).
     [Fact]

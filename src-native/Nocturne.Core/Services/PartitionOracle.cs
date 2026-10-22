@@ -5,45 +5,50 @@ using Microsoft.Data.Sqlite;
 namespace Nocturne.Core.Services;
 
 // The dedup plan's Phase 3 gate: the partition a sync produces must equal the one a rebuild of the same items
-// produces. A group is identified by SHA-256 over its sorted (server_id, item_id) members, and two partitions are
-// compared as multisets of those hashes, so group ids (which differ between runs) do not matter. An item without a
-// group counts as a group of one.
+// produces. A group is identified by SHA-256 over its sorted (server_id, item_id) members and its primary (the item
+// whose card, poster and title the group shows: #22 item 3), and two partitions are compared as multisets of those
+// hashes, so group ids (which differ between runs) do not matter. An item without a group counts as a group of one,
+// its own primary.
 public static class PartitionOracle
 {
-    public sealed record Group(string Hash, int? GroupId, IReadOnlyList<(string ServerId, string ItemId)> Members);
+    public sealed record Group(string Hash, int? GroupId, IReadOnlyList<(string ServerId, string ItemId)> Members, (string ServerId, string ItemId)? Primary);
 
     public sealed record Divergence(IReadOnlyList<Group> OnlyInA, IReadOnlyList<Group> OnlyInB)
     {
         public bool Identical => OnlyInA.Count == 0 && OnlyInB.Count == 0;
     }
 
-    public static string HashOf(IEnumerable<(string ServerId, string ItemId)> members)
+    public static string HashOf(IEnumerable<(string ServerId, string ItemId)> members, (string ServerId, string ItemId)? primary)
     {
         var text = new StringBuilder();
         foreach (var (srv, id) in members.OrderBy(m => m.ServerId, StringComparer.Ordinal).ThenBy(m => m.ItemId, StringComparer.Ordinal))
             text.Append(srv).Append('\u001f').Append(id).Append('\u001e');
+        if (primary is var (ps, pi)) text.Append('\u001d').Append(ps).Append('\u001f').Append(pi);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())));
     }
 
     // The Movie/Series/Episode partition of a database file, read on its own read-only connection.
     public static List<Group> Read(string dbPath)
     {
-        var byGroup = new Dictionary<int, List<(string, string)>>();
+        var byGroup = new Dictionary<int, (List<(string, string)> Members, (string, string)? Primary)>();
         var singles = new List<Group>();
-        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Private }.ToString());
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT group_id, server_id, id FROM cached_items WHERE type IN ('Movie', 'Series', 'Episode');";
+        cmd.CommandText = @"SELECT c.group_id, c.server_id, c.id, g.primary_server, g.primary_item_id FROM cached_items c
+                            LEFT JOIN dedup_groups g ON g.group_id = c.group_id
+                            WHERE c.type IN ('Movie', 'Series', 'Episode');";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             var member = (reader.GetString(1), reader.GetString(2));
-            if (reader.IsDBNull(0)) { singles.Add(new Group(HashOf(new[] { member }), null, new[] { member })); continue; }
+            if (reader.IsDBNull(0)) { singles.Add(new Group(HashOf(new[] { member }, member), null, new[] { member }, member)); continue; }
             var gid = reader.GetInt32(0);
-            if (!byGroup.TryGetValue(gid, out var list)) byGroup[gid] = list = new List<(string, string)>();
-            list.Add(member);
+            if (!byGroup.TryGetValue(gid, out var g))
+                byGroup[gid] = g = (new List<(string, string)>(), reader.IsDBNull(3) ? null : (reader.GetString(3), reader.GetString(4)));
+            g.Members.Add(member);
         }
-        singles.AddRange(byGroup.Select(kv => new Group(HashOf(kv.Value), kv.Key, kv.Value)));
+        singles.AddRange(byGroup.Select(kv => new Group(HashOf(kv.Value.Members, kv.Value.Primary), kv.Key, kv.Value.Members, kv.Value.Primary)));
         return singles;
     }
 
