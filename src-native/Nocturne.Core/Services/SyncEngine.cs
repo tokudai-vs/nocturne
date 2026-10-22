@@ -705,7 +705,7 @@ public class SyncEngine
             _settings.Update(s => s.DedupStatus = "complete");
 
             int totalIndexed = _db.GetCachedItemsCount();
-            var multiVersionGroups = _dedupIndex.MultiVersionGroupsCount;
+            var multiVersionGroups = _db.CountMultiVersionGroups();
             var doneMsg = $"Sync complete ({totalIndexed:N0} items from {servers.Count} server(s), {multiVersionGroups:N0} deduplicated titles).";
 
             _settings.Update(s =>

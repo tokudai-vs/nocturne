@@ -110,6 +110,7 @@ public class DatabaseService : IDisposable
                 PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = NORMAL;
                 PRAGMA busy_timeout = 5000;
+                PRAGMA cache_size = -262144;
 
                 CREATE TABLE IF NOT EXISTS cached_items (
                     id TEXT NOT NULL,
@@ -290,7 +291,8 @@ public class DatabaseService : IDisposable
                 image_server_id  TEXT,
                 backdrop_item_id TEXT,
                 backdrop_server_id TEXT,
-                tmdb_key         TEXT
+                tmdb_key         TEXT,
+                primary_score    INTEGER NOT NULL DEFAULT 0
             );
 
             -- 2. Union-Find Alias Table (WITHOUT ROWID)
@@ -401,7 +403,8 @@ public class DatabaseService : IDisposable
             { "image_server_id", "TEXT" },
             { "backdrop_item_id", "TEXT" },
             { "backdrop_server_id", "TEXT" },
-            { "tmdb_key", "TEXT" }
+            { "tmdb_key", "TEXT" },
+            { "primary_score", "INTEGER NOT NULL DEFAULT 0" }
         });
 
         // 7. user_data column migration (D7, §4.1)
@@ -2013,13 +2016,13 @@ public class DatabaseService : IDisposable
                             name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
                             date_created, series_group_id, season_number, episode_number,
                             max_height, has_4k, max_bitrate, audio_formats,
-                            image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
+                            image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key, primary_score
                         ) VALUES (
                             $group_id, $item_type, $primary_item_id, $primary_server, $is_provisional, $version_count,
                             $name, $sort_name, $year, $overview, $image_tag, $backdrop_tag, $community_rating,
                             $date_created, $series_group_id, $season_number, $episode_number,
                             $max_height, $has_4k, $max_bitrate, $audio_formats,
-                            $image_item_id, $image_server_id, $backdrop_item_id, $backdrop_server_id, $tmdb_key
+                            $image_item_id, $image_server_id, $backdrop_item_id, $backdrop_server_id, $tmdb_key, $primary_score
                         )
                         ON CONFLICT(group_id) DO UPDATE SET
                             item_type = excluded.item_type,
@@ -2046,7 +2049,8 @@ public class DatabaseService : IDisposable
                             image_server_id = excluded.image_server_id,
                             backdrop_item_id = excluded.backdrop_item_id,
                             backdrop_server_id = excluded.backdrop_server_id,
-                            tmdb_key = excluded.tmdb_key;
+                            tmdb_key = excluded.tmdb_key,
+                            primary_score = excluded.primary_score;
                     ");
     private static readonly string SqlSaveDedupBatch5 = Checked("UPDATE cached_items SET group_id = $gid, dedup_group_id = $gidStr WHERE id = $id AND server_id = $srv;");
 
@@ -2148,6 +2152,7 @@ public class DatabaseService : IDisposable
                     var pBackdropItemId = grpCmd.Parameters.Add("$backdrop_item_id", SqliteType.Text);
                     var pBackdropServerId = grpCmd.Parameters.Add("$backdrop_server_id", SqliteType.Text);
                     var pTmdbKey = grpCmd.Parameters.Add("$tmdb_key", SqliteType.Text);
+                    var pPrimaryScore = grpCmd.Parameters.Add("$primary_score", SqliteType.Integer);
 
                     foreach (var g in dirtyGroups)
                     {
@@ -2177,6 +2182,7 @@ public class DatabaseService : IDisposable
                         pBackdropItemId.Value = (object?)g.BackdropItemId ?? DBNull.Value;
                         pBackdropServerId.Value = (object?)g.BackdropServerId ?? DBNull.Value;
                         pTmdbKey.Value = (object?)g.TmdbKey ?? DBNull.Value;
+                        pPrimaryScore.Value = g.PrimaryScore;
 
                         grpCmd.ExecuteNonQuery();
                         g.IsDirty = false;
@@ -2215,43 +2221,72 @@ public class DatabaseService : IDisposable
         }
     }
 
-    private static readonly string SqlGetDedupStateForIndex = Checked(@"
+    // The dedup working set of one sync batch (ConcurrentDedupIndex.LoadWorkingSet). These throw rather than
+    // return empty: a batch deduplicated against nothing would mint duplicate groups.
+    private static readonly string SqlMaxGroupId = Checked("SELECT COALESCE(MAX(group_id), 0) FROM dedup_groups;");
+    private static readonly string SqlLookupDedupKey = Checked("SELECT group_id, is_authoritative FROM dedup_keys WHERE key = $key;");
+    private static readonly string SqlWorkingSetGroup = Checked(@"
                     SELECT group_id, item_type, primary_item_id, primary_server, is_provisional, version_count,
                            name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
                            date_created, series_group_id, season_number, episode_number,
                            max_height, has_4k, max_bitrate, audio_formats,
-                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
-                    FROM dedup_groups;
+                           image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key, primary_score
+                    FROM dedup_groups WHERE group_id = $gid;
                 ");
-    private static readonly string SqlGetDedupStateForIndex2 = Checked("SELECT key, group_id, is_authoritative FROM dedup_keys;");
-    private static readonly string SqlGetDedupStateForIndex3 = Checked("SELECT server_id, id, group_id, parent_index_number, index_number, type FROM cached_items WHERE group_id IS NOT NULL;");
+    private static readonly string SqlWorkingSetKeys = Checked("SELECT key, is_authoritative FROM dedup_keys WHERE group_id = $gid;");
+    private static readonly string SqlWorkingSetMembers = Checked("SELECT server_id, id, parent_index_number, index_number, type FROM cached_items WHERE group_id = $gid;");
+    private static readonly string SqlCountMultiVersionGroups = Checked("SELECT COUNT(*) FROM dedup_groups WHERE version_count > 1;");
 
-    public (List<DedupGroupRecord> Groups, List<(string Key, int GroupId, bool IsAuthoritative)> Keys, List<(string ServerId, string ItemId, int GroupId, (int Season, int Episode)? Position)> Items) GetDedupStateForIndex()
+    public int GetMaxGroupId()
     {
+        lock (_dbLock)
+        {
+            using var cmd = (_connection ?? throw new InvalidOperationException("Database is closed.")).CreateCommand();
+            cmd.CommandText = SqlMaxGroupId;
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+    }
+
+    // One indexed lookup per key (dedup_keys is keyed by key), then each reached group's row by primary key, its
+    // keys (ix_dedup_keys_group) and its members (ix_items_group). Keys whose group row is gone are still returned.
+    public (Dictionary<string, (int GroupId, bool IsAuthoritative)> Found, List<DedupGroupRecord> Groups, List<(string Key, int GroupId, bool IsAuthoritative)> Keys, List<(string ServerId, string ItemId, int GroupId, (int Season, int Episode)? Position)> Members)
+        LoadDedupWorkingSet(IEnumerable<string> keys)
+    {
+        var found = new Dictionary<string, (int GroupId, bool IsAuthoritative)>(StringComparer.OrdinalIgnoreCase);
         var groups = new List<DedupGroupRecord>();
-        var keys = new List<(string Key, int GroupId, bool IsAuthoritative)>();
-        var items = new List<(string ServerId, string ItemId, int GroupId, (int Season, int Episode)? Position)>();
-
-        // Own private-cache, read-only connection: the full load takes seconds on a large library and must not
-        // hold _dbLock (which every UI read waits on). One read transaction gives a consistent WAL snapshot.
-        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString)
+        var groupKeys = new List<(string Key, int GroupId, bool IsAuthoritative)>();
+        var members = new List<(string ServerId, string ItemId, int GroupId, (int Season, int Episode)? Position)>();
+        lock (_dbLock)
         {
-            Mode = SqliteOpenMode.ReadOnly,
-            Cache = SqliteCacheMode.Private
-        }.ToString());
-        conn.Open();
-        using var tx = conn.BeginTransaction();
-        {
-
-            // 1. Load groups
+            var conn = _connection ?? throw new InvalidOperationException("Database is closed.");
             using (var cmd = conn.CreateCommand())
             {
-                cmd.Transaction = tx;
-                cmd.CommandText = SqlGetDedupStateForIndex;
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
+                cmd.CommandText = SqlLookupDedupKey;
+                var pKey = cmd.Parameters.Add("$key", SqliteType.Text);
+                foreach (var k in keys)
                 {
-                    var g = new DedupGroupRecord
+                    pKey.Value = k;
+                    using var r = cmd.ExecuteReader();
+                    if (r.Read()) found[k] = (r.GetInt32(0), r.GetInt32(1) == 1);
+                }
+            }
+
+            using var gCmd = conn.CreateCommand();
+            gCmd.CommandText = SqlWorkingSetGroup;
+            var pG = gCmd.Parameters.Add("$gid", SqliteType.Integer);
+            using var kCmd = conn.CreateCommand();
+            kCmd.CommandText = SqlWorkingSetKeys;
+            var pK = kCmd.Parameters.Add("$gid", SqliteType.Integer);
+            using var mCmd = conn.CreateCommand();
+            mCmd.CommandText = SqlWorkingSetMembers;
+            var pM = mCmd.Parameters.Add("$gid", SqliteType.Integer);
+            foreach (var gid in found.Values.Select(v => v.GroupId).Distinct())
+            {
+                pG.Value = gid;
+                using (var reader = gCmd.ExecuteReader())
+                {
+                    if (!reader.Read()) continue;
+                    groups.Add(new DedupGroupRecord
                     {
                         GroupId = reader.GetInt32(0),
                         ItemType = reader.GetString(1),
@@ -2279,41 +2314,40 @@ public class DatabaseService : IDisposable
                         BackdropItemId = reader.IsDBNull(23) ? null : reader.GetString(23),
                         BackdropServerId = reader.IsDBNull(24) ? null : reader.GetString(24),
                         TmdbKey = reader.IsDBNull(25) ? null : reader.GetString(25),
+                        PrimaryScore = reader.GetInt32(26),
                         IsDirty = false
-                    };
-                    groups.Add(g);
+                    });
                 }
-            }
-
-            // 2. Load keys
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = SqlGetDedupStateForIndex2;
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    keys.Add((reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2) == 1));
-                }
-            }
-
-            // 3. Load items
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = SqlGetDedupStateForIndex3;
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    (int, int)? position = !reader.IsDBNull(3) && !reader.IsDBNull(4) && reader.GetString(5) == "Episode"
-                        ? (reader.GetInt32(3), reader.GetInt32(4))
-                        : null;
-                    items.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2), position));
-                }
+                pK.Value = gid;
+                using (var reader = kCmd.ExecuteReader())
+                    while (reader.Read()) groupKeys.Add((reader.GetString(0), gid, reader.GetInt32(1) == 1));
+                pM.Value = gid;
+                using (var reader = mCmd.ExecuteReader())
+                    while (reader.Read())
+                    {
+                        (int, int)? position = !reader.IsDBNull(2) && !reader.IsDBNull(3) && reader.GetString(4) == "Episode"
+                            ? (reader.GetInt32(2), reader.GetInt32(3))
+                            : null;
+                        members.Add((reader.GetString(0), reader.GetString(1), gid, position));
+                    }
             }
         }
+        return (found, groups, groupKeys, members);
+    }
 
-        return (groups, keys, items);
+    public int CountMultiVersionGroups()
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return 0;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlCountMultiVersionGroups;
+                return Convert.ToInt32(cmd.ExecuteScalar());
+            }
+            catch (Exception ex) when (QueryFailed(ex, SqlCountMultiVersionGroups)) { return 0; }
+        }
     }
 
     public void UpdatePlaybackProgress(string itemId, string serverId, long positionTicks, long? runtimeTicks = null)
@@ -3107,13 +3141,13 @@ public class DatabaseService : IDisposable
                         name, sort_name, year, overview, image_tag, backdrop_tag, community_rating,
                         date_created, series_group_id, season_number, episode_number,
                         max_height, has_4k, max_bitrate, audio_formats,
-                        image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key
+                        image_item_id, image_server_id, backdrop_item_id, backdrop_server_id, tmdb_key, primary_score
                     ) VALUES (
                         $group_id, $item_type, $primary_item_id, $primary_server, $is_provisional, $version_count,
                         $name, $sort_name, $year, $overview, $image_tag, $backdrop_tag, $community_rating,
                         $date_created, $series_group_id, $season_number, $episode_number,
                         $max_height, $has_4k, $max_bitrate, $audio_formats,
-                        $image_item_id, $image_server_id, $backdrop_item_id, $backdrop_server_id, $tmdb_key
+                        $image_item_id, $image_server_id, $backdrop_item_id, $backdrop_server_id, $tmdb_key, $primary_score
                     );
                 ";
                 var pGroupId = grpCmd.Parameters.Add("$group_id", SqliteType.Integer);
@@ -3142,6 +3176,7 @@ public class DatabaseService : IDisposable
                 var pBackdropItemId = grpCmd.Parameters.Add("$backdrop_item_id", SqliteType.Text);
                 var pBackdropServerId = grpCmd.Parameters.Add("$backdrop_server_id", SqliteType.Text);
                 var pTmdbKey = grpCmd.Parameters.Add("$tmdb_key", SqliteType.Text);
+                var pPrimaryScore = grpCmd.Parameters.Add("$primary_score", SqliteType.Integer);
 
                 foreach (var g in groups)
                 {
@@ -3171,6 +3206,7 @@ public class DatabaseService : IDisposable
                     pBackdropItemId.Value = (object?)g.BackdropItemId ?? DBNull.Value;
                     pBackdropServerId.Value = (object?)g.BackdropServerId ?? DBNull.Value;
                     pTmdbKey.Value = (object?)g.TmdbKey ?? DBNull.Value;
+                    pPrimaryScore.Value = g.PrimaryScore;
                     grpCmd.ExecuteNonQuery();
                 }
 

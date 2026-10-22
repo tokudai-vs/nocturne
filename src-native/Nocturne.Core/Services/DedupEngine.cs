@@ -238,6 +238,7 @@ public class DedupEngine
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var dedupIndex = new ConcurrentDedupIndex();
         dedupIndex.SetServerPriority(serverPriority);
+        int groups = 0, multiVersion = 0;
 
         db.SwapInRebuild(() =>
         {
@@ -272,7 +273,8 @@ public class DedupEngine
                     image_server_id  TEXT,
                     backdrop_item_id TEXT,
                     backdrop_server_id TEXT,
-                    tmdb_key         TEXT
+                    tmdb_key         TEXT,
+                    primary_score    INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE dedup_keys_rebuild (
@@ -306,6 +308,9 @@ public class DedupEngine
             var save = System.Diagnostics.Stopwatch.StartNew();
             db.SaveRebuildDedupState(dedupIndex); // one transaction under _dbLock
             NocturneLogger.Info("DedupEngine", $"Rebuild state written in {save.ElapsedMilliseconds} ms.");
+            // Counted now: the post-commit pass below works through the database, and the index then holds one batch.
+            groups = dedupIndex.TotalGroupsCount;
+            multiVersion = dedupIndex.MultiVersionGroupsCount;
         }, unmapped =>
         {
             dedupIndex.ProcessBatch(unmapped, db);
@@ -313,7 +318,7 @@ public class DedupEngine
 
         db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
         FeatureFlags.MeasureCascadeGate(db);
-        NocturneLogger.Info("DedupEngine", $"Rebuild complete in {clock.ElapsedMilliseconds} ms: {dedupIndex.TotalGroupsCount} groups, {dedupIndex.MultiVersionGroupsCount} multi-version, {dedupIndex.ConflictsRefused} merges refused on conflicting ids.");
-        return dedupIndex.MultiVersionGroupsCount;
+        NocturneLogger.Info("DedupEngine", $"Rebuild complete in {clock.ElapsedMilliseconds} ms: {groups} groups, {multiVersion} multi-version, {dedupIndex.ConflictsRefused} merges refused on conflicting ids.");
+        return multiVersion;
     }
 }

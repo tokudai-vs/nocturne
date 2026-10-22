@@ -34,7 +34,7 @@ public class SilentFailureTests : IDisposable
         var items = new[] { Movie("a", "s1", "1"), Movie("b", "s1", "2"), Movie("c", "s1", "3") };
         foreach (var it in items) db.UpsertItem(it, "s1");
         index.ProcessBatch(items, db);
-        db.ExecuteSql("DROP TABLE dedup_keys;");
+        db.ExecuteSql("DROP TABLE dedup_groups;"); // sync start reads the next group id from it
 
         Assert.ThrowsAny<Exception>(() => index.InitializeFromDb(db));
 

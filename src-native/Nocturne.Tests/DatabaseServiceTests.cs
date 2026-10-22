@@ -192,22 +192,44 @@ public class DatabaseServiceTests : IDisposable
         Assert.Equal("14.5 Mbps", item2.BitrateBadge);
     }
 
+    // #19 item 6: a sync start no longer loads every group; a batch reads the groups its keys reach.
     [Fact]
-    public void DedupIndexLoad_ReadsCommittedStateThroughItsOwnConnection()
+    public void SyncStart_LoadsNoGroups_AndABatchStillFindsTheExistingGroup()
     {
         var a = new EmbyItem { Id = "a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
         var b = new EmbyItem { Id = "b", ServerId = "s2", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
         _db.UpsertItem(a, "s1");
+        new ConcurrentDedupIndex().ProcessBatch(new List<EmbyItem> { a }, _db);
+
+        var index = new ConcurrentDedupIndex();
+        index.InitializeFromDb(_db);
+        Assert.Equal(0, index.TotalGroupsCount);
+
         _db.UpsertItem(b, "s2");
-        var writer = new ConcurrentDedupIndex();
-        writer.SetConnectedServerCount(2);
-        writer.ProcessBatch(new List<EmbyItem> { a, b }, _db);
+        index.ProcessBatch(new List<EmbyItem> { b }, _db);
 
-        var reloaded = new ConcurrentDedupIndex();
-        reloaded.InitializeFromDb(_db);
+        Assert.Equal(a.DedupGroupId, b.DedupGroupId);
+        Assert.Equal(1, _db.CountMultiVersionGroups());
+    }
 
-        Assert.Equal(1, reloaded.TotalGroupsCount);
-        Assert.Equal(1, reloaded.MultiVersionGroupsCount);
+    // The primary's score was never stored, so the first copy to attach in a later sync (now: a later batch)
+    // replaced a better primary whatever it scored.
+    [Fact]
+    public void PrimaryElection_KeepsTheBetterPrimary_AcrossBatches()
+    {
+        var a = new EmbyItem { Id = "a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } },
+                               BackdropImageTags = new() { "bd" }, ImageTags = new() { { "Primary", "p" } }, Overview = "Linguist." };
+        var b = new EmbyItem { Id = "b", ServerId = "s2", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } },
+                               ImageTags = new() { { "Primary", "p" } } };
+        _db.UpsertItem(a, "s1");
+        new ConcurrentDedupIndex().ProcessBatch(new List<EmbyItem> { a }, _db);
+        _db.UpsertItem(b, "s2");
+        var nextSync = new ConcurrentDedupIndex();
+        nextSync.InitializeFromDb(_db);
+        nextSync.ProcessBatch(new List<EmbyItem> { b }, _db);
+
+        Assert.Equal(a.DedupGroupId, b.DedupGroupId);
+        Assert.Equal("a", _db.GetDedupGroup(long.Parse(a.DedupGroupId!))!.PrimaryItemId);
     }
 
     [Fact]

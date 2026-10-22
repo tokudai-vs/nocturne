@@ -92,6 +92,7 @@ public class ConcurrentDedupIndex
         }
     }
 
+    // What the index holds: every group during a rebuild; with a database, the groups of the last batch.
     public int MultiVersionGroupsCount
     {
         get
@@ -114,47 +115,52 @@ public class ConcurrentDedupIndex
         }
     }
 
-    /// <summary>
-    /// Loads existing deduplication groups and keys from SQLite into the in-memory hash index.
-    /// Fast column-only query that avoids loading or deserializing JSON blobs.
-    /// </summary>
-    // Loads into locals and swaps on success. A load failure throws and leaves the index as it was: swallowing
-    // it left an empty index minting ids from 1, and SaveDedupBatch's ON CONFLICT(group_id) upsert then wrote
-    // new groups over unrelated existing ones.
+    // Sync start. Nothing is loaded: each ProcessBatch given a database reads only what its items' keys reach
+    // (LoadWorkingSet). Only the next group id is read here, and a failure throws: an index minting ids from 1
+    // would have SaveDedupBatch's ON CONFLICT(group_id) upsert write new groups over existing ones (D1).
     public void InitializeFromDb(DatabaseService db)
     {
-        var loadClock = System.Diagnostics.Stopwatch.StartNew();
-        var (groupRows, keyRows, itemRows) = db.GetDedupStateForIndex();
-
-        var groups = new Dictionary<int, DedupGroupRecord>(groupRows.Count);
-        var keyToGroup = new Dictionary<string, (int GroupId, bool IsAuthoritative)>(keyRows.Count, StringComparer.OrdinalIgnoreCase);
-        int nextGroupId = 1;
-        foreach (var g in groupRows)
-        {
-            groups[g.GroupId] = g;
-            if (g.GroupId >= nextGroupId) nextGroupId = g.GroupId + 1;
-        }
-        foreach (var (key, gid, isAuth) in keyRows)
-        {
-            keyToGroup[key] = (gid, isAuth);
-            if (groups.TryGetValue(gid, out var g)) g.Keys.Add(key);
-        }
-        foreach (var (srv, id, gid, position) in itemRows)
-        {
-            if (groups.TryGetValue(gid, out var g)) g.ItemIds[(srv, id)] = position;
-        }
-
+        var next = db.GetMaxGroupId() + 1;
         lock (_lock)
         {
-            _groups = groups;
-            _keyToGroup = keyToGroup;
-            _nextGroupId = nextGroupId;
+            _groups = new Dictionary<int, DedupGroupRecord>();
+            _keyToGroup = new Dictionary<string, (int GroupId, bool IsAuthoritative)>(StringComparer.OrdinalIgnoreCase);
+            _nextGroupId = next;
         }
         _seriesProviderIds.Clear();
-        NocturneLogger.Info("ConcurrentDedupIndex", $"Initialized hash index with {groups.Count} existing groups and {keyToGroup.Count} keys in {loadClock.ElapsedMilliseconds} ms.");
 
-        // An empty index is populated entirely by this engine. Outside _lock: the rebuild path takes _dbLock first.
-        if (groups.Count == 0) db.SetMigrationState(EngineMarkerKey, EngineVersion);
+        // An empty database is populated entirely by this engine. Outside _lock: the rebuild path takes _dbLock first.
+        if (next == 1) db.SetMigrationState(EngineMarkerKey, EngineVersion);
+    }
+
+    // With a database the index is a per-batch cache of it: one indexed lookup per candidate key, then each reached
+    // group's row, keys and members, replacing what the previous batch held. A resident copy of every group took
+    // 54 s and gigabytes at each sync start (#19 item 6). Without a database (a rebuild) the index stays resident.
+    private void LoadWorkingSet(IList<EmbyItem> batch, DatabaseService db, bool deferUntagged)
+    {
+        var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in batch)
+        {
+            if (item.Type != "Movie" && item.Type != "Series" && item.Type != "Episode") continue;
+            if (deferUntagged && IsUntaggedEpisode(item)) continue;
+            foreach (var ck in GenerateCandidateKeys(item)) wanted.Add(ck.Key);
+            wanted.Add(IdentityKey(item).Key);
+        }
+        var (found, groups, groupKeys, members) = db.LoadDedupWorkingSet(wanted);
+        lock (_lock)
+        {
+            _groups = groups.ToDictionary(g => g.GroupId);
+            _keyToGroup = new Dictionary<string, (int GroupId, bool IsAuthoritative)>(found, StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, gid, isAuth) in groupKeys)
+            {
+                _keyToGroup[key] = (gid, isAuth);
+                if (_groups.TryGetValue(gid, out var g)) g.Keys.Add(key);
+            }
+            foreach (var (srv, id, gid, position) in members)
+            {
+                if (_groups.TryGetValue(gid, out var g)) g.ItemIds[(srv, id)] = position;
+            }
+        }
     }
 
     /// <summary>
@@ -519,7 +525,11 @@ public class ConcurrentDedupIndex
         var itemAssignments = new List<(string ServerId, string ItemId, int GroupId)>();
 
         var batch = items as IList<EmbyItem> ?? items.ToList();
-        if (db != null) ResolveSeriesProviderIds(batch, db);
+        if (db != null)
+        {
+            ResolveSeriesProviderIds(batch, db);
+            LoadWorkingSet(batch, db, deferUntagged);
+        }
 
         lock (_lock)
         {
