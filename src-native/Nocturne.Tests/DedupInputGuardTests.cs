@@ -343,4 +343,54 @@ public class DedupInputGuardTests
             try { File.Delete(dbPath); } catch { }
         }
     }
+
+    private static EmbyItem WithSeriesTvdb(EmbyItem episode, string seriesTvdb)
+    {
+        episode.SeriesProviderIds = new() { ["Tvdb"] = seriesTvdb };
+        return episode;
+    }
+
+    // A rebuild resolves every series id up front, so both copies carry ep:tvdb keys. They differ only in
+    // numbering, which once read as conflicting ids: the pair split and its shared episode id was demoted.
+    [Fact]
+    public void RenumberedCopies_WithSeriesIds_StillMergeOnTheEpisodeId()
+    {
+        var index = new ConcurrentDedupIndex();
+        var raptor = WithSeriesTvdb(Episode("rx", "raptor", 2, 10, tvdbEp: "91051", seriesId: "r1", seriesName: "The Yogi Bear Show"), "72562");
+        var valkyrie = WithSeriesTvdb(Episode("vx", "valkyrie", 2, 4, tvdbEp: "91051", seriesId: "v1", seriesName: "The Yogi Bear Show"), "72562");
+
+        index.ProcessBatch(new[] { raptor, valkyrie });
+
+        Assert.Equal(raptor.DedupGroupId, valkyrie.DedupGroupId);
+        Assert.Equal(0, index.ConflictsRefused);
+    }
+
+    [Fact]
+    public void SameNumbering_DifferentSeriesIds_StillConflict()
+    {
+        // Two shows normalising to one name ("Shameless" US / UK), same S01E01, no episode ids.
+        var index = new ConcurrentDedupIndex();
+        var us = WithSeriesTvdb(Episode("us", "raptor", 1, 1, seriesId: "r1", seriesName: "Shameless (US)"), "161511");
+        var uk = WithSeriesTvdb(Episode("uk", "valkyrie", 1, 1, seriesId: "v1", seriesName: "Shameless (UK)"), "73185");
+
+        index.ProcessBatch(new[] { us, uk });
+
+        Assert.NotEqual(us.DedupGroupId, uk.DedupGroupId);
+    }
+
+    // Super Friends after a rebuild: with the renumbered pair split, Valkyrie's untagged S09E09 joined Raptor's
+    // S09E09 alone; no Valkyrie member was there for the positional rule to see.
+    [Fact]
+    public void RenumberedPairStaysTogether_SoTheUntaggedCopyIsRefused()
+    {
+        var index = new ConcurrentDedupIndex();
+        var raptor = WithSeriesTvdb(Episode("r", "raptor", 9, 9, tvdbEp: "4501235", seriesId: "r1", seriesName: "Super Friends"), "254222");
+        var tagged = WithSeriesTvdb(Episode("vt", "valkyrie", 9, 7, tvdbEp: "4501235", seriesId: "v1", seriesName: "Super Friends"), "254222");
+        var untagged = WithSeriesTvdb(Episode("vu", "valkyrie", 9, 9, seriesId: "v1", seriesName: "Super Friends"), "254222");
+
+        index.ProcessBatch(new[] { raptor, tagged, untagged });
+
+        Assert.Equal(raptor.DedupGroupId, tagged.DedupGroupId);
+        Assert.NotEqual(raptor.DedupGroupId, untagged.DedupGroupId);
+    }
 }

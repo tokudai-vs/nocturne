@@ -286,12 +286,17 @@ public class ConcurrentDedupIndex
         }
     }
 
-    // Authoritative keys split into provider type ("tmdb:movie", "ep:tvdb", "tvdb:ep", ...) and value.
+    // Authoritative keys split into provider type ("tmdb:movie", "ep:tvdb", "tvdb:ep", ...) and value. A
+    // season/episode key's value is its series id: two servers numbering one episode differently hold the same
+    // series, not different ids. Numbering is judged by the positional rule in ProcessBatch.
     private static (string Type, string Value)? ProviderTypeOf(string key)
     {
         var first = key.IndexOf(':');
         var second = first < 0 ? -1 : key.IndexOf(':', first + 1);
-        return second < 0 ? null : (key[..second], key[(second + 1)..]);
+        if (second < 0) return null;
+        var value = key[(second + 1)..];
+        if (IsPositionalKey(key) && value.LastIndexOf(':') is var sxe and > 0) value = value[..sxe];
+        return (key[..second], value);
     }
 
     // Keys GenerateCandidateKeys emits as authoritative: provider ids, as opposed to fuzzy name/series keys.
