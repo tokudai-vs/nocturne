@@ -11,8 +11,8 @@ public static class FeatureFlags
     // version in its dedup group (locally and, via sibling_write_queue, on the other servers). Engaged only once
     // the groups were built by the conflict-guarded engine (a rebuild, or a cache populated from empty): groups
     // left by the earlier engine are over-merged, and one completion would rewrite unrelated titles. It also stays
-    // off while the last measurement found an episode group spanning more than one (season, episode) whose items
-    // do not share an episode id: a season/episode over-merge the conflict guard cannot see.
+    // off while the last measurement found an episode group in which one server holds two items under different
+    // (season, episode) sharing no episode id: a season/episode over-merge the conflict guard cannot see.
     public static bool SiblingCascade(DatabaseService db) =>
         db.GetMigrationState(ConcurrentDedupIndex.EngineMarkerKey) == ConcurrentDedupIndex.EngineVersion
         && db.GetMigrationState(UnsharedRenumberedGroupsKey) == "0";

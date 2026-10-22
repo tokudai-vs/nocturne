@@ -33,30 +33,52 @@ SELECT 'groups with >= 2 authoritative ids of one key type', COUNT(*) FROM (SELE
 SELECT 'groups holding > 1 tvdb:ep key', COUNT(*) FROM (SELECT group_id FROM dedup_keys WHERE key GLOB 'tvdb:ep:*' GROUP BY group_id HAVING COUNT(*) > 1);
 
 -- Episode groups whose items span more than one (season, episode). Servers numbering one episode differently
--- share its episode id; a wrong season/episode merge does not.
+-- share its id; a wrong season/episode merge does not.
 WITH spans AS (
   SELECT group_id FROM cached_items
   WHERE type = 'Episode' AND group_id IS NOT NULL
   GROUP BY group_id
   HAVING COUNT(DISTINCT COALESCE(parent_index_number, -1) || ':' || COALESCE(index_number, -1)) > 1),
-ids AS (
-  SELECT c.group_id,
-    CASE WHEN COALESCE(json_extract(c.json_data, '$.ProviderIds.Tvdb'), json_extract(c.json_data, '$.ProviderIds.TheTVDB')) GLOB '[0-9]*'
-          AND COALESCE(json_extract(c.json_data, '$.ProviderIds.Tvdb'), json_extract(c.json_data, '$.ProviderIds.TheTVDB')) NOT GLOB '*[^0-9]*'
-         THEN COALESCE(json_extract(c.json_data, '$.ProviderIds.Tvdb'), json_extract(c.json_data, '$.ProviderIds.TheTVDB')) END tvdb,
-    CASE WHEN c.tmdb_id GLOB '[0-9]*' AND c.tmdb_id NOT GLOB '*[^0-9]*' THEN c.tmdb_id END tmdb,
-    CASE WHEN c.imdb_id GLOB 'tt[0-9]*' AND substr(c.imdb_id, 3) NOT GLOB '*[^0-9]*' THEN c.imdb_id END imdb
-  FROM cached_items c JOIN spans USING (group_id)),
+raw AS (
+  SELECT c.group_id g, c.server_id srv, c.id, COALESCE(c.parent_index_number, -1) s, COALESCE(c.index_number, -1) e,
+    COALESCE(json_extract(c.json_data, '$.ProviderIds.Tvdb'), json_extract(c.json_data, '$.ProviderIds.TheTVDB')) tvdb,
+    c.tmdb_id tmdb, c.imdb_id imdb
+  FROM cached_items c JOIN spans ON spans.group_id = c.group_id),
+ep AS (
+  SELECT g, srv, id, s, e,
+    CASE WHEN tvdb GLOB '[0-9]*' AND tvdb NOT GLOB '*[^0-9]*' THEN tvdb END tvdb,
+    CASE WHEN tmdb GLOB '[0-9]*' AND tmdb NOT GLOB '*[^0-9]*' THEN tmdb END tmdb,
+    CASE WHEN imdb GLOB 'tt[0-9]*' AND substr(imdb, 3) NOT GLOB '*[^0-9]*' THEN imdb END imdb
+  FROM raw),
 per AS (
-  SELECT group_id, COUNT(*) n,
-    COUNT(tvdb) n_tvdb, COUNT(DISTINCT tvdb) d_tvdb,
-    COUNT(tmdb) n_tmdb, COUNT(DISTINCT tmdb) d_tmdb,
-    COUNT(imdb) n_imdb, COUNT(DISTINCT imdb) d_imdb
-  FROM ids GROUP BY group_id)
+  SELECT g, COUNT(*) n, COUNT(tvdb) n_tvdb, COUNT(DISTINCT tvdb) d_tvdb, COUNT(tmdb) n_tmdb,
+         COUNT(DISTINCT tmdb) d_tmdb, COUNT(imdb) n_imdb, COUNT(DISTINCT imdb) d_imdb
+  FROM ep GROUP BY g)
 SELECT 'episode groups spanning > 1 (season, episode)', COUNT(*) FROM per
 UNION ALL
-SELECT '[gate] ... whose items do not all share one episode id', COUNT(*) FROM per
- WHERE NOT ((n_tvdb = n AND d_tvdb = 1) OR (n_tmdb = n AND d_tmdb = 1) OR (n_imdb = n AND d_imdb = 1));
+SELECT '... whose items do not all share one episode id', COUNT(*) FROM per
+ WHERE NOT ((n_tvdb = n AND d_tvdb = 1) OR (n_tmdb = n AND d_tmdb = 1) OR (n_imdb = n AND d_imdb = 1))
+UNION ALL
+-- One server holding two items under different numbering that share no episode id: the server's own numbering
+-- contradicts the merge. The first count also includes a legitimate untagged copy of an episode another server
+-- keeps under several numberings.
+SELECT '[gate] ... where one server holds two items under different numbering sharing no episode id', COUNT(DISTINCT a.g)
+  FROM ep a JOIN ep b ON b.g = a.g AND b.srv = a.srv AND a.id < b.id AND (a.s != b.s OR a.e != b.e)
+ WHERE NOT ((a.tvdb = b.tvdb OR a.tmdb = b.tmdb OR a.imdb = b.imdb) IS TRUE);
+
+-- An untagged episode grouped with another server's tagged episode while its own server holds that episode id
+-- only under a different numbering (in any group): the same contradiction, where the gate's pair is split apart.
+CREATE TEMP TABLE baseline_ep AS
+  SELECT group_id g, server_id srv, parent_index_number s, index_number e,
+         NULLIF(COALESCE(json_extract(json_data, '$.ProviderIds.Tvdb'), json_extract(json_data, '$.ProviderIds.TheTVDB')), '') tvdb
+  FROM cached_items WHERE type = 'Episode' AND group_id IS NOT NULL;
+CREATE INDEX temp.baseline_ep_g ON baseline_ep(g);
+CREATE INDEX temp.baseline_ep_t ON baseline_ep(srv, tvdb);
+SELECT 'untagged episodes contradicted by their own server''s numbering (groups)', COUNT(DISTINCT u.g) FROM baseline_ep u
+  JOIN baseline_ep t ON t.g = u.g AND t.srv != u.srv AND t.tvdb IS NOT NULL
+ WHERE u.tvdb IS NULL
+   AND EXISTS (SELECT 1 FROM baseline_ep o WHERE o.srv = u.srv AND o.tvdb = t.tvdb AND (o.s IS NOT u.s OR o.e IS NOT u.e))
+   AND NOT EXISTS (SELECT 1 FROM baseline_ep o WHERE o.srv = u.srv AND o.tvdb = t.tvdb AND o.s IS u.s AND o.e IS u.e);
 
 SELECT 'ep:tvdb/tmdb/imdb keys', COUNT(*) FROM dedup_keys WHERE key GLOB 'ep:tvdb:*' OR key GLOB 'ep:tmdb:*' OR key GLOB 'ep:imdb:*';
 SELECT 'demoted (suspect) provider keys', COUNT(*) FROM dedup_keys WHERE is_authoritative = 0 AND key NOT GLOB '*@*' AND (key GLOB 'tmdb:*' OR key GLOB 'imdb:*' OR key GLOB 'tvdb:*' OR key GLOB 'ep:tvdb:*' OR key GLOB 'ep:tmdb:*' OR key GLOB 'ep:imdb:*');

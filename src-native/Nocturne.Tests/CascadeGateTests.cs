@@ -51,6 +51,23 @@ public class CascadeGateTests : IDisposable
         Assert.False(FeatureFlags.SiblingCascade(_db));
     }
 
+    // Ben Fogle S20E09 after item 1c: Valkyrie keeps one episode as 19x8, 19x9 and 20x9, and Raptor's untagged 20x9
+    // of it joined. No server contradicts its own numbering, so the gate stays open.
+    [Fact]
+    public void UntaggedCopy_OfAnEpisodeAnotherServerKeepsUnderSeveralNumberings_PassesTheGate()
+    {
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        Plant("v1", "valkyrie", 19, 8, "1", "11035496");
+        Plant("v2", "valkyrie", 19, 9, "1", "11035496");
+        Plant("v3", "valkyrie", 20, 9, "1", "11035496");
+        Plant("r", "raptor", 20, 9, "1", null);
+
+        FeatureFlags.MeasureCascadeGate(_db);
+
+        Assert.Equal("0", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
+        Assert.True(FeatureFlags.SiblingCascade(_db));
+    }
+
     [Fact]
     public void Unmeasured_KeepsTheCascadeOff()
     {
