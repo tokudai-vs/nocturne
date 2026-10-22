@@ -571,6 +571,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => UpsertItem(item, serverId, parentId))) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlUpsertItem;
 
@@ -931,6 +932,7 @@ public class DatabaseService : IDisposable
         var list = items.ToList();
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => SaveContinueWatchingCache(list))) return;
             if (_connection == null) return;
             using var tx = _connection.BeginTransaction();
             using var delCmd = _connection.CreateCommand();
@@ -987,6 +989,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => RemoveFromContinueWatchingCache(itemId))) return;
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlRemoveFromContinueWatchingCache;
@@ -1314,6 +1317,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => RecordWatchEvent(itemId, serverId, itemName, itemType, durationSeconds, seriesName, genres, source))) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlRecordWatchEvent;
             cmd.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
@@ -1585,6 +1589,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => SaveTraktWatchlist(items))) return;
             using var tx = _connection.BeginTransaction();
             using var delCmd = _connection.CreateCommand();
             delCmd.Transaction = tx;
@@ -2363,6 +2368,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => ClearResumeProgress(itemId, serverId))) return;
             try
             {
                 using var cmd = _connection?.CreateCommand();
@@ -2662,6 +2668,7 @@ public class DatabaseService : IDisposable
         if (string.IsNullOrWhiteSpace(mediaKey)) return;
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => SaveMediaStreamPreference(mediaKey, audioTrackId, audioLang, subtitleTrackId, subtitleLang))) return;
             if (_connection == null) return;
             try
             {
@@ -2785,6 +2792,12 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            // During a rebuild write the group id may be about to change: mark the members it has now.
+            if (_queuedWrites != null)
+            {
+                var members = GetGroupItemIds((int)groupId);
+                if (QueueDuringRebuildWrite(() => MarkLocalItemsPlayed(members))) return;
+            }
             if (_connection == null) return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             using var cmd = _connection.CreateCommand();
@@ -2809,6 +2822,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => MarkLocalItemPlayed(serverId, itemId))) return;
             if (_connection == null) return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             using var cmd = _connection.CreateCommand();
@@ -2836,6 +2850,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => UpdateUserDataState(serverId, itemId, positionTicks, runtimeTicks, played, lastPlayedUtc, origin))) return;
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlUpdateUserDataState;
@@ -2933,6 +2948,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => EnqueueSiblingPlaybackWrite(serverId, itemId, positionTicks, markPlayed))) return;
             if (_connection == null) return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             using var cmd = _connection.CreateCommand();
@@ -2981,6 +2997,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => RecordSiblingWriteFailure(queueId))) return;
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlRecordSiblingWriteFailure;
@@ -3009,6 +3026,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => SetMigrationState(key, value))) return;
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlSetMigrationState;
@@ -3075,6 +3093,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => RemoveSiblingWrite(queueId))) return;
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlRemoveSiblingWrite;
@@ -3128,14 +3147,14 @@ public class DatabaseService : IDisposable
     public void SaveRebuildDedupState(ConcurrentDedupIndex index)
     {
         var (groups, keys, items) = index.GetRebuildState();
-        lock (_dbLock)
+        // Only the *_rebuild tables, which nothing else reads: on its own connection, so UI reads go on (#20 item 4).
+        WithWritesQueued("rebuild state write", conn =>
         {
-            if (_connection == null) return;
-            using var tx = _connection.BeginTransaction();
+            using var tx = conn.BeginTransaction();
             try
             {
                 // 1. dedup_groups_rebuild
-                using var grpCmd = _connection.CreateCommand();
+                using var grpCmd = conn.CreateCommand();
                 grpCmd.Transaction = tx;
                 grpCmd.CommandText = @"
                     INSERT INTO dedup_groups_rebuild (
@@ -3213,7 +3232,7 @@ public class DatabaseService : IDisposable
                 }
 
                 // 2. dedup_keys_rebuild
-                using var keyCmd = _connection.CreateCommand();
+                using var keyCmd = conn.CreateCommand();
                 keyCmd.Transaction = tx;
                 keyCmd.CommandText = "INSERT INTO dedup_keys_rebuild (key, group_id, is_authoritative) VALUES ($k, $g, $a);";
                 var pkK = keyCmd.Parameters.Add("$k", SqliteType.Text);
@@ -3228,7 +3247,7 @@ public class DatabaseService : IDisposable
                 }
 
                 // 3. item_group_rebuild
-                using var mapCmd = _connection.CreateCommand();
+                using var mapCmd = conn.CreateCommand();
                 mapCmd.Transaction = tx;
                 mapCmd.CommandText = "INSERT INTO item_group_rebuild (id, server_id, group_id) VALUES ($id, $srv, $gid);";
                 var pmId = mapCmd.Parameters.Add("$id", SqliteType.Text);
@@ -3250,7 +3269,7 @@ public class DatabaseService : IDisposable
                 NocturneLogger.Error("DatabaseService", "Failed to save rebuild dedup state", ex);
                 throw;
             }
-        }
+        });
     }
 
     private static readonly string SqlGetItemsWithNullGroupId = Checked("SELECT json_data, server_id FROM cached_items WHERE group_id IS NULL AND type IN ('Movie', 'Series', 'Episode');");
@@ -3323,6 +3342,100 @@ public class DatabaseService : IDisposable
         }
     }
 
+    // Non-null while one of the rebuild's long write transactions runs on its own connection (WithWritesQueued):
+    // writes on _connection wait here instead of failing with SQLITE_BUSY after busy_timeout. Checked under _dbLock,
+    // which the window takes to open, so no write can be mid-statement when it starts.
+    private List<Action>? _queuedWrites;
+    internal Action? SwapHeldForTest;
+
+    // Runs work on a connection of its own (private cache: on the shared cache _connection uses, its table locks would
+    // block reads) with writes queued, then applies them in order under _dbLock before any newer write. For the
+    // rebuild's state write and swap, which held _dbLock, and so every UI read, for minutes (#20 item 4).
+    private void WithWritesQueued(string what, Action<SqliteConnection> work)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            _queuedWrites = new List<Action>();
+        }
+        try
+        {
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Cache = SqliteCacheMode.Private, Pooling = false }.ToString());
+            conn.Open();
+            using (var pragma = conn.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA cache_size = -262144;";
+                pragma.ExecuteNonQuery();
+            }
+            work(conn);
+        }
+        finally
+        {
+            lock (_dbLock)
+            {
+                var queued = _queuedWrites ?? new List<Action>();
+                _queuedWrites = null;
+                foreach (var write in queued)
+                {
+                    try { write(); }
+                    catch (Exception ex) { NocturneLogger.Error("DatabaseService", $"A write made during the {what} failed when applied", ex); }
+                }
+                if (queued.Count > 0) NocturneLogger.Info("DatabaseService", $"Applied {queued.Count} write(s) made during the {what}.");
+            }
+        }
+    }
+
+    private bool QueueDuringRebuildWrite(Action write)
+    {
+        lock (_dbLock)
+        {
+            if (_queuedWrites == null) return false;
+            _queuedWrites.Add(write);
+            return true;
+        }
+    }
+
+    private static readonly string SqlMarkLocalItemsPlayed = Checked(@"
+                UPDATE user_data
+                   SET played = 1, position_ticks = 0, last_played_utc = $now, updated_locally = 1
+                 WHERE server_id = $server_id AND item_id = $item_id;
+            ");
+
+    // MarkLocalGroupPlayed for members resolved before a rebuild swap changed their group ids.
+    private void MarkLocalItemsPlayed(List<(string ServerId, string ItemId)> members)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlMarkLocalItemsPlayed;
+            cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            var pSrv = cmd.Parameters.Add("$server_id", SqliteType.Text);
+            var pId = cmd.Parameters.Add("$item_id", SqliteType.Text);
+            foreach (var (srv, id) in members)
+            {
+                pSrv.Value = srv;
+                pId.Value = id;
+                cmd.ExecuteNonQuery();
+            }
+        }
+    }
+
+    private static readonly string SqlGroupIdOfItem = Checked("SELECT group_id FROM cached_items WHERE id = $id AND server_id = $srv;");
+
+    private long? GroupIdOfItem(string serverId, string itemId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return null;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlGroupIdOfItem;
+            cmd.Parameters.AddWithValue("$id", itemId);
+            cmd.Parameters.AddWithValue("$srv", serverId);
+            return cmd.ExecuteScalar() is long gid ? gid : null;
+        }
+    }
+
     // The build step reads chunks and fills the *_rebuild tables through the normal methods, each taking _dbLock
     // briefly, so UI reads interleave with it; holding the lock for the whole build froze the UI for minutes on
     // a large library. Only the swap holds it. Callers exclude sync via DedupEngine.WriterGate.
@@ -3336,23 +3449,21 @@ public class DatabaseService : IDisposable
         NocturneLogger.Info("DatabaseService", $"Rebuild tables built in {clock.ElapsedMilliseconds} ms; swapping.");
         clock.Restart();
 
-        lock (_dbLock)
+        // 2. The swap runs on its own connection, outside _dbLock (#20 item 4): it rewrites every cached_items row and
+        // took 233-507 s on the live library, during which every UI read used to wait. Reads now carry on from the
+        // pre-swap snapshot (WAL); writes queue and are applied once it commits.
+        WithWritesQueued("rebuild swap", swap =>
         {
-            if (_connection == null) return;
-
-            // 2. Perform atomic swap under PRAGMA legacy_alter_table = ON
-            using (var pragmaCmd = _connection.CreateCommand())
+            using (var pragmaCmd = swap.CreateCommand())
             {
                 pragmaCmd.CommandText = "PRAGMA legacy_alter_table = ON;";
                 pragmaCmd.ExecuteNonQuery();
             }
 
-            using var tx = _connection.BeginTransaction();
-            try
-            {
-                using var cmd = _connection.CreateCommand();
-                cmd.Transaction = tx;
-                cmd.CommandText = @"
+            using var tx = swap.BeginTransaction();
+            using var cmd = swap.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"
                     -- Swap tables
                     DROP TABLE IF EXISTS dedup_groups_old;
                     DROP TABLE IF EXISTS dedup_keys_old;
@@ -3413,17 +3524,11 @@ public class DatabaseService : IDisposable
                     -- 4. Rebuild FTS5 index
                     INSERT INTO dedup_groups_fts(dedup_groups_fts) VALUES('rebuild');
                 ";
-                cmd.ExecuteNonQuery();
-                tx.Commit();
-            }
-            finally
-            {
-                using var pragmaOff = _connection.CreateCommand();
-                pragmaOff.CommandText = "PRAGMA legacy_alter_table = OFF;";
-                pragmaOff.ExecuteNonQuery();
-            }
-        }
-        NocturneLogger.Info("DatabaseService", $"Rebuild swap held the database lock for {clock.ElapsedMilliseconds} ms.");
+            cmd.ExecuteNonQuery();
+            SwapHeldForTest?.Invoke();
+            tx.Commit();
+        });
+        NocturneLogger.Info("DatabaseService", $"Rebuild swap took {clock.ElapsedMilliseconds} ms on its own connection.");
 
         // Post-commit reingest of any items where group_id IS NULL
         if (postCommitReingest != null)
@@ -3449,6 +3554,12 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            // During a rebuild write the group id may be about to change: follow the group's primary item instead.
+            if (_queuedWrites != null && GetDedupGroup(groupId) is { } group)
+            {
+                var (srv, id) = (group.PrimaryServerId, group.PrimaryItemId);
+                if (QueueDuringRebuildWrite(() => EnqueueTraktEvent(GroupIdOfItem(srv, id) ?? 0, action, progress, payload))) return;
+            }
             if (_connection == null) return;
             try
             {
@@ -3514,6 +3625,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => RemoveTraktEvent(queueId))) return;
             if (_connection == null) return;
             try
             {
@@ -3535,6 +3647,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => IncrementTraktEventAttempts(queueId))) return;
             if (_connection == null) return;
             try
             {
@@ -3587,6 +3700,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => UpsertWatchlistEntry(source, @ref, itemType, addedUtc, title, year, tmdbKey, pendingOp))) return;
             if (_connection == null) return;
             try
             {
@@ -3615,6 +3729,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => RemoveWatchlistEntry(source, @ref))) return;
             if (_connection == null) return;
             try
             {
@@ -3637,6 +3752,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => SetWatchlistPendingOp(source, @ref, pendingOp))) return;
             if (_connection == null) return;
             try
             {
@@ -3808,6 +3924,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => UpsertTmdbMetadata(metadata))) return;
             if (_connection == null) return;
             try
             {
@@ -3973,6 +4090,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => SetIntegrationState(name, key, value))) return;
             if (_connection == null) return;
             try
             {

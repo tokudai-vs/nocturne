@@ -267,6 +267,48 @@ public class DatabaseServiceTests : IDisposable
         Assert.Equal(new[] { "imdb:movie:tt2543164", "tmdb:movie:329865" }, keys); // not the fuzzy name key, not Dune's
     }
 
+    // #20 item 4: the swap runs on its own connection. While it holds SQLite's write lock, UI reads are served from
+    // the pre-swap snapshot and UI writes are queued (not failed with SQLITE_BUSY), then applied once it commits.
+    [Fact]
+    public async Task DuringTheRebuildSwap_ReadsAreServed_AndWritesQueueUntilItCommits()
+    {
+        EmbyItem M(string id, string srv, string tmdb) => new() { Id = id, ServerId = srv, Name = "Movie " + tmdb, Type = "Movie", ProviderIds = new() { { "Tmdb", tmdb } } };
+        var a = M("a", "s1", "100"); var b = M("b", "s2", "100"); var c = M("c", "s1", "200");
+        foreach (var it in new[] { a, b, c }) _db.UpsertItem(it, it.ServerId!);
+        var index = new ConcurrentDedupIndex();
+        index.ProcessBatch(new List<EmbyItem> { c }, _db); // c -> group 1, a/b -> group 2; the rebuild flips them
+        index.ProcessBatch(new List<EmbyItem> { a, b }, _db);
+        var oldAb = long.Parse(a.DedupGroupId!);
+        foreach (var it in new[] { a, b }) _db.UpdateLocalPlaybackProgress(it.ServerId!, it.Id, 600 * 10_000_000L);
+
+        using var reached = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        _db.SwapHeldForTest = () => { reached.Set(); release.Wait(TimeSpan.FromSeconds(30)); };
+        var rebuild = Task.Run(() => new DedupEngine().RebuildIndex(_db));
+        Assert.True(reached.Wait(TimeSpan.FromSeconds(30)));
+
+        var read = Task.Run(() => _db.GetGroupVersions(oldAb.ToString()).Select(v => v.Id).OrderBy(x => x).ToList());
+        Assert.True(read.Wait(TimeSpan.FromSeconds(5)), "a UI read waited for the swap");
+        Assert.Equal(new[] { "a", "b" }, read.Result); // the pre-swap grouping
+
+        var writes = Task.Run(() =>
+        {
+            _db.MarkLocalItemPlayed("s1", "c");
+            _db.MarkLocalGroupPlayed(oldAb);
+            _db.EnqueueTraktEvent(oldAb, "stop", 95, "{}");
+        });
+        Assert.True(writes.Wait(TimeSpan.FromSeconds(5)), "a UI write waited for the swap");
+        Assert.NotEqual(true, _db.GetUserData("s1", "c")?.Played); // queued, not applied yet
+
+        release.Set();
+        await rebuild;
+
+        Assert.True(_db.GetUserData("s1", "c")!.Played);
+        Assert.True(_db.GetUserData("s1", "a")!.Played); // the group's members as they were when the write was made
+        Assert.True(_db.GetUserData("s2", "b")!.Played);
+        Assert.Equal(_db.GetGroupIdForDedupKey("tmdb:movie:100"), (int)Assert.Single(_db.GetPendingTraktEvents()).GroupId);
+    }
+
     // Item 3 (#19, audit 4.3): group ids restart at 1 on a rebuild, so a queued Trakt event kept naming its old id,
     // which now belongs to an unrelated group.
     [Fact]
