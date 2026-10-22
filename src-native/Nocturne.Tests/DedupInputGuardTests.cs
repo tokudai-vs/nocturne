@@ -464,4 +464,47 @@ public class DedupInputGuardTests
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
+
+    // #20 item 1: servers write "Imdb" and "IMDB"; the exact-key lookup saw only the first (336,776 live items).
+    [Fact]
+    public void ProviderIds_AreReadRegardlessOfCase()
+    {
+        var item = new EmbyItem
+        {
+            ProviderIds = new() { ["IMDB"] = "tt7597088", ["TMDB"] = "936", ["thetvdb"] = "4501235" },
+            SeriesProviderIds = new() { ["IMDB"] = "tt0069641" }
+        };
+        Assert.Equal("tt7597088", item.ImdbId);
+        Assert.Equal("936", item.TmdbId);
+        Assert.Equal("4501235", item.TvdbId);
+        Assert.Equal("tt0069641", item.SeriesImdbId);
+
+        var emptyExact = new EmbyItem { ProviderIds = new() { ["Imdb"] = "", ["IMDB"] = "tt0000001" } };
+        Assert.Equal("tt0000001", emptyExact.ImdbId);
+    }
+
+    [Fact]
+    public void UpperCaseImdbId_MatchesAcrossServers()
+    {
+        var index = new ConcurrentDedupIndex();
+        var raptor = new EmbyItem { Id = "r", ServerId = "raptor", Name = "Pilot", Type = "Episode", SeriesName = "Show A", ParentIndexNumber = 1, IndexNumber = 1, ProviderIds = new() { ["IMDB"] = "tt1234567" } };
+        var valkyrie = new EmbyItem { Id = "v", ServerId = "valkyrie", Name = "Pilot", Type = "Episode", SeriesName = "Show B", ParentIndexNumber = 2, IndexNumber = 5, ProviderIds = new() { ["Imdb"] = "tt1234567" } };
+
+        index.ProcessBatch(new[] { raptor, valkyrie });
+
+        Assert.Equal(raptor.DedupGroupId, valkyrie.DedupGroupId); // only the IMDb id links them
+    }
+
+    [Fact]
+    public void UpperCaseImdbId_IsSeenByTheConflictGuard()
+    {
+        var index = new ConcurrentDedupIndex();
+        var a = new EmbyItem { Id = "a", ServerId = "raptor", Name = "Dune", Type = "Movie", ProviderIds = new() { ["Tmdb"] = "438631", ["IMDB"] = "tt1160419" } };
+        var b = new EmbyItem { Id = "b", ServerId = "valkyrie", Name = "Dune", Type = "Movie", ProviderIds = new() { ["Tmdb"] = "438631", ["Imdb"] = "tt0087182" } };
+
+        index.ProcessBatch(new[] { a, b });
+
+        Assert.NotEqual(a.DedupGroupId, b.DedupGroupId);
+        Assert.Equal(1, index.ConflictsRefused);
+    }
 }

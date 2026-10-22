@@ -76,17 +76,29 @@ public class EmbyItem : INotifyPropertyChanged
     public string? ServerName { get; set; }
     [JsonIgnore]
     public string? DedupGroupId { get; set; }
-    [JsonIgnore]
-    public string? SeriesTmdbId => SeriesProviderIds?.GetValueOrDefault("Tmdb") ?? SeriesProviderIds?.GetValueOrDefault("TheMovieDb");
+    // Provider names are matched regardless of case: servers write "Imdb" and "IMDB" for the same id (336,776 items
+    // in the live library carried an IMDb id dedup never saw). The first non-empty value wins, name before alias.
+    public static string? ProviderId(Dictionary<string, string>? ids, string name, string? alias = null)
+    {
+        if (ids == null) return null;
+        if (ids.TryGetValue(name, out var exact) && !string.IsNullOrEmpty(exact)) return exact;
+        foreach (var wanted in alias == null ? new[] { name } : new[] { name, alias })
+            foreach (var (key, value) in ids)
+                if (!string.IsNullOrEmpty(value) && string.Equals(key, wanted, StringComparison.OrdinalIgnoreCase)) return value;
+        return null;
+    }
 
     [JsonIgnore]
-    public string? SeriesTvdbId => SeriesProviderIds?.GetValueOrDefault("Tvdb") ?? SeriesProviderIds?.GetValueOrDefault("TheTVDB");
+    public string? SeriesTmdbId => ProviderId(SeriesProviderIds, "Tmdb", "TheMovieDb");
+
+    [JsonIgnore]
+    public string? SeriesTvdbId => ProviderId(SeriesProviderIds, "Tvdb", "TheTVDB");
 
     private string? _seriesImdbId;
     [JsonIgnore]
     public string? SeriesImdbId
     {
-        get => _seriesImdbId ?? SeriesProviderIds?.GetValueOrDefault("Imdb");
+        get => _seriesImdbId ?? ProviderId(SeriesProviderIds, "Imdb");
         set => _seriesImdbId = value;
     }
     [JsonIgnore]
@@ -137,15 +149,13 @@ public class EmbyItem : INotifyPropertyChanged
     public string? FirstTagline => Taglines?.FirstOrDefault();
 
     [JsonIgnore]
-    public string TmdbId => ProviderIds?.GetValueOrDefault("Tmdb")
-                         ?? ProviderIds?.GetValueOrDefault("TheMovieDb") ?? string.Empty;
+    public string TmdbId => ProviderId(ProviderIds, "Tmdb", "TheMovieDb") ?? string.Empty;
 
     [JsonIgnore]
-    public string ImdbId => ProviderIds?.GetValueOrDefault("Imdb") ?? string.Empty;
+    public string ImdbId => ProviderId(ProviderIds, "Imdb") ?? string.Empty;
 
     [JsonIgnore]
-    public string TvdbId => ProviderIds?.GetValueOrDefault("Tvdb")
-                         ?? ProviderIds?.GetValueOrDefault("TheTVDB") ?? string.Empty;
+    public string TvdbId => ProviderId(ProviderIds, "Tvdb", "TheTVDB") ?? string.Empty;
 
     [JsonIgnore]
     public string ResolutionBadge

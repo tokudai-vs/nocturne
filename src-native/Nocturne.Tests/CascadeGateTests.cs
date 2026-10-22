@@ -68,6 +68,24 @@ public class CascadeGateTests : IDisposable
         Assert.True(FeatureFlags.SiblingCascade(_db));
     }
 
+    // The imdb_id column of rows cached before the casing fix is empty; the gate reads the JSON, any case.
+    [Fact]
+    public void Gate_ReadsUpperCaseImdbIds_FromTheItemJson()
+    {
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        foreach (var (id, ep) in new[] { ("v1", 8), ("v2", 9) })
+            _db.UpsertItem(new EmbyItem
+            {
+                Id = id, ServerId = "valkyrie", Name = id, Type = "Episode", ParentIndexNumber = 19, IndexNumber = ep,
+                ProviderIds = new() { ["IMDB"] = "tt9999999" }, DedupGroupId = "1"
+            }, "valkyrie");
+        _db.ExecuteSql("UPDATE cached_items SET imdb_id = NULL;");
+
+        FeatureFlags.MeasureCascadeGate(_db);
+
+        Assert.Equal("0", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
+    }
+
     [Fact]
     public void Unmeasured_KeepsTheCascadeOff()
     {

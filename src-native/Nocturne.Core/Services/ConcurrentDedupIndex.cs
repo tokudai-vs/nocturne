@@ -63,7 +63,7 @@ public class ConcurrentDedupIndex
     // migration_state marker: set once the groups in the database were built by this (conflict-guarded) engine.
     // FeatureFlags.SiblingCascade engages only then. Bump the version when grouping rules change.
     public const string EngineMarkerKey = "dedup_engine";
-    public const string EngineVersion = "3";
+    public const string EngineVersion = "4";
 
     private readonly object _lock = new();
     private Dictionary<string, (int GroupId, bool IsAuthoritative)> _keyToGroup = new(StringComparer.OrdinalIgnoreCase);

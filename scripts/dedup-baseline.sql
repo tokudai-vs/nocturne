@@ -12,12 +12,14 @@ SELECT 'groups spanning both servers', COUNT(*) FROM (SELECT group_id FROM cache
 SELECT 'largest group (items)', MAX(c) FROM (SELECT COUNT(*) c FROM cached_items WHERE group_id IS NOT NULL GROUP BY group_id);
 SELECT 'groups > 8 items', COUNT(*) FROM (SELECT group_id FROM cached_items WHERE group_id IS NOT NULL GROUP BY group_id HAVING COUNT(*) > 8);
 
--- Different well-formed ids of one provider among a group's items (their JSON, not the engine's keys).
+-- Different well-formed ids of one provider among a group's items (their JSON, not the engine's keys; provider
+-- names in any case, "Imdb" and "IMDB" both occur).
 SELECT 'groups with conflicting same-provider ids (items'' JSON)', COUNT(DISTINCT group_id) FROM (
   SELECT group_id FROM (
-    SELECT group_id, type, 'tmdb' p, json_extract(json_data, '$.ProviderIds.Tmdb') v FROM cached_items WHERE group_id IS NOT NULL AND type IN ('Movie', 'Series', 'Episode')
-    UNION ALL SELECT group_id, type, 'imdb', json_extract(json_data, '$.ProviderIds.Imdb') FROM cached_items WHERE group_id IS NOT NULL AND type IN ('Movie', 'Series', 'Episode')
-    UNION ALL SELECT group_id, type, 'tvdb', json_extract(json_data, '$.ProviderIds.Tvdb') FROM cached_items WHERE group_id IS NOT NULL AND type IN ('Movie', 'Series', 'Episode'))
+    SELECT c.group_id, CASE lower(j.key) WHEN 'themoviedb' THEN 'tmdb' WHEN 'thetvdb' THEN 'tvdb' ELSE lower(j.key) END p, j.value v
+    FROM cached_items c, json_each(c.json_data, '$.ProviderIds') j
+    WHERE c.group_id IS NOT NULL AND c.type IN ('Movie', 'Series', 'Episode')
+      AND lower(j.key) IN ('tmdb', 'themoviedb', 'imdb', 'tvdb', 'thetvdb'))
   WHERE v IS NOT NULL AND v != '' AND ((p = 'imdb' AND v GLOB 'tt[0-9]*' AND substr(v, 3) NOT GLOB '*[^0-9]*') OR (p != 'imdb' AND v NOT GLOB '*[^0-9]*'))
   GROUP BY group_id, p HAVING COUNT(DISTINCT v) >= 2);
 SELECT 'movie groups with >= 2 distinct tmdb_id', COUNT(*) FROM (SELECT group_id FROM cached_items WHERE type = 'Movie' AND group_id IS NOT NULL AND tmdb_id IS NOT NULL AND tmdb_id != '' GROUP BY group_id HAVING COUNT(DISTINCT tmdb_id) >= 2);
@@ -41,8 +43,9 @@ WITH spans AS (
   HAVING COUNT(DISTINCT COALESCE(parent_index_number, -1) || ':' || COALESCE(index_number, -1)) > 1),
 raw AS (
   SELECT c.group_id g, c.server_id srv, c.id, COALESCE(c.parent_index_number, -1) s, COALESCE(c.index_number, -1) e,
-    COALESCE(json_extract(c.json_data, '$.ProviderIds.Tvdb'), json_extract(c.json_data, '$.ProviderIds.TheTVDB')) tvdb,
-    c.tmdb_id tmdb, c.imdb_id imdb
+    (SELECT value FROM json_each(c.json_data, '$.ProviderIds') WHERE lower(key) IN ('tvdb', 'thetvdb') AND value != '' LIMIT 1) tvdb,
+    (SELECT value FROM json_each(c.json_data, '$.ProviderIds') WHERE lower(key) IN ('tmdb', 'themoviedb') AND value != '' LIMIT 1) tmdb,
+    (SELECT value FROM json_each(c.json_data, '$.ProviderIds') WHERE lower(key) = 'imdb' AND value != '' LIMIT 1) imdb
   FROM cached_items c JOIN spans ON spans.group_id = c.group_id),
 ep AS (
   SELECT g, srv, id, s, e,
@@ -70,7 +73,7 @@ SELECT '[gate] ... where one server holds two items under different numbering sh
 -- only under a different numbering (in any group): the same contradiction, where the gate's pair is split apart.
 CREATE TEMP TABLE baseline_ep AS
   SELECT group_id g, server_id srv, parent_index_number s, index_number e,
-         NULLIF(COALESCE(json_extract(json_data, '$.ProviderIds.Tvdb'), json_extract(json_data, '$.ProviderIds.TheTVDB')), '') tvdb
+         (SELECT value FROM json_each(json_data, '$.ProviderIds') WHERE lower(key) IN ('tvdb', 'thetvdb') AND value != '' LIMIT 1) tvdb
   FROM cached_items WHERE type = 'Episode' AND group_id IS NOT NULL;
 CREATE INDEX temp.baseline_ep_g ON baseline_ep(g);
 CREATE INDEX temp.baseline_ep_t ON baseline_ep(srv, tvdb);

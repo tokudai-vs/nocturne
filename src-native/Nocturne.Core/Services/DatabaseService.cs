@@ -3021,7 +3021,8 @@ public class DatabaseService : IDisposable
     // Episode groups in which one server holds two items under different (season, episode) that share no episode
     // id: a season/episode match the server's own numbering contradicts (an untagged S02E10 beside the S02E04 that
     // server tags with the group's id). Servers numbering one episode differently share its id and pass, and so do
-    // the copies one server keeps under several numberings. Ids are read as the dedup engine reads them. Same
+    // the copies one server keeps under several numberings. Ids come from the item's JSON, provider names in any
+    // case, as the dedup engine reads them (the imdb_id column is stale for rows cached before that fix). Same
     // query as the [gate] row of scripts/dedup-baseline.sql.
     private static readonly string SqlCountUnsharedRenumberedGroups = Checked(@"
                     WITH spans AS (
@@ -3031,8 +3032,9 @@ public class DatabaseService : IDisposable
                       HAVING COUNT(DISTINCT COALESCE(parent_index_number, -1) || ':' || COALESCE(index_number, -1)) > 1),
                     raw AS (
                       SELECT c.group_id g, c.server_id srv, c.id, COALESCE(c.parent_index_number, -1) s, COALESCE(c.index_number, -1) e,
-                        COALESCE(json_extract(c.json_data, '$.ProviderIds.Tvdb'), json_extract(c.json_data, '$.ProviderIds.TheTVDB')) tvdb,
-                        c.tmdb_id tmdb, c.imdb_id imdb
+                        (SELECT value FROM json_each(c.json_data, '$.ProviderIds') WHERE lower(key) IN ('tvdb', 'thetvdb') AND value != '' LIMIT 1) tvdb,
+                        (SELECT value FROM json_each(c.json_data, '$.ProviderIds') WHERE lower(key) IN ('tmdb', 'themoviedb') AND value != '' LIMIT 1) tmdb,
+                        (SELECT value FROM json_each(c.json_data, '$.ProviderIds') WHERE lower(key) = 'imdb' AND value != '' LIMIT 1) imdb
                       FROM cached_items c JOIN spans ON spans.group_id = c.group_id),
                     ep AS (
                       SELECT g, srv, id, s, e,
