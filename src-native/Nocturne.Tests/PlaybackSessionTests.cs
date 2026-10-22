@@ -234,6 +234,7 @@ public class PlaybackSessionTests : IDisposable
         Assert.Empty(_db.GetPendingSiblingWrites(10));
 
         _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        FeatureFlags.MeasureCascadeGate(_db);
         var guarded = new PlaybackSession(_db);
         guarded.Begin(a, _client, "ms1", 0);
         guarded.OnPosition(3590);

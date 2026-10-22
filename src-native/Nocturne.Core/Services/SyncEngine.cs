@@ -109,6 +109,7 @@ public class SyncEngine
         try
         {
             await RunFullSyncCoreAsync(ct, forceResync);
+            if (!ct.IsCancellationRequested) await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
         }
         finally
         {

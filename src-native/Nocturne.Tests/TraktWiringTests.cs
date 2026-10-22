@@ -150,7 +150,11 @@ public class TraktWiringTests : IDisposable
         var index = new ConcurrentDedupIndex();
         index.SetServerPriority(new List<string> { "s1", "s2" });
         index.ProcessBatch(new List<EmbyItem> { a, b }, _db);
-        if (cascadeOn) _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        if (cascadeOn)
+        {
+            _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+            FeatureFlags.MeasureCascadeGate(_db);
+        }
 
         SeedConnected("c1", expiresInSec: 30 * 86400);
         var trakt = new Trakt

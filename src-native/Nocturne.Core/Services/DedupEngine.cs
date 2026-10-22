@@ -309,6 +309,7 @@ public class DedupEngine
         });
 
         db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        FeatureFlags.MeasureCascadeGate(db);
         NocturneLogger.Info("DedupEngine", $"Rebuild complete in {clock.ElapsedMilliseconds} ms: {dedupIndex.TotalGroupsCount} groups, {dedupIndex.MultiVersionGroupsCount} multi-version, {dedupIndex.ConflictsRefused} merges refused on conflicting ids.");
         return dedupIndex.MultiVersionGroupsCount;
     }

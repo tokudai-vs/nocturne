@@ -2984,6 +2984,56 @@ public class DatabaseService : IDisposable
         }
     }
 
+    // Episode groups whose items span more than one (season, episode) and do not all carry one episode id. Servers
+    // numbering one episode differently share its id; a wrong season/episode merge does not. Ids are read as the
+    // dedup engine reads them. Same query as the [gate] row of scripts/dedup-baseline.sql.
+    private static readonly string SqlCountUnsharedRenumberedGroups = Checked(@"
+                    WITH spans AS (
+                      SELECT group_id FROM cached_items
+                      WHERE type = 'Episode' AND group_id IS NOT NULL
+                      GROUP BY group_id
+                      HAVING COUNT(DISTINCT COALESCE(parent_index_number, -1) || ':' || COALESCE(index_number, -1)) > 1),
+                    ids AS (
+                      SELECT c.group_id,
+                        COALESCE(json_extract(c.json_data, '$.ProviderIds.Tvdb'), json_extract(c.json_data, '$.ProviderIds.TheTVDB')) tvdb,
+                        c.tmdb_id tmdb, c.imdb_id imdb
+                      FROM cached_items c JOIN spans USING (group_id)),
+                    valid AS (
+                      SELECT group_id,
+                        CASE WHEN tvdb GLOB '[0-9]*' AND tvdb NOT GLOB '*[^0-9]*' THEN tvdb END tvdb,
+                        CASE WHEN tmdb GLOB '[0-9]*' AND tmdb NOT GLOB '*[^0-9]*' THEN tmdb END tmdb,
+                        CASE WHEN imdb GLOB 'tt[0-9]*' AND substr(imdb, 3) NOT GLOB '*[^0-9]*' THEN imdb END imdb
+                      FROM ids),
+                    per AS (
+                      SELECT COUNT(*) n, COUNT(tvdb) n_tvdb, COUNT(DISTINCT tvdb) d_tvdb, COUNT(tmdb) n_tmdb,
+                             COUNT(DISTINCT tmdb) d_tmdb, COUNT(imdb) n_imdb, COUNT(DISTINCT imdb) d_imdb
+                      FROM valid GROUP BY group_id)
+                    SELECT COUNT(*) FROM per
+                    WHERE NOT ((n_tvdb = n AND d_tvdb = 1) OR (n_tmdb = n AND d_tmdb = 1) OR (n_imdb = n AND d_imdb = 1));
+                ");
+
+    // Own read-only connection, like the index load: the scan takes seconds on a large library and must not hold
+    // _dbLock. Null when the query fails.
+    public int? CountUnsharedRenumberedGroups()
+    {
+        try
+        {
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString)
+            {
+                Mode = SqliteOpenMode.ReadOnly,
+                Cache = SqliteCacheMode.Private
+            }.ToString());
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = SqlCountUnsharedRenumberedGroups;
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        catch (Exception ex) when (QueryFailed(ex, SqlCountUnsharedRenumberedGroups))
+        {
+            return null;
+        }
+    }
+
     private static readonly string SqlRemoveSiblingWrite = Checked("DELETE FROM sibling_write_queue WHERE queue_id = $qid;");
 
     public void RemoveSiblingWrite(int queueId)
