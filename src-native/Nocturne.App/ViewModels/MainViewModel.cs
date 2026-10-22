@@ -163,9 +163,12 @@ public class MainViewModel : BaseViewModel
             });
         };
 
+        // BeginInvoke: the handler can raise the modal library-setup prompt, and SyncCompleted fires on the sync
+        // thread inside DedupEngine.WriterGate; waiting on the dialog held the gate (and the cascade-gate
+        // measurement) until the user answered.
         _sync.SyncCompleted += () =>
         {
-            Application.Current?.Dispatcher?.Invoke(() =>
+            Application.Current?.Dispatcher?.BeginInvoke(() =>
             {
                 IsSyncing = false;
                 SyncProblemText = string.Empty;
