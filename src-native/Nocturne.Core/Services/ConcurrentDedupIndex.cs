@@ -42,8 +42,8 @@ public class DedupGroupRecord
     public string? BackdropServerId { get; set; }
     public string? TmdbKey { get; set; }
 
-    // Sibling item tracking: (ServerId, ItemId)
-    public HashSet<(string ServerId, string ItemId)> ItemIds { get; } = new();
+    // Sibling item tracking: (ServerId, ItemId) -> the episode's (season, episode) on its server, null otherwise
+    public Dictionary<(string ServerId, string ItemId), (int Season, int Episode)?> ItemIds { get; } = new();
     public HashSet<string> Keys { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public bool IsDirty { get; set; }
@@ -63,7 +63,7 @@ public class ConcurrentDedupIndex
     // migration_state marker: set once the groups in the database were built by this (conflict-guarded) engine.
     // FeatureFlags.SiblingCascade engages only then. Bump the version when grouping rules change.
     public const string EngineMarkerKey = "dedup_engine";
-    public const string EngineVersion = "2";
+    public const string EngineVersion = "3";
 
     private readonly object _lock = new();
     private Dictionary<string, (int GroupId, bool IsAuthoritative)> _keyToGroup = new(StringComparer.OrdinalIgnoreCase);
@@ -139,9 +139,9 @@ public class ConcurrentDedupIndex
             keyToGroup[key] = (gid, isAuth);
             if (groups.TryGetValue(gid, out var g)) g.Keys.Add(key);
         }
-        foreach (var (srv, id, gid) in itemRows)
+        foreach (var (srv, id, gid, position) in itemRows)
         {
-            if (groups.TryGetValue(gid, out var g)) g.ItemIds.Add((srv, id));
+            if (groups.TryGetValue(gid, out var g)) g.ItemIds[(srv, id)] = position;
         }
 
         lock (_lock)
@@ -248,6 +248,13 @@ public class ConcurrentDedupIndex
     // Stable key for an item with no usable key: it still gets a (singleton) group, and re-ingesting it finds
     // that group instead of minting a new one.
     private static CandidateKey IdentityKey(EmbyItem item) => new($"item:{item.ServerId}:{item.Id}", false);
+
+    private static (int Season, int Episode)? PositionOf(EmbyItem item) =>
+        item.Type == "Episode" && item.ParentIndexNumber is int s && item.IndexNumber is int e ? (s, e) : null;
+
+    // Season/episode keys ("ep:tvdb:{series}:s02e10", "ep:series:...", "ep:name:..."), as opposed to the
+    // episode's own provider ids ("tvdb:ep:{id}").
+    private static bool IsPositionalKey(string key) => key.StartsWith("ep:", StringComparison.OrdinalIgnoreCase);
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string ServerId, string SeriesId), Dictionary<string, string>> _seriesProviderIds = new();
 
@@ -442,7 +449,7 @@ public class ConcurrentDedupIndex
             AudioFormats = audio,
             IsDirty = true
         };
-        newGroup.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
+        newGroup.ItemIds[(item.ServerId ?? string.Empty, item.Id)] = PositionOf(item);
         _groups[newGid] = newGroup;
 
         // An item split off (conflict or cap) whose keys other groups hold gets its identity key, so the next
@@ -532,6 +539,7 @@ public class ConcurrentDedupIndex
                 var authMatches = new HashSet<int>();
                 var provMatches = new HashSet<int>();
                 var authLinkedGroupIds = new HashSet<int>();
+                var idReached = new HashSet<int>(); // reached through a key that is not positional
 
                 foreach (var ck in candidateKeys)
                 {
@@ -539,6 +547,7 @@ public class ConcurrentDedupIndex
                     {
                         if (_groups.TryGetValue(mapping.GroupId, out var g))
                         {
+                            if (!IsPositionalKey(ck.Key)) idReached.Add(g.GroupId);
                             if (g.IsProvisional == 0)
                             {
                                 authMatches.Add(g.GroupId);
@@ -571,6 +580,24 @@ public class ConcurrentDedupIndex
                         candidateKeys = DropSuspectKeys(candidateKeys, gid, keysToSave);
                     }
                     if (candidateKeys.Count == 0) candidateKeys.Add(IdentityKey(item));
+                }
+
+                // A season/episode key is only as good as this server's numbering. One that leads into a group
+                // where this server already has a member numbered differently joins two different episodes: an
+                // untagged S02E10 into the group of the episode another server numbers S02E10 and this one S02E04.
+                // Same-server copies share numbering; a bare file joining a tagged copy on another server is unaffected.
+                if (PositionOf(item) is { } position)
+                {
+                    var server = item.ServerId ?? string.Empty;
+                    foreach (var gid in authMatches.Concat(provMatches).Where(g => !idReached.Contains(g)).ToList())
+                    {
+                        var g = _groups[gid];
+                        if (!g.ItemIds.Any(m => m.Key.ServerId == server && m.Key.ItemId != item.Id && m.Value is { } p && p != position)) continue;
+                        LogRefusal($"Merge refused: '{item.Name}' ({server}/{item.Id}) S{position.Season:D2}E{position.Episode:D2} reached group {gid} '{g.Name}' only by season/episode, and that server numbers its member differently.");
+                        authMatches.Remove(gid);
+                        provMatches.Remove(gid);
+                        authLinkedGroupIds.Remove(gid);
+                    }
                 }
                 bool isItemAuth = candidateKeys.Any(k => k.IsAuthoritative);
 
@@ -675,7 +702,7 @@ public class ConcurrentDedupIndex
             var items = new List<(string ServerId, string ItemId, int GroupId)>();
             foreach (var g in groups)
             {
-                foreach (var (srv, id) in g.ItemIds)
+                foreach (var (srv, id) in g.ItemIds.Keys)
                 {
                     items.Add((srv, id, g.GroupId));
                 }
@@ -756,7 +783,7 @@ public class ConcurrentDedupIndex
     {
         deletedGroupIds.Add(loser.GroupId);
         remappedGroups.Add((loser.GroupId, winner.GroupId));
-        foreach (var itm in loser.ItemIds) winner.ItemIds.Add(itm);
+        foreach (var (itm, position) in loser.ItemIds) winner.ItemIds[itm] = position;
         foreach (var k in loser.Keys)
         {
             winner.Keys.Add(k);
@@ -801,7 +828,7 @@ public class ConcurrentDedupIndex
         List<(string ServerId, string ItemId, int GroupId)> itemAssignments,
         List<DedupGroupRecord> dirtyGroups)
     {
-        target.ItemIds.Add((item.ServerId ?? string.Empty, item.Id));
+        target.ItemIds[(item.ServerId ?? string.Empty, item.Id)] = PositionOf(item);
         target.VersionCount = target.ItemIds.Count;
         target.MaxHeight = Math.Max(target.MaxHeight ?? 0, height);
         target.MaxBitrate = Math.Max(target.MaxBitrate ?? 0, bitrate);

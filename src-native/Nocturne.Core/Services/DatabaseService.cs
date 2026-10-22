@@ -2224,13 +2224,13 @@ public class DatabaseService : IDisposable
                     FROM dedup_groups;
                 ");
     private static readonly string SqlGetDedupStateForIndex2 = Checked("SELECT key, group_id, is_authoritative FROM dedup_keys;");
-    private static readonly string SqlGetDedupStateForIndex3 = Checked("SELECT server_id, id, group_id FROM cached_items WHERE group_id IS NOT NULL;");
+    private static readonly string SqlGetDedupStateForIndex3 = Checked("SELECT server_id, id, group_id, parent_index_number, index_number, type FROM cached_items WHERE group_id IS NOT NULL;");
 
-    public (List<DedupGroupRecord> Groups, List<(string Key, int GroupId, bool IsAuthoritative)> Keys, List<(string ServerId, string ItemId, int GroupId)> Items) GetDedupStateForIndex()
+    public (List<DedupGroupRecord> Groups, List<(string Key, int GroupId, bool IsAuthoritative)> Keys, List<(string ServerId, string ItemId, int GroupId, (int Season, int Episode)? Position)> Items) GetDedupStateForIndex()
     {
         var groups = new List<DedupGroupRecord>();
         var keys = new List<(string Key, int GroupId, bool IsAuthoritative)>();
-        var items = new List<(string ServerId, string ItemId, int GroupId)>();
+        var items = new List<(string ServerId, string ItemId, int GroupId, (int Season, int Episode)? Position)>();
 
         // Own private-cache, read-only connection: the full load takes seconds on a large library and must not
         // hold _dbLock (which every UI read waits on). One read transaction gives a consistent WAL snapshot.
@@ -2305,7 +2305,10 @@ public class DatabaseService : IDisposable
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    items.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+                    (int, int)? position = !reader.IsDBNull(3) && !reader.IsDBNull(4) && reader.GetString(5) == "Episode"
+                        ? (reader.GetInt32(3), reader.GetInt32(4))
+                        : null;
+                    items.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2), position));
                 }
             }
         }

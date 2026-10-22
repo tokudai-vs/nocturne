@@ -274,4 +274,73 @@ public class DedupInputGuardTests
             try { File.Delete(dbPath); } catch { }
         }
     }
+
+    // The 6 wrong groups on clean data: Raptor numbers an episode S02E10, Valkyrie numbers the same episode
+    // S02E04 (both carry its Tvdb id), and an untagged Valkyrie file of a different episode, numbered S02E10,
+    // matched the group by season/episode.
+    [Fact]
+    public void PositionalMatch_IsRefused_WhenTheSameServerNumbersItsMemberDifferently()
+    {
+        var index = new ConcurrentDedupIndex();
+        var raptor = Episode("rx", "raptor", 2, 10, tvdbEp: "4001", seriesId: "r1", seriesName: "The Yogi Bear Show");
+        var valkyrie = Episode("vx", "valkyrie", 2, 4, tvdbEp: "4001", seriesId: "v1", seriesName: "The Yogi Bear Show");
+        var untagged = Episode("vz", "valkyrie", 2, 10, seriesId: "v2", seriesName: "The Yogi Bear Show (1961)");
+
+        index.ProcessBatch(new[] { raptor, valkyrie, untagged });
+
+        Assert.Equal(raptor.DedupGroupId, valkyrie.DedupGroupId); // renumbered across servers, same id: one episode
+        Assert.NotEqual(raptor.DedupGroupId, untagged.DedupGroupId);
+    }
+
+    [Fact]
+    public void BareFile_StillJoinsATaggedCopyOnAnotherServer()
+    {
+        var index = new ConcurrentDedupIndex();
+        var tagged = Episode("rx", "raptor", 2, 10, tvdbEp: "4001", seriesId: "r1", seriesName: "The Yogi Bear Show");
+        var bare = Episode("vz", "valkyrie", 2, 10, seriesId: "v2", seriesName: "The Yogi Bear Show");
+
+        index.ProcessBatch(new[] { tagged, bare });
+
+        Assert.Equal(tagged.DedupGroupId, bare.DedupGroupId);
+    }
+
+    [Fact]
+    public void SameServerCopies_ShareNumbering_AndStillJoin()
+    {
+        var index = new ConcurrentDedupIndex();
+        var raptor = Episode("rx", "raptor", 2, 10, tvdbEp: "4001", seriesId: "r1", seriesName: "The Yogi Bear Show");
+        var hd = Episode("vx", "valkyrie", 2, 4, tvdbEp: "4001", seriesId: "v1", seriesName: "The Yogi Bear Show");
+        var uhd = Episode("vx4k", "valkyrie", 2, 4, seriesId: "v1", seriesName: "The Yogi Bear Show"); // untagged 4K copy
+
+        index.ProcessBatch(new[] { raptor, hd, uhd });
+
+        Assert.Equal(hd.DedupGroupId, uhd.DedupGroupId);
+        Assert.Equal(raptor.DedupGroupId, uhd.DedupGroupId);
+    }
+
+    [Fact]
+    public void PositionalRefusal_HoldsAfterAReload()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DatabaseService(dbPath);
+            var raptor = Episode("rx", "raptor", 2, 10, tvdbEp: "4001", seriesId: "r1", seriesName: "The Yogi Bear Show");
+            var valkyrie = Episode("vx", "valkyrie", 2, 4, tvdbEp: "4001", seriesId: "v1", seriesName: "The Yogi Bear Show");
+            foreach (var it in new[] { raptor, valkyrie }) db.UpsertItem(it, it.ServerId!);
+            new ConcurrentDedupIndex().ProcessBatch(new[] { raptor, valkyrie }, db);
+
+            var reloaded = new ConcurrentDedupIndex();
+            reloaded.InitializeFromDb(db);
+            var untagged = Episode("vz", "valkyrie", 2, 10, seriesId: "v2", seriesName: "The Yogi Bear Show");
+            db.UpsertItem(untagged, "valkyrie");
+            reloaded.ProcessBatch(new[] { untagged }, db);
+
+            Assert.NotEqual(raptor.DedupGroupId, untagged.DedupGroupId);
+        }
+        finally
+        {
+            try { File.Delete(dbPath); } catch { }
+        }
+    }
 }
