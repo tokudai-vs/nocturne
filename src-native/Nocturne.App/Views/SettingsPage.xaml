@@ -754,6 +754,19 @@
                                     ToolTip="Lists every library's item ids and removes cached items the server no longer has (also runs weekly after a sync)"
                                     IsEnabled="{Binding IsSyncing, Converter={StaticResource InverseBool}}" />
                         </StackPanel>
+
+                        <Button Content="Show Conflicting IDs" Click="OnConflictSplitsClick" Margin="0,12,0,0" HorizontalAlignment="Left"
+                                ToolTip="Titles kept apart because the servers give them different ids of the same provider" />
+                        <!-- Virtualizing: the live library lists about 3,500 rows. -->
+                        <ListBox ItemsSource="{Binding ConflictSplits}" MaxHeight="240" Margin="0,8,0,0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                     </StackPanel>
                 </Border>
             </StackPanel>

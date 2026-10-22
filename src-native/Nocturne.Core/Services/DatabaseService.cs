@@ -3107,6 +3107,84 @@ public class DatabaseService : IDisposable
         }
     }
 
+    // A merge the conflict guard (C4) refused leaves two traces: the key the item shared with the group it conflicted
+    // with is demoted there (still owned, no longer authoritative), and the item's own group holds it as evidence,
+    // "{key}@{group}". Demotion happens nowhere else; a range seek on the key finds the evidence.
+    private static readonly string SqlConflictSplitPairs = Checked(@"
+                SELECT DISTINCT k.group_id, e.group_id FROM dedup_keys k
+                JOIN dedup_keys e ON e.key >= k.key || '@' AND e.key < k.key || 'A'
+                WHERE k.is_authoritative = 0 AND instr(k.key, '@') = 0 AND e.group_id != k.group_id
+                  AND (k.key GLOB 'tmdb:*' OR k.key GLOB 'imdb:*' OR k.key GLOB 'tvdb:*' OR k.key GLOB 'ep:tvdb:*' OR k.key GLOB 'ep:tmdb:*' OR k.key GLOB 'ep:imdb:*');
+            ");
+    private static readonly string SqlConflictSplitKeys = Checked("SELECT key FROM dedup_keys WHERE group_id = $gid;");
+    private static readonly string SqlConflictSplitGroup = Checked(@"
+                SELECT g.item_type, g.name, g.year, group_concat(DISTINCT c.server_id), MAX(c.series_name), g.season_number, g.episode_number
+                FROM dedup_groups g JOIN cached_items c ON c.group_id = g.group_id WHERE g.group_id = $gid GROUP BY g.group_id;
+            ");
+
+    // Count: the pairs a row stands for (an episode row whose ids are its series' stands for every episode they split).
+    public sealed record ConflictSplit(string ItemType, string Title, int? Year, string Provider, string IdsA, string ServersA, string IdsB, string ServersB, int Count = 1);
+
+    // #21 item 2: the groups the conflict guard split, with the ids they disagree on, so they can be fixed on the
+    // server. Own read-only connection: the key scan takes seconds. Pairs whose ids no longer disagree (a member since
+    // removed) are left out; a season/episode key's ids are the series', so those pairs come one row per series.
+    // Null when the query fails.
+    public List<ConflictSplit>? GetConflictSplits()
+    {
+        try
+        {
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Mode = SqliteOpenMode.ReadOnly }.ToString());
+            conn.Open();
+            var pairs = new List<(int, int)>();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = SqlConflictSplitPairs;
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) pairs.Add((r.GetInt32(0), r.GetInt32(1)));
+            }
+
+            using var keys = conn.CreateCommand();
+            keys.CommandText = SqlConflictSplitKeys;
+            var pKeys = keys.Parameters.Add("$gid", SqliteType.Integer);
+            using var group = conn.CreateCommand();
+            group.CommandText = SqlConflictSplitGroup;
+            var pGroup = group.Parameters.Add("$gid", SqliteType.Integer);
+            Dictionary<string, HashSet<string>> IdsOf(int gid)
+            {
+                pKeys.Value = gid;
+                var list = new List<string>();
+                using var r = keys.ExecuteReader();
+                while (r.Read()) list.Add(r.GetString(0));
+                return ConcurrentDedupIndex.IdsOfKeys(list);
+            }
+            (string Type, string Title, string? Series, int? Year, string Servers)? GroupOf(int gid)
+            {
+                pGroup.Value = gid;
+                using var r = group.ExecuteReader();
+                if (!r.Read()) return null;
+                var series = r.IsDBNull(4) ? null : r.GetString(4);
+                var title = r.GetString(0) == "Episode" ? $"{series} S{(r.IsDBNull(5) ? 0 : r.GetInt32(5)):D2}E{(r.IsDBNull(6) ? 0 : r.GetInt32(6)):D2} {r.GetString(1)}" : r.GetString(1);
+                return (r.GetString(0), title, series, r.IsDBNull(2) ? null : r.GetInt32(2), r.GetString(3));
+            }
+
+            var splits = new List<ConflictSplit>();
+            foreach (var (ga, gb) in pairs.Select(p => (Math.Min(p.Item1, p.Item2), Math.Max(p.Item1, p.Item2))).Distinct())
+            {
+                var (a, b) = (IdsOf(ga), IdsOf(gb));
+                if (ConcurrentDedupIndex.FindConflict(a, b) is not { } type || GroupOf(ga) is not { } ra || GroupOf(gb) is not { } rb) continue;
+                var bySeries = type.StartsWith("ep:");
+                splits.Add(new ConflictSplit(ra.Type, bySeries ? ra.Series ?? ra.Title : ra.Title, bySeries ? null : ra.Year ?? rb.Year, type,
+                    string.Join(", ", a[type].Order()), ra.Servers, string.Join(", ", b[type].Order()), rb.Servers));
+            }
+            return splits.GroupBy(s => s).Select(g => g.Key with { Count = g.Count() })
+                .OrderBy(s => s.ItemType switch { "Movie" => 0, "Series" => 1, _ => 2 }).ThenBy(s => s.Title, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        catch (Exception ex) when (QueryFailed(ex, SqlConflictSplitPairs))
+        {
+            return null;
+        }
+    }
+
     private static readonly string SqlRemoveSiblingWrite = Checked("DELETE FROM sibling_write_queue WHERE queue_id = $qid;");
 
     public void RemoveSiblingWrite(int queueId)

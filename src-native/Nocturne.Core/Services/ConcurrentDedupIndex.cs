@@ -318,12 +318,15 @@ public class ConcurrentDedupIndex
 
     // The ids a group's items carry: every provider key it owns, demoted ones included (demotion stops a key
     // from linking, not from being evidence), plus its "{key}@{groupId}" evidence keys (RecordEvidence).
-    private Dictionary<string, HashSet<string>> AuthIdsOf(DedupGroupRecord g)
+    private Dictionary<string, HashSet<string>> AuthIdsOf(DedupGroupRecord g) =>
+        IdsOfKeys(g.Keys.Where(k => _keyToGroup.TryGetValue(k, out var m) && m.GroupId == g.GroupId));
+
+    // The same from a group's rows in dedup_keys (DatabaseService.GetConflictSplits).
+    internal static Dictionary<string, HashSet<string>> IdsOfKeys(IEnumerable<string> keys)
     {
         var ids = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var owned in g.Keys)
+        foreach (var owned in keys)
         {
-            if (!_keyToGroup.TryGetValue(owned, out var m) || m.GroupId != g.GroupId) continue;
             var at = owned.IndexOf('@');
             var k = at < 0 ? owned : owned[..at];
             if (!IsProviderKey(k) || ProviderTypeOf(k) is not { } p) continue;
@@ -347,7 +350,7 @@ public class ConcurrentDedupIndex
 
     // C4: two identities conflict when they carry different ids of the same provider type. Agreement on one
     // provider never outweighs disagreement on another. Returns the conflicting type, or null.
-    private static string? FindConflict(Dictionary<string, HashSet<string>> a, Dictionary<string, HashSet<string>> b)
+    internal static string? FindConflict(Dictionary<string, HashSet<string>> a, Dictionary<string, HashSet<string>> b)
     {
         foreach (var (type, values) in a)
         {

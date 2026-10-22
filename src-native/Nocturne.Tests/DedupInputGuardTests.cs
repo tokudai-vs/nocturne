@@ -158,6 +158,32 @@ public class DedupInputGuardTests
         }
     }
 
+    // #21 item 2: the pairs the guard split are listed with the ids they disagree on, for fixing on the server.
+    [Fact]
+    public void ConflictSplits_ListThePairTheGuardSplit_AndNotAMerge()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DatabaseService(dbPath);
+            var r = Movie("r", "raptor", "The Great Hack", tmdb: "566222", imdb: "tt9358204", year: 2019);
+            var v = Movie("v", "valkyrie", "The Great Hack", tmdb: "566222", imdb: "tt4736550", year: 2019);
+            var a = Movie("a", "raptor", "Arrival", tmdb: "329865", imdb: "tt2543164");
+            var b = Movie("b", "valkyrie", "Arrival", tmdb: "329865", imdb: "tt2543164");
+            foreach (var it in new[] { r, v, a, b }) db.UpsertItem(it, it.ServerId!);
+            new ConcurrentDedupIndex().ProcessBatch(new[] { r, v, a, b }, db);
+
+            var split = Assert.Single(db.GetConflictSplits()!);
+
+            Assert.Equal(new DatabaseService.ConflictSplit("Movie", "The Great Hack", 2019, "imdb:movie", "tt9358204", "raptor", "tt4736550", "valkyrie"), split);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { File.Delete(dbPath); } catch { }
+        }
+    }
+
     [Fact]
     public void AttachingItem_NeitherRepromotesNorStealsAnotherGroupsKeys()
     {
