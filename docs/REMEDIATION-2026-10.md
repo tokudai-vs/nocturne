@@ -298,7 +298,8 @@ risk); binaries were trusted on `File.Exists` and also taken from PATH; the gues
 
 - **Trakt production client ID** (I1) — waiting on you.
 - **Watch Party with real remote guests** through a public link — flagged for you.
-- ~~**Rebuild UI block**~~ — done, §8.4 (`04939ff`): worst UI read during a rebuild 327 s → 5 s; UI writes queue.
+- ~~**Rebuild UI block**~~ — done, §8.4 (`04939ff`) and §9.3–9.4: a first rebuild's worst UI read 95 s → 7.4 s once
+  playback progress queued too and the WAL is checkpointed inside the window (§8.4's 5 s was a lighter case).
 - ~~`trakt_queue.group_id` is not remapped by a rebuild (audit 4.3).~~ Done, §7.2 (`86dae59`).
 - ~~**Six episode groups wrongly merged on clean data** (§2).~~ Done, §7.1 (items 1, 1b, 1c; the gate in 2, 2b).
 - Deep-offset sync requests still take 13–20 s each (Emby `StartIndex` paging) and occasionally pass the 30 s
@@ -318,8 +319,13 @@ risk); binaries were trusted on `File.Exists` and also taken from PATH; the gues
 - ~~**336,776 IMDb ids unread**~~ — done, §8.1 (`527372b`). The `imdb_id` column of rows cached before it stays empty
   until they are fetched again (only an ungrouped item's sibling fallback reads it).
 - ~~**Count-equality library check**~~ — done, §8.5 (`519c61d`): incremental paging; a whole sync 49 s.
-- **Items deleted on a server are never removed from the cache** (neither the old full re-fetch nor incremental
-  paging detects them). An id-only listing compared against the cache would be the next step.
+- ~~**Items deleted on a server are never removed from the cache**~~ — done, §9.1 (`4ff6f58`): weekly id sweep.
+  Not covered: a library removed from the server (its rows stay; the sweep walks the libraries the server lists).
+  Provider keys a removed item brought stay with its group until the next rebuild.
+- **9,220 conflict-split pairs** (§9.2), listed in Settings for fixing on the server; no export yet.
+- **Settings → Rebuild passes no server priority** (`RebuildIndex(_db)`), so a rebuild elects primaries and images
+  without your preferred server order while a sync uses it. Grouping is unaffected. One-line fix; not in scope here.
+- **Drift and the over-cap list refresh weekly** (or from the button), at a 4 GB peak on this library (§9.5).
 - **The sync channel holds up to 8 batches** of up to ~17k items on deep libraries (its comment assumes ~10k items in
   flight); likely the 2.2 GB peak of a full re-fetch. Not measured further.
 - B5 covers the startup path only.
@@ -591,3 +597,131 @@ shows it in the sync warning pill (after a sync) or the Settings status (after a
 
 Every row is identical between the sync-order result and the rebuild.
 
+
+---
+
+## 9. Follow-up pass 3 (#21), 2026-10-22
+
+Five items, one commit each, plus one UI follow-up from the smoke test. Items 3 and 4 were committed in the order
+4, 3: measuring item 3 exposed two gaps in #20's item 4 (§9.4), and item 3 is compared on the fixed baseline.
+
+| Item | Commit | Tests after |
+|---|---|---|
+| 1 — weekly id-only sweep removes items deleted on the server | `4ff6f58` | 231/231 |
+| 2 — list the titles the conflict guard split, in Settings | `9a84a6e` | 232/232 |
+| 4 — queued rebuild writes drain on exit; progress writes queue; WAL checkpointed in the window | `936fe8b` | 233/233 |
+| 3 — drop the shared SQLite cache | `6c21b95` | 233/233 |
+| 5 — the plan's drift counter, weekly and in Settings | `6ceaf56` | 234/234 |
+| Settings: progress row in the conflicting-ids list | `36517a6` | 234/234 |
+
+Method: copies of the live DB (`%APPDATA%\Nocturne\nocturne-v4.db`, read only, engine marker still `"2"`) on a test
+profile (`NOCTURNE_DATA_DIR`), driven by a console harness against both real servers (read-only requests). Rebuild
+runs read a shelf every 200 ms and write playback progress every 2 s, as #20 item 4 measured, with a write that is
+a real upsert. The UI was smoke-tested in the Release app on the same profile.
+
+### 9.1 Item 1 — the delete path
+
+Incremental paging asks for what was saved since the last pass, and a deleted item is never saved again. The sweep
+lists every library's ids (no fields, images or user data; the client now accepts gzip), diffs them against
+`cached_items`, asks the server by id about each missing one (a paging shift is not a deletion), and runs the plan's
+§5 lifecycle on what it confirms gone: the row with its `user_data`, `continue_watching_cache`,
+`sibling_write_queue`, `watchlist_entries` and identity key; a group left empty with its keys and `trakt_queue` rows;
+a group with members left recounted, re-electing primary, poster and backdrop if the removed item held them (by
+`ProcessBatch`'s rules). A library is skipped when its listing fails or more than 20% of it is missing (an unmounted
+share). Weekly after a sync, and Settings → Libraries & Merging → Check for Deleted Items.
+
+| Valkyrie TV (one library) | |
+|---|---|
+| ids | 676,992 in 14 requests of 50,000 |
+| time | 144 s listing (slowest request 13.3 s), 152.7 s with diff and removal |
+| payload | 37.6 MB on the wire (gzip), 245.5 MB JSON (392 bytes an item, 62 compressed) |
+| removed | 10 |
+
+All 34 libraries: 263 s, 21 stale rows removed across both servers, 0 skipped. From the app's button a while
+later: 34 libraries, 2 removed, about 6 min. The cached-id query is forced onto the parent index: the planner had
+picked `ix_items_server_sync` and walked every row of the server, 25 s a library.
+
+### 9.2 Item 2 — conflicting ids
+
+The guard leaves two traces of a refused merge: the shared key demoted in the group the item conflicted with, and
+`{key}@{group}` evidence in the item's own group. Settings → Show Conflicting IDs lists each split pair with the
+title, the provider and ids they disagree on, and each side's servers; an episode pair split by a series-level id
+comes once per series with an episode count. The guard is unchanged.
+
+**It is not 94.** On a rebuilt copy the guard has split **9,220 pairs**. The 94 in §8.1 were only the groups #20
+item 1 newly split by reading IMDb ids in any case. As rows: 3,502. Movies 256, series 296, episodes 2,950 (368 rows
+stand for 6,086 episodes split by a series-level id; Dragon Ball Z alone 289 + 226). 1,949 pairs have the same
+server on both sides: two copies on one server with different ids. Many look like typos (Catfish: TMDb 469 on
+Raptor, 46910 on Valkyrie). Query 14.5 s alone, 62 s with the app busy.
+
+### 9.3 Item 3 — no shared cache
+
+The app connection now uses the default private cache. The explicit `Private` overrides on the derived connections
+went with it. Item 2's conflict scan had inherited `Shared` and is private too.
+
+| First rebuild (engine 2 → 4) of a fresh copy | shared (after item 4) | private |
+|---|---|---|
+| worst UI read | 17,669 ms | **7,442 ms** |
+| worst UI write | 15,869 ms | **7,438 ms** |
+| failed writes | 0 | 0 |
+| swap / WAL checkpoint inside it | 464 s / 182 s | 291 s / 88 s |
+| whole rebuild | 849 s | 674 s |
+
+Same partition both times (1,131,415 groups, 319,741 multi-version); gate 0 / 1. The 7.4 s stall falls in the
+first seconds of the build phase, on a freshly copied (cold) file.
+
+Sync path, incremental syncs of one rebuilt copy against both servers, alternated: shared 59 / 84 / 80 s, private
+89 / 91 / 82 / 84 s. Sync core shared 30.9 / 41.8 / 42.2 s, private 48.5 / 44.0 / 41.8 / 42.4 s; SQLite writes 3.5–6.5 s
+in both. The first shared run was the outlier. No regression.
+
+### 9.4 Item 4 — the queued writes
+
+- **What bounds the list:** nothing in code. Time bounds it: one entry per UI write while a window (state write,
+  swap) is open. A full rebuild queued 19 and 106–107 writes with a writer every 2 s. A cap would mean dropping
+  writes.
+- **Lost on exit mid-rebuild:** yes, before this pass. They lived in memory, and `Dispose` closed the connection
+  first, so each queued write met a null connection. A playback stop's last position, written as the window
+  closes on exit, was the likely casualty.
+- **Fix: block exit until drained.** `Dispose` aborts the window's running statement (its transaction rolls back;
+  the rebuild reruns), waits up to 30 s for the queue to apply, then closes. It aborts through a progress handler:
+  `sqlite3_interrupt`'s flag also failed the `ROLLBACK` run when the connection closed, which kept the write lock
+  held. A crash still loses queued writes, as it loses any write in flight.
+
+**Worse than §8.4 recorded**, found while measuring:
+
+- `UpdateLocalPlaybackProgress` and `UpdatePlaybackProgress` never queued. During a window they waited out
+  `busy_timeout` under `_dbLock` and failed. #20's harness wrote with `MarkLocalItemPlayed`, which queues.
+- A first rebuild rewrites every row. The next real UI commit's auto-checkpoint copied gigabytes of WAL back under
+  `_dbLock`, and every read waited behind it. The window now checkpoints (`TRUNCATE`) on its own connection before
+  it closes.
+
+| First rebuild of a fresh copy, shared cache | before | after item 4 |
+|---|---|---|
+| worst UI read | 95,394 ms | 17,669 ms |
+| worst UI write | 93,586 ms | 15,869 ms |
+| failed writes | 22 | 0 |
+
+§8.4's 5,027 ms was most likely a repeat rebuild (few rows rewritten) with a write that queues. Item 3 then brought
+the first rebuild to 7.4 s (§9.3).
+
+### 9.5 Item 5 — the drift counter
+
+**Confirmed absent:** nothing counted "items whose group assignment differs between incremental and the most recent
+rebuild" (plan review V1), and no panel showed it. (§8C in the plan is the partition oracle the counter now uses.)
+
+`DedupEngine.MeasureDrift` runs the rebuild's grouping pass in memory, writes nothing, and compares that partition
+with the stored one. Drift is the number of items in groups whose exact membership differs. The same read counts
+groups over the size cap (M6). It runs weekly after a sync (after the sweep) and from Settings → Measure Drift. A
+rebuild resets it to 0, and any drift raises the dedup alert, which names Rebuild as the fix.
+
+| | drift | over cap (8) | time | peak |
+|---|---|---|---|---|
+| copy rebuilt, then 8 incremental syncs | **0 items** | 1 (AEW Dynamite, 10) | 187 s | 4.0 GB |
+| fresh copy of the live DB (engine 2) | 13,464 items in 8,078 groups | 1 | 190 s | 4.0 GB |
+
+### 9.6 Standing state after this pass
+
+- Tests 234/234. The live DB is untouched: still engine `"2"`, gate unmeasured, 13,464 items of drift against a
+  rebuild. Settings → Rebuild Dedup Index fixes all three. The first rebuild there takes about 11 min and can hold
+  a UI read for about 7 s.
+- The weekly job (sweep + drift) adds about 7–8 min of background work and a 4 GB peak once a week, after a sync.
