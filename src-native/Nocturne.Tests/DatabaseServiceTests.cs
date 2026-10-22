@@ -283,7 +283,7 @@ public class DatabaseServiceTests : IDisposable
 
         using var reached = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
-        _db.SwapHeldForTest = () => { reached.Set(); release.Wait(TimeSpan.FromSeconds(30)); };
+        _db.SwapHeldForTest = _ => { reached.Set(); release.Wait(TimeSpan.FromSeconds(30)); };
         var rebuild = Task.Run(() => new DedupEngine().RebuildIndex(_db));
         Assert.True(reached.Wait(TimeSpan.FromSeconds(30)));
 
@@ -307,6 +307,39 @@ public class DatabaseServiceTests : IDisposable
         Assert.True(_db.GetUserData("s1", "a")!.Played); // the group's members as they were when the write was made
         Assert.True(_db.GetUserData("s2", "b")!.Played);
         Assert.Equal(_db.GetGroupIdForDedupKey("tmdb:movie:100"), (int)Assert.Single(_db.GetPendingTraktEvents()).GroupId);
+    }
+
+    // #21 item 4: queued writes live in memory, so closing the database mid-swap (exit while a rebuild runs) interrupts
+    // the swap, which rolls back, and applies them before the connection closes. Playback progress queues too: it
+    // wrote straight into the swap's write lock and failed with SQLITE_BUSY.
+    [Fact]
+    public async Task Dispose_DuringTheRebuildSwap_InterruptsIt_AndAppliesTheQueuedWrites()
+    {
+        var m = new EmbyItem { Id = "a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
+        _db.UpsertItem(m, "s1");
+        new ConcurrentDedupIndex().ProcessBatch(new List<EmbyItem> { m }, _db);
+
+        using var reached = new ManualResetEventSlim();
+        _db.SwapHeldForTest = swap =>
+        {
+            reached.Set();
+            using var forever = swap.CreateCommand(); // stands in for a swap that takes minutes
+            forever.CommandText = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) SELECT COUNT(*) FROM n;";
+            forever.ExecuteScalar();
+        };
+        var rebuild = Task.Run(() => new DedupEngine().RebuildIndex(_db));
+        Assert.True(reached.Wait(TimeSpan.FromSeconds(30)));
+        var write = Task.Run(() => _db.UpdateLocalPlaybackProgress("s1", "a", 600 * 10_000_000L));
+        Assert.True(write.Wait(TimeSpan.FromSeconds(5)), "a progress write waited for the swap");
+
+        var dispose = Task.Run(_db.Dispose);
+        Assert.True(dispose.Wait(TimeSpan.FromSeconds(20)), "closing waited for the swap");
+        await Assert.ThrowsAnyAsync<Microsoft.Data.Sqlite.SqliteException>(() => rebuild);
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        using var reopened = new DatabaseService(_tempDbPath);
+        Assert.Equal(600 * 10_000_000L, reopened.GetUserData("s1", "a")!.PlaybackPositionTicks);
+        Assert.NotNull(reopened.GetCachedItem("a", "s1")); // the rolled-back swap left the old state
     }
 
     // Item 3 (#19, audit 4.3): group ids restart at 1 on a rebuild, so a queued Trakt event kept naming its old id,

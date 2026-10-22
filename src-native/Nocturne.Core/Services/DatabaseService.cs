@@ -2438,6 +2438,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => UpdatePlaybackProgress(itemId, serverId, positionTicks))) return;
             if (_connection == null) return;
             try
             {
@@ -2772,6 +2773,7 @@ public class DatabaseService : IDisposable
     {
         lock (_dbLock)
         {
+            if (QueueDuringRebuildWrite(() => UpdateLocalPlaybackProgress(serverId, itemId, positionTicks, played, runtimeTicks))) return;
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlUpdateLocalPlaybackProgress;
@@ -3568,18 +3570,25 @@ public class DatabaseService : IDisposable
     // Non-null while one of the rebuild's long write transactions runs on its own connection (WithWritesQueued):
     // writes on _connection wait here instead of failing with SQLITE_BUSY after busy_timeout. Checked under _dbLock,
     // which the window takes to open, so no write can be mid-statement when it starts.
+    // Bounded by time, not size: a UI write a few seconds apart at most (playback progress) for the minutes a window
+    // stays open. In memory only, so Dispose ends an open window and applies them before the connection closes (#21
+    // item 4); a crash loses them, as it loses any write in flight.
     private List<Action>? _queuedWrites;
-    internal Action? SwapHeldForTest;
+    private readonly ManualResetEventSlim _windowClosed = new(true);
+    private volatile bool _abortWindow;
+    internal Action<SqliteConnection>? SwapHeldForTest;
 
     // Runs work on a connection of its own (private cache: on the shared cache _connection uses, its table locks would
-    // block reads) with writes queued, then applies them in order under _dbLock before any newer write. For the
-    // rebuild's state write and swap, which held _dbLock, and so every UI read, for minutes (#20 item 4).
+    // block reads) with writes queued, then applies them in order under _dbLock before any newer write. For the rebuild's state write and swap, which held _dbLock, and so every UI read, for minutes
+    // (#20 item 4). The WAL is checkpointed inside the window: a first rebuild rewrites every row, and the next UI
+    // write's auto-checkpoint copied those gigabytes back under _dbLock (93 s, every read waiting behind it).
     private void WithWritesQueued(string what, Action<SqliteConnection> work)
     {
         lock (_dbLock)
         {
             if (_connection == null) return;
             _queuedWrites = new List<Action>();
+            _windowClosed.Reset();
         }
         try
         {
@@ -3587,10 +3596,22 @@ public class DatabaseService : IDisposable
             conn.Open();
             using (var pragma = conn.CreateCommand())
             {
-                pragma.CommandText = "PRAGMA cache_size = -262144;";
+                pragma.CommandText = "PRAGMA cache_size = -262144; PRAGMA busy_timeout = 5000;";
                 pragma.ExecuteNonQuery();
             }
+            // Dispose aborts the running statement through this (its transaction rolls back). Not sqlite3_interrupt:
+            // its flag also fails the next prepare, so the ROLLBACK on close failed and the write lock stayed held.
+            SQLitePCL.raw.sqlite3_progress_handler(conn.Handle, 1000, _ => _abortWindow ? 1 : 0, null);
             work(conn);
+            if (!_abortWindow)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                using var checkpoint = conn.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);"; // waits out readers on the pre-swap snapshot
+                using var r = checkpoint.ExecuteReader();
+                r.Read();
+                NocturneLogger.Info("DatabaseService", $"WAL checkpoint after the {what}: {(r.GetInt32(0) == 0 ? "complete" : "partial (readers)")} in {clock.ElapsedMilliseconds} ms.");
+            }
         }
         finally
         {
@@ -3605,6 +3626,7 @@ public class DatabaseService : IDisposable
                 }
                 if (queued.Count > 0) NocturneLogger.Info("DatabaseService", $"Applied {queued.Count} write(s) made during the {what}.");
             }
+            _windowClosed.Set();
         }
     }
 
@@ -3748,7 +3770,7 @@ public class DatabaseService : IDisposable
                     INSERT INTO dedup_groups_fts(dedup_groups_fts) VALUES('rebuild');
                 ";
             cmd.ExecuteNonQuery();
-            SwapHeldForTest?.Invoke();
+            SwapHeldForTest?.Invoke(swap);
             tx.Commit();
         });
         NocturneLogger.Info("DatabaseService", $"Rebuild swap took {clock.ElapsedMilliseconds} ms on its own connection.");
@@ -4563,6 +4585,11 @@ public class DatabaseService : IDisposable
 
     public void Dispose()
     {
+        // An open rebuild window holds UI writes in memory (a playback stop's last position, at exit): abort its
+        // transaction, which rolls back (the rebuild is lost and reruns), and wait while the window applies them.
+        _abortWindow = true;
+        if (!_windowClosed.Wait(TimeSpan.FromSeconds(30)))
+            NocturneLogger.Warn("DatabaseService", "Closing with a rebuild window still open; writes made during it are lost.");
         lock (_dbLock)
         {
             _connection?.Close();
