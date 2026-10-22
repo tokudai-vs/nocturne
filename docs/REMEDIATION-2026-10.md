@@ -298,8 +298,8 @@ risk); binaries were trusted on `File.Exists` and also taken from PATH; the gues
 
 - **Trakt production client ID** (I1) — waiting on you.
 - **Watch Party with real remote guests** through a public link — flagged for you.
-- ~~**Rebuild UI block**~~ — done, §8.4 (`04939ff`) and §9.3–9.4: a first rebuild's worst UI read 95 s → 7.4 s once
-  playback progress queued too and the WAL is checkpointed inside the window (§8.4's 5 s was a lighter case).
+- ~~**Rebuild UI block**~~ — done, §8.4 (`04939ff`), §9.3–9.4 and §10.5: a first rebuild's worst UI read 95 s → about
+  7 s; its WAL 4.5 GB → under 100 MB; the live rebuild took 319 s.
 - ~~`trakt_queue.group_id` is not remapped by a rebuild (audit 4.3).~~ Done, §7.2 (`86dae59`).
 - ~~**Six episode groups wrongly merged on clean data** (§2).~~ Done, §7.1 (items 1, 1b, 1c; the gate in 2, 2b).
 - Deep-offset sync requests still take 13–20 s each (Emby `StartIndex` paging) and occasionally pass the 30 s
@@ -313,19 +313,21 @@ risk); binaries were trusted on `File.Exists` and also taken from PATH; the gues
   `nocturne.log.1` going forward is redacted.
 - ~~Sibling position writes still go through `Sessions/Playing/Stopped` on sibling servers~~ — user-data endpoint
   since §7.3 (`00339be`). The sibling drain still runs only after playback.
-- **Cascade on your live profile:** its groups were built by the old engine (marker `"2"`, 6 wrong groups); this build
-  is engine `"4"`, so the cascade stays off there until Settings → Rebuild (no longer blocks the UI, §8.4) or a
-  fresh sync. Neither was run on the live DB.
+- ~~**Cascade on your live profile**~~ — done, §10.6: rebuilt 2026-10-23; engine 4, gate 0, cascade on, drift 0.
 - ~~**336,776 IMDb ids unread**~~ — done, §8.1 (`527372b`). The `imdb_id` column of rows cached before it stays empty
   until they are fetched again (only an ungrouped item's sibling fallback reads it).
 - ~~**Count-equality library check**~~ — done, §8.5 (`519c61d`): incremental paging; a whole sync 49 s.
 - ~~**Items deleted on a server are never removed from the cache**~~ — done, §9.1 (`4ff6f58`): weekly id sweep.
   Not covered: a library removed from the server (its rows stay; the sweep walks the libraries the server lists).
   Provider keys a removed item brought stay with its group until the next rebuild.
-- **9,220 conflict-split pairs** (§9.2), listed in Settings for fixing on the server; no export yet.
-- **Settings → Rebuild passes no server priority** (`RebuildIndex(_db)`), so a rebuild elects primaries and images
-  without your preferred server order while a sync uses it. Grouping is unaffected. One-line fix; not in scope here.
-- **Drift and the over-cap list refresh weekly** (or from the button), at a 4 GB peak on this library (§9.5).
+- **9,220 conflict-split pairs**, rolled up to 951 rows (§10.1). 1,206 of them are Raptor's truncated TMDb/IMDb ids:
+  re-identify those 38 series and 30 movies on Raptor (§10.2). No export from the Settings list yet.
+- **Guard refinement not shipped** (§10.2). If the app should tolerate truncated ids, "a conflicting id that is a
+  strict prefix of the other counts as agreement" is the rule the evidence supports; it needs its own before/after
+  rebuild.
+- ~~Settings → Rebuild passes no server priority~~ — done, §10.3.
+- ~~Drift and the over-cap list refresh weekly~~ — now after an abnormal sync or monthly, §10.4.
+- The live database file holds about 0.9 GB of free pages after the rebuild (§10.6); `VACUUM` would reclaim them.
 - **The sync channel holds up to 8 batches** of up to ~17k items on deep libraries (its comment assumes ~10k items in
   flight); likely the 2.2 GB peak of a full re-fetch. Not measured further.
 - B5 covers the startup path only.
@@ -730,6 +732,28 @@ rebuild resets it to 0, and any drift raises the dedup alert, which names Rebuil
 
 ## 10. Follow-up pass 4 (#22), 2026-10-22: closing the repair arc
 
+Five items, one commit each, then the rebuild of the live profile.
+
+| Item | Commit | Tests after |
+|---|---|---|
+| 1 — conflicting ids rolled up by root cause | `727ccbe` | 235/235 |
+| 2 — guard refinement studied, not shipped; truncated ids on Raptor | `8f2dbd0` | (study) |
+| 3 — priority in Settings' rebuild; oracle compares primaries; one election rule | `f9d95cf` | 237/237 |
+| 4 — drift after an abnormal sync only, monthly backstop | `727ca3e` | 241/241 |
+| 5 — WAL: stable group ids, ordered state writes, idle truncation | `3e1fc21` | 243/243 (10 runs clean) |
+
+### 10.1 Item 1 — conflicting ids by root cause
+
+Settings now heads the list "N series with conflicting ids, X episodes affected; M movies", one row per thing to fix.
+A series row stands for its own Series pair and every episode pair under it (each episode linked to its series
+through its own Series row). It shows the series' conflicting ids where it has them, otherwise one episode pair's.
+
+On a rebuilt live copy, **9,220 pairs → 951 rows**:
+- **695 distinct series** account for 8,964 pairs: their 296 Series pairs and all 8,668 episode pairs.
+  - 326 series carry conflicting series ids themselves; 369 have only episode-level ids.
+  - 183 series hold 80% of the affected episodes.
+- The other 256 pairs are movies.
+
 ### 10.2 Item 2 — classifying the split pairs, and the proposed guard refinement
 
 **Correction to §9.2:** "1,949 same-server pairs" was a count of collapsed *rows*. Per pair, 3,193 of the 9,220
@@ -794,3 +818,97 @@ Variants measured on all 9,220, each spot-checked on 30 random merges:
 
 Method: a scratch tool calling the guard's own `IdsOfKeys`/`FindConflict` on a rebuilt copy of the live DB (engine
 4); samples seeded and reproducible; titles, runtimes and file names only.
+
+### 10.3 Item 3 — server priority, primaries in the oracle, one election rule
+
+Settings → Rebuild now passes `PreferredServerPriority`. Your profile sets none (the list is empty), so for you
+that changes nothing; it is tested with a priority set.
+
+`PartitionOracle` hashes each group's members **and its primary**. The primary is what a card shows: the list
+queries display `primary_item_id`, and the elected `image_item_id` is never read by the UI.
+
+**The extended oracle caught a real divergence** after one day of incremental changes on a rebuilt copy: 2 items
+in 1 group ("Back to School"), same members, other primary.
+- When the group formed, its primary had a poster (score 50). A later sync re-fetched it without one (score 0).
+- The incremental path only promoted an item that beat the recorded score. It never re-elected when the primary's
+  own score fell, so the card showed no poster until a rebuild changed it.
+- Ties were also broken by arrival order, which a merge history cannot reproduce.
+
+The primary is now the highest-scoring member, ties to the lowest `server:id`, on every path:
+- attach;
+- merge (the better of the two primaries);
+- a primary that comes again scoring lower, re-elected among the members, with the batch's fresh rows;
+- the deletion sweep.
+
+| Measured on copies of the live DB | |
+|---|---|
+| groups whose primary the new rule changes | 19,042: 19,041 equal-score ties, 1 the Back to School case (0 → 50) |
+| same day of changes after a rebuild, drift with primaries | old rule 2 items in 1 group → **0** |
+
+**Visible once:** about 19,000 tied groups switched to the other, equally scored copy at the live rebuild below.
+They are stable from now on.
+
+### 10.4 Item 4 — drift only after an abnormal sync
+
+Drift (190–220 s, 4–4.5 GB peak) is no longer weekly. It is measured after a sync that:
+- ended partial or failed;
+- resumed a library from a checkpoint;
+- follows an interrupted run (`sync_running` still set: crash, kill, cancel).
+
+It also runs monthly as a backstop (its clock starts at the first sync, so a clean first sync is not measured) and
+from Settings → Measure Drift. The deletion sweep stays weekly.
+
+A clean incremental sync of a live copy: **48 s, peak 373 MB**. With the weekly sweep and drift due, the same sync
+was 615 s and 4.5 GB.
+
+### 10.5 Item 5 — keeping the WAL out of the gigabytes
+
+Measured before changing anything. No autocheckpoint threshold bounds a single transaction, and the gigabytes came
+from three places:
+
+1. **Renumbering.** Every rebuild numbered groups from 1, so any change since the last rebuild shifted every later
+   id. The swap then rewrote nearly every row, JSON included: a *repeat* rebuild peaked at 4,465 MB of WAL with a
+   245 s swap. A rebuilt group now keeps the id most of its members had (unless another group took it), and
+   `{key}@{group}` evidence keys follow. Conflict pairs are still 9,220.
+2. **The state write.** It was one transaction, inserting 5 M keys and 1.5 M item mappings into text-keyed
+   B-trees in random order (about 200 MB of WAL per 50k rows). It now commits every 50,000 rows, in key order.
+3. **Nothing shrank the WAL at rest.** It was never truncated, and pooled connections were never really closed,
+   so SQLite never deleted it (217 MB beside a copy after a sync; 60 MB beside the live DB). Now:
+   - `journal_size_limit` 64 MB;
+   - a `TRUNCATE` checkpoint after a sync, the sweep, a drift measurement and at exit;
+   - the app's connections unpooled. A process-wide `ClearAllPools` raced other connections in the test run,
+     which is how the flake was found.
+
+| | before | after |
+|---|---|---|
+| repeat rebuild: WAL peak / state write / swap | 4,465 MB / 131 s / 245 s | **163 MB / 57 s / 111 s** |
+| first rebuild (engine 2 → 4), live profile: WAL | 4,521 MB (copy) | **56 MB after the state write, 91 MB after the swap** |
+| WAL at rest after a sync / after exit | 217 MB / file left | 0 / file removed |
+
+Worst UI read during a rebuild: 4.1–7.1 s across the runs, at the build phase's start. 0 failed writes.
+
+### 10.6 The live profile, rebuilt (2026-10-23 01:28–01:44)
+
+Release build of `3e1fc21` on the live profile. The live DB was backed up to the scratch folder first; the backup
+was deleted after verification.
+
+| Step | Result |
+|---|---|
+| launch sync | complete; first deletion sweep: **85 stale items removed** (Valkyrie 29, Raptor 56); gate then 6 / 6, cascade off (old engine-2 groups) |
+| Settings → Rebuild Dedup Index | **319 s**; 1,127,582 of 1,131,727 groups kept their id; WAL 56 MB (state write), 91 MB (swap); swap 96 s |
+| after the rebuild | engine marker `4`; gate **0** / broader 1; **sibling cascade on** |
+| Settings → Measure Drift | **0 items** (was 13,464), 206 s; 1 group over the cap (AEW Dynamite, 10) |
+| exit | WAL truncated, no `-wal`/`-shm` left; 0 ERROR in the log |
+
+The database file is now 8.47 GB (was 7.6). The rebuild wrote new tables before dropping the old ones, and SQLite
+keeps the freed pages for reuse. A `VACUUM` would return them to the disk; it was not run.
+
+### 10.7 Standing state, end of the repair arc
+
+| | |
+|---|---|
+| live profile | engine 4, gate 0, cascade on, drift 0 |
+| groups / multi-version | 1,131,727 / 319,842 |
+| conflict-split pairs | 9,220 → 951 rows (695 series, 256 movies); 1,206 are Raptor's truncated ids (68 rows) |
+| sync ↔ rebuild identity | holds for members and primaries (oracle) |
+| background cost | sweep weekly (about 4–5 min); drift only after an anomaly, or monthly |
