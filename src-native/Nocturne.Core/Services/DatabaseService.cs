@@ -3216,7 +3216,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    private static readonly string SqlGetItemsWithNullGroupId = Checked("SELECT json_data, server_id FROM cached_items WHERE group_id IS NULL;");
+    private static readonly string SqlGetItemsWithNullGroupId = Checked("SELECT json_data, server_id FROM cached_items WHERE group_id IS NULL AND type IN ('Movie', 'Series', 'Episode');");
 
     public List<EmbyItem> GetItemsWithNullGroupId()
     {

@@ -296,7 +296,7 @@ public class SyncEngine
 
                         // Concurrent incremental hash-index deduplication:
                         // Matches items across servers in real time and assigns DedupGroupId prior to DB write
-                        _dedupIndex.ProcessBatch(batch.Items, _db);
+                        _dedupIndex.ProcessBatch(batch.Items, _db, deferUntagged: true);
 
                         // Atomic crash safety: items + checkpoint committed in the exact same transaction!
                         _db.UpsertItems(
@@ -550,6 +550,11 @@ public class SyncEngine
             // Signal producer completion to writer task and wait for writer to drain all batches
             channel.Writer.Complete();
             await writerTask;
+
+            // Untagged episodes were written without a group (ConcurrentDedupIndex.IsUntaggedEpisode); place them
+            // now that every tagged copy is in. Also picks up any an interrupted sync left ungrouped.
+            var ungrouped = _db.GetItemsWithNullGroupId();
+            if (ungrouped.Count > 0) _dedupIndex.ProcessBatch(ungrouped, _db);
 
             syncSw.Stop();
 

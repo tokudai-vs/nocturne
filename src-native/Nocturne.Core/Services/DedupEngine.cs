@@ -291,14 +291,17 @@ public class DedupEngine
 
             long afterRowId = 0;
             const int chunkSize = 5000;
+            var untagged = new List<EmbyItem>();
             while (true)
             {
                 var (batch, lastRowId) = db.GetCachedItemsChunk(afterRowId, chunkSize);
                 if (lastRowId == afterRowId) break;
                 dedupIndex.ResolveSeriesProviderIds(batch, db);
-                dedupIndex.ProcessBatch(batch, null);
+                dedupIndex.ProcessBatch(batch, null, deferUntagged: true);
+                untagged.AddRange(batch.Where(ConcurrentDedupIndex.IsUntaggedEpisode));
                 afterRowId = lastRowId;
             }
+            dedupIndex.ProcessBatch(untagged, null);
 
             var save = System.Diagnostics.Stopwatch.StartNew();
             db.SaveRebuildDedupState(dedupIndex); // one transaction under _dbLock

@@ -393,4 +393,75 @@ public class DedupInputGuardTests
         Assert.Equal(raptor.DedupGroupId, tagged.DedupGroupId);
         Assert.NotEqual(raptor.DedupGroupId, untagged.DedupGroupId);
     }
+
+    // 90 Day Diaries in sync order: Valkyrie's untagged S03E08 arrives before Valkyrie's tagged copy of the
+    // episode Raptor numbers S03E08 (Valkyrie: S03E06), joins by number, and the tagged copy follows by id.
+    private static (EmbyItem Raptor, EmbyItem Untagged, EmbyItem Tagged) UntaggedArrivingFirst() => (
+        WithSeriesTvdb(Episode("r", "raptor", 3, 8, tvdbEp: "9057492", seriesId: "r1", seriesName: "90 Day Diaries"), "393180"),
+        WithSeriesTvdb(Episode("vu", "valkyrie", 3, 8, seriesId: "v1", seriesName: "90 Day Diaries"), "393180"),
+        WithSeriesTvdb(Episode("vt", "valkyrie", 3, 6, tvdbEp: "9057492", seriesId: "v1", seriesName: "90 Day Diaries"), "393180"));
+
+    [Fact]
+    public void UntaggedEpisodeArrivingFirst_IsPlacedAfterItsServersTaggedCopy()
+    {
+        var index = new ConcurrentDedupIndex();
+        var (raptor, untagged, tagged) = UntaggedArrivingFirst();
+
+        index.ProcessBatch(new[] { raptor, untagged, tagged }, deferUntagged: true);
+        Assert.Null(untagged.DedupGroupId);
+        index.ProcessBatch(new[] { untagged });
+
+        Assert.Equal(raptor.DedupGroupId, tagged.DedupGroupId);
+        Assert.NotEqual(raptor.DedupGroupId, untagged.DedupGroupId);
+    }
+
+    [Fact]
+    public void Rebuild_PlacesUntaggedEpisodesLast()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DatabaseService(dbPath);
+            var (raptor, untagged, tagged) = UntaggedArrivingFirst();
+            foreach (var it in new[] { raptor, untagged, tagged }) db.UpsertItem(it, it.ServerId!); // rebuild reads rowid order
+
+            new DedupEngine().RebuildIndex(db);
+
+            var group = db.GetGroupVersions(db.GetGroupIdForDedupKey("tvdb:ep:9057492")!.Value.ToString()).Select(v => v.Id).OrderBy(x => x).ToList();
+            Assert.Equal(new[] { "r", "vt" }, group);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { File.Delete(dbPath); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Sync_PlacesHeldBackAndLeftoverUngroupedEpisodes()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using var db = new DatabaseService(Path.Combine(dir, "a.db"));
+            var (raptor, untagged, tagged) = UntaggedArrivingFirst();
+            foreach (var it in new[] { raptor, untagged, tagged }) db.UpsertItem(it, it.ServerId!);
+            new ConcurrentDedupIndex().ProcessBatch(new[] { raptor, untagged, tagged }, db, deferUntagged: true);
+            Assert.Single(db.GetItemsWithNullGroupId()); // as an interrupted sync leaves it
+
+            var settings = new SettingsService(Path.Combine(dir, SettingsService.SettingsFileName));
+            settings.Update(s => s.Servers.Add(new ServerConfig { Id = "v1", Name = "Valkyrie", Url = "http://127.0.0.1:9", AccessToken = "t", UserId = "u" }));
+            await new SyncEngine(new EmbyClient(), db, new DedupEngine(), new TraktService(new TraktAuthService(db)), settings)
+                .RunFullSyncAsync().WaitAsync(TimeSpan.FromSeconds(60));
+
+            Assert.Empty(db.GetItemsWithNullGroupId());
+            Assert.DoesNotContain(db.GetGroupVersions(raptor.DedupGroupId!), v => v.Id == "vu");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
 }

@@ -256,6 +256,12 @@ public class ConcurrentDedupIndex
     // episode's own provider ids ("tvdb:ep:{id}").
     private static bool IsPositionalKey(string key) => key.StartsWith("ep:", StringComparison.OrdinalIgnoreCase);
 
+    // An episode with no id of its own matches only by season/episode, and the positional rule can judge that
+    // only once its server's tagged copies are in their groups. Callers hold these back to the end of a sync or
+    // rebuild (ProcessBatch deferUntagged); an untagged file that arrived first joined by number unchecked.
+    public static bool IsUntaggedEpisode(EmbyItem item) =>
+        PositionOf(item) != null && !GenerateCandidateKeys(item).Any(k => k.IsAuthoritative && !IsPositionalKey(k.Key));
+
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string ServerId, string SeriesId), Dictionary<string, string>> _seriesProviderIds = new();
 
     /// <summary>
@@ -502,7 +508,9 @@ public class ConcurrentDedupIndex
     /// - Assigns DedupGroupId directly on each item before SQLite writes.
     /// - Upserts modified groups and remapped keys to SQLite atomically.
     /// </summary>
-    public void ProcessBatch(IEnumerable<EmbyItem> items, DatabaseService? db = null)
+    // deferUntagged: untagged episodes (IsUntaggedEpisode) are skipped and left without a group; the caller
+    // passes them in again once the rest is placed.
+    public void ProcessBatch(IEnumerable<EmbyItem> items, DatabaseService? db = null, bool deferUntagged = false)
     {
         var dirtyGroups = new List<DedupGroupRecord>();
         var deletedGroupIds = new List<int>();
@@ -521,6 +529,7 @@ public class ConcurrentDedupIndex
             {
                 // Movies, Series, and Episodes participate in deduplication (B1 Option A)
                 if (item.Type != "Movie" && item.Type != "Series" && item.Type != "Episode") continue;
+                if (deferUntagged && IsUntaggedEpisode(item)) continue;
 
                 var candidateKeys = GenerateCandidateKeys(item);
 
