@@ -1314,30 +1314,39 @@ public class SettingsViewModel : BaseViewModel
         SyncStatusText = "Looking for titles with conflicting provider ids...";
         ConflictSplits.Clear();
         ConflictSplits.Add("Looking for titles with conflicting provider ids (15-60 s on a large library)..."); // the status line is on another tab
-        var splits = await Task.Run(() => _db.GetConflictSplits());
+        var pairs = await Task.Run(() => _db.GetConflictPairs());
         ConflictSplits.Clear();
-        if (splits == null)
+        if (pairs == null)
         {
             SyncStatusText = "Could not read the conflicting ids (see the log).";
             return;
         }
+        if (pairs.Count == 0)
+        {
+            SyncStatusText = "No titles are split by conflicting provider ids.";
+            return;
+        }
+        // #22 item 1: one row per thing to fix on the server: a series stands for every episode split under it.
+        var roots = DatabaseService.RollUpConflicts(pairs);
+        var series = roots.Where(r => r.ItemType == "Series").ToList();
+        var summary = $"{series.Count:N0} series with conflicting ids, {series.Sum(r => r.Episodes):N0} episodes affected; " +
+                      $"{roots.Count - series.Count:N0} movies ({pairs.Count:N0} split pairs).";
         var names = _settings.Current.Servers.ToDictionary(s => s.Id, s => s.Name);
         string Servers(string ids) => string.Join(" + ", ids.Split(',').Select(id => names.GetValueOrDefault(id, id)));
-        foreach (var c in splits)
-            ConflictSplits.Add($"{c.Title}{(c.Year is { } y && c.ItemType != "Episode" ? $" ({y})" : "")} [{c.ItemType}{(c.Count > 1 ? $", {c.Count} episodes" : "")}]: " +
-                               $"{ProviderName(c.Provider)} {c.IdsA} on {Servers(c.ServersA)}, {c.IdsB} on {Servers(c.ServersB)}");
-        SyncStatusText = splits.Count == 0
-            ? "No titles are split by conflicting provider ids."
-            : $"{splits.Count:N0} title(s) are listed twice because their copies carry different ids. Fix the wrong id on the server, then rebuild.";
+        ConflictSplits.Add(summary);
+        foreach (var r in roots)
+            ConflictSplits.Add($"{r.Title}{(r.Year is { } y ? $" ({y})" : "")} [{r.ItemType}{(r.Episodes > 0 ? $", {r.Episodes:N0} episode(s)" : "")}]: " +
+                               $"{(r.ItemType == "Series" && !r.SeriesIds ? "episode ids differ, e.g. " : "")}{ProviderName(r.Provider)} {r.IdsA} on {Servers(r.ServersA)}, {r.IdsB} on {Servers(r.ServersB)}");
+        SyncStatusText = summary + " Fix the wrong id on the server, then rebuild.";
     }
 
-    // "imdb:movie" -> "IMDb"; a season/episode key's id is its series' ("ep:tvdb" -> "series TVDB").
+    // "imdb:movie" -> "IMDb"; a season/episode key's id is its series' ("ep:tvdb" -> "series TVDB"); "tvdb:ep" -> "episode TVDB".
     private static string ProviderName(string type)
     {
         var parts = type.Split(':');
         var provider = parts[0] == "ep" ? parts[1] : parts[0];
         var name = provider switch { "imdb" => "IMDb", "tmdb" => "TMDb", "tvdb" => "TVDB", _ => provider };
-        return parts[0] == "ep" ? "series " + name : name;
+        return parts[0] == "ep" ? "series " + name : parts.Length > 1 && parts[1] == "ep" ? "episode " + name : name;
     }
 
     public async Task RunDeletionSweepAsync()

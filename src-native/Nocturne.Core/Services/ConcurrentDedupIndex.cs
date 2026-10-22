@@ -335,7 +335,7 @@ public class ConcurrentDedupIndex
     private Dictionary<string, HashSet<string>> AuthIdsOf(DedupGroupRecord g) =>
         IdsOfKeys(g.Keys.Where(k => _keyToGroup.TryGetValue(k, out var m) && m.GroupId == g.GroupId));
 
-    // The same from a group's rows in dedup_keys (DatabaseService.GetConflictSplits).
+    // The same from a group's rows in dedup_keys (DatabaseService.GetConflictPairs).
     internal static Dictionary<string, HashSet<string>> IdsOfKeys(IEnumerable<string> keys)
     {
         var ids = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);

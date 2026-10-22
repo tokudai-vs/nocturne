@@ -173,9 +173,45 @@ public class DedupInputGuardTests
             foreach (var it in new[] { r, v, a, b }) db.UpsertItem(it, it.ServerId!);
             new ConcurrentDedupIndex().ProcessBatch(new[] { r, v, a, b }, db);
 
-            var split = Assert.Single(db.GetConflictSplits()!);
+            var split = Assert.Single(db.GetConflictPairs()!);
 
-            Assert.Equal(new DatabaseService.ConflictSplit("Movie", "The Great Hack", 2019, "imdb:movie", "tt9358204", "raptor", "tt4736550", "valkyrie"), split);
+            Assert.Equal(("Movie", "The Great Hack", 2019, "imdb:movie", "tt9358204", "raptor", "tt4736550", "valkyrie"),
+                         (split.ItemType, split.TitleA, split.YearA, split.Provider, split.IdsA, split.ServersA, split.IdsB, split.ServersB));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { File.Delete(dbPath); } catch { }
+        }
+    }
+
+    // #22 item 1: episodes split because their series carries a conflicting id roll up into that series' row.
+    [Fact]
+    public void ConflictRollUp_MakesASeriesAndItsSplitEpisodesOneRow()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DatabaseService(dbPath);
+            EmbyItem Show(string id, string srv, string tvdb) =>
+                new() { Id = id, ServerId = srv, Name = "Hotel", Type = "Series", ProductionYear = 1983, ProviderIds = new() { ["Tvdb"] = tvdb, ["Tmdb"] = "1000" } };
+            var shows = new[] { Show("rs", "raptor", "111"), Show("vs", "valkyrie", "222") };
+            var episodes = Enumerable.Range(1, 3).SelectMany(e => new[]
+            {
+                Episode($"r{e}", "raptor", 1, e, seriesId: "rs", seriesName: "Hotel"),
+                Episode($"v{e}", "valkyrie", 1, e, seriesId: "vs", seriesName: "Hotel"),
+            }).ToList();
+            foreach (var it in shows.Concat(episodes)) db.UpsertItem(it, it.ServerId!);
+            var index = new ConcurrentDedupIndex();
+            index.ProcessBatch(shows, db);
+            index.ProcessBatch(episodes, db);
+            var pairs = db.GetConflictPairs()!;
+            Assert.Equal(4, pairs.Count); // the series and its three episodes
+
+            var root = Assert.Single(DatabaseService.RollUpConflicts(pairs));
+
+            Assert.Equal(("Series", "Hotel", 1983, "tvdb:series", "111", "222", 3, true),
+                         (root.ItemType, root.Title, root.Year, root.Provider, root.IdsA, root.IdsB, root.Episodes, root.SeriesIds));
         }
         finally
         {

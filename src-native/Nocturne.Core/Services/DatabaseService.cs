@@ -3118,18 +3118,20 @@ public class DatabaseService : IDisposable
             ");
     private static readonly string SqlConflictSplitKeys = Checked("SELECT key FROM dedup_keys WHERE group_id = $gid;");
     private static readonly string SqlConflictSplitGroup = Checked(@"
-                SELECT g.item_type, g.name, g.year, group_concat(DISTINCT c.server_id), MAX(c.series_name), g.season_number, g.episode_number
+                SELECT g.item_type, g.name, g.year, group_concat(DISTINCT c.server_id), MAX(c.series_name), g.season_number, g.episode_number,
+                       (SELECT MIN(s.group_id) FROM cached_items e JOIN cached_items s ON s.id = e.series_id AND s.server_id = e.server_id
+                         WHERE e.group_id = g.group_id)
                 FROM dedup_groups g JOIN cached_items c ON c.group_id = g.group_id WHERE g.group_id = $gid GROUP BY g.group_id;
             ");
 
-    // Count: the pairs a row stands for (an episode row whose ids are its series' stands for every episode they split).
-    public sealed record ConflictSplit(string ItemType, string Title, int? Year, string Provider, string IdsA, string ServersA, string IdsB, string ServersB, int Count = 1);
+    // One pair of groups the conflict guard split. An episode side carries its series' group (through its own Series
+    // row on the same server), by which RollUpConflicts finds the root cause.
+    public sealed record ConflictPair(int GroupA, int GroupB, string ItemType, string TitleA, string TitleB, int? YearA, int? YearB,
+        string Provider, string IdsA, string ServersA, string IdsB, string ServersB, string? Series, int? SeriesA, int? SeriesB);
 
-    // #21 item 2: the groups the conflict guard split, with the ids they disagree on, so they can be fixed on the
-    // server. Own read-only connection: the key scan takes seconds. Pairs whose ids no longer disagree (a member since
-    // removed) are left out; a season/episode key's ids are the series', so those pairs come one row per series.
-    // Null when the query fails.
-    public List<ConflictSplit>? GetConflictSplits()
+    // #21 item 2: the groups the conflict guard split, with the ids they disagree on. Own read-only connection: the key
+    // scan takes seconds. Pairs whose ids no longer disagree (a member since removed) are left out. Null on failure.
+    public List<ConflictPair>? GetConflictPairs()
     {
         try
         {
@@ -3157,32 +3159,59 @@ public class DatabaseService : IDisposable
                 while (r.Read()) list.Add(r.GetString(0));
                 return ConcurrentDedupIndex.IdsOfKeys(list);
             }
-            (string Type, string Title, string? Series, int? Year, string Servers)? GroupOf(int gid)
+            (string Type, string Title, string? Series, int? Year, string Servers, int? SeriesGroup)? GroupOf(int gid)
             {
                 pGroup.Value = gid;
                 using var r = group.ExecuteReader();
                 if (!r.Read()) return null;
                 var series = r.IsDBNull(4) ? null : r.GetString(4);
                 var title = r.GetString(0) == "Episode" ? $"{series} S{(r.IsDBNull(5) ? 0 : r.GetInt32(5)):D2}E{(r.IsDBNull(6) ? 0 : r.GetInt32(6)):D2} {r.GetString(1)}" : r.GetString(1);
-                return (r.GetString(0), title, series, r.IsDBNull(2) ? null : r.GetInt32(2), r.GetString(3));
+                return (r.GetString(0), title, series, r.IsDBNull(2) ? null : r.GetInt32(2), r.GetString(3), r.IsDBNull(7) ? null : r.GetInt32(7));
             }
 
-            var splits = new List<ConflictSplit>();
+            var result = new List<ConflictPair>();
             foreach (var (ga, gb) in pairs.Select(p => (Math.Min(p.Item1, p.Item2), Math.Max(p.Item1, p.Item2))).Distinct())
             {
                 var (a, b) = (IdsOf(ga), IdsOf(gb));
                 if (ConcurrentDedupIndex.FindConflict(a, b) is not { } type || GroupOf(ga) is not { } ra || GroupOf(gb) is not { } rb) continue;
-                var bySeries = type.StartsWith("ep:");
-                splits.Add(new ConflictSplit(ra.Type, bySeries ? ra.Series ?? ra.Title : ra.Title, bySeries ? null : ra.Year ?? rb.Year, type,
-                    string.Join(", ", a[type].Order()), ra.Servers, string.Join(", ", b[type].Order()), rb.Servers));
+                result.Add(new ConflictPair(ga, gb, ra.Type, ra.Title, rb.Title, ra.Year, rb.Year, type,
+                    string.Join(", ", a[type].Order()), ra.Servers, string.Join(", ", b[type].Order()), rb.Servers,
+                    ra.Series ?? rb.Series, ra.SeriesGroup, rb.SeriesGroup));
             }
-            return splits.GroupBy(s => s).Select(g => g.Key with { Count = g.Count() })
-                .OrderBy(s => s.ItemType switch { "Movie" => 0, "Series" => 1, _ => 2 }).ThenBy(s => s.Title, StringComparer.OrdinalIgnoreCase).ToList();
+            return result;
         }
         catch (Exception ex) when (QueryFailed(ex, SqlConflictSplitPairs))
         {
             return null;
         }
+    }
+
+    // A row to fix on the server. Episodes: the episode pairs it accounts for (0 for a movie). A series row shows the
+    // series' own conflicting ids when it has them (its Series rows split, or its season/episode keys, whose ids are
+    // the series'); otherwise one episode pair's, as an example.
+    public sealed record ConflictRoot(string ItemType, string Title, int? Year, string Provider, string IdsA, string ServersA, string IdsB, string ServersB, int Episodes, bool SeriesIds);
+
+    // #22 item 1: by root cause. Most pairs are episodes split because their series carries a conflicting id; the
+    // series is what gets fixed, so a series and every episode pair under it (keyed by the series' groups on each
+    // side) make one row.
+    public static List<ConflictRoot> RollUpConflicts(IEnumerable<ConflictPair> pairs)
+    {
+        var roots = new List<ConflictRoot>();
+        foreach (var p in pairs.Where(p => p.ItemType == "Movie"))
+            roots.Add(new ConflictRoot("Movie", p.TitleA, p.YearA ?? p.YearB, p.Provider, p.IdsA, p.ServersA, p.IdsB, p.ServersB, 0, false));
+
+        (int, int) SeriesKey(ConflictPair p) => p.ItemType == "Series"
+            ? (p.GroupA, p.GroupB)
+            : (Math.Min(p.SeriesA ?? -p.GroupA, p.SeriesB ?? -p.GroupB), Math.Max(p.SeriesA ?? -p.GroupA, p.SeriesB ?? -p.GroupB));
+        foreach (var series in pairs.Where(p => p.ItemType != "Movie").GroupBy(SeriesKey))
+        {
+            var own = series.FirstOrDefault(p => p.ItemType == "Series") ?? series.FirstOrDefault(p => p.Provider.StartsWith("ep:"));
+            var shown = own ?? series.First();
+            var title = shown.ItemType == "Series" ? shown.TitleA : shown.Series ?? shown.TitleA;
+            roots.Add(new ConflictRoot("Series", title, shown.ItemType == "Series" ? shown.YearA ?? shown.YearB : null, shown.Provider,
+                shown.IdsA, shown.ServersA, shown.IdsB, shown.ServersB, series.Count(p => p.ItemType == "Episode"), own != null));
+        }
+        return roots.OrderBy(r => r.ItemType == "Movie" ? 1 : 0).ThenByDescending(r => r.Episodes).ThenBy(r => r.Title, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private static readonly string SqlRemoveSiblingWrite = Checked("DELETE FROM sibling_write_queue WHERE queue_id = $qid;");
