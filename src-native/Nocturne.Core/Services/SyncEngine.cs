@@ -65,6 +65,8 @@ public class SyncBatch
     public bool IsCompleted { get; init; }
     public long FetchDurationMs { get; init; }
     public bool IsSeriesPrefetch { get; init; } // written ahead of the library's paging; no checkpoint
+    public bool IsIncremental { get; init; }     // changes since the last pass; checkpointed only when complete
+    public int LibraryTotal { get; init; }       // the library's item count (the checkpoint an incremental pass writes)
 }
 
 public class SyncEngine
@@ -82,6 +84,10 @@ public class SyncEngine
     public event Action? SyncCompleted;
 
     private readonly Func<ServerConfig, EmbyClient> _clientFor;
+
+    // An incremental pass asks for what was saved since the last completed pass minus this much: it covers items
+    // saved while that pass ran and clock skew between this machine and the server, at the cost of a day's changes.
+    public static readonly TimeSpan IncrementalOverlap = TimeSpan.FromHours(24);
 
     public SyncEngine(EmbyClient embyClient, DatabaseService db, DedupEngine dedup, TraktService trakt, SettingsService settings,
         Func<ServerConfig, EmbyClient>? clientFor = null)
@@ -125,12 +131,12 @@ public class SyncEngine
 
     // A library's Series rows, paged and written before the library itself (not checkpointed: a resumed sync
     // fetches them again). False on a request that fails after retries.
-    private static async Task<bool> SendSeriesFirstAsync(EmbyClient client, ServerConfig server, EmbyItem view, ChannelWriter<SyncBatch> writer, CancellationToken ct)
+    private static async Task<bool> SendSeriesFirstAsync(EmbyClient client, ServerConfig server, EmbyItem view, DateTime? since, ChannelWriter<SyncBatch> writer, CancellationToken ct)
     {
         const int pageSize = 2000;
         for (int start = 0; !ct.IsCancellationRequested; start += pageSize)
         {
-            var page = await client.GetItemsAsync(parentId: view.Id, includeItemTypes: "Series", limit: pageSize, startIndex: start, fields: EmbyClient.FullSyncItemFields);
+            var page = await client.GetItemsAsync(parentId: view.Id, includeItemTypes: "Series", limit: pageSize, startIndex: start, fields: EmbyClient.FullSyncItemFields, minDateLastSavedForUser: since);
             if (!page.IsSuccess) return false;
             foreach (var item in page.Items)
             {
@@ -234,7 +240,7 @@ public class SyncEngine
                 var views = entry.Views;
                 var client = _clientFor(server);
 
-                var list = new List<(ServerConfig Server, EmbyItem View, int ServerTotal, bool NeedsFetch, int StartIndex)>();
+                var list = new List<(ServerConfig Server, EmbyItem View, int ServerTotal, DateTime? Since, int StartIndex)>();
 
                 foreach (var view in views)
                 {
@@ -243,19 +249,22 @@ public class SyncEngine
                     var probe = await client.GetItemsAsync(parentId: view.Id, limit: 1);
                     int serverTotal = probe.IsSuccess ? probe.TotalRecordCount : (checkpoint?.TotalItems ?? 0);
 
-                    bool needsFetch = true;
+                    // A completed library is fetched incrementally: what was saved since its last pass (#20 item 5). It
+                    // used to be skipped when its item count matched the checkpoint and fetched in full otherwise, so a
+                    // changed item went unseen and one new episode re-fetched 676,870.
+                    DateTime? since = null;
                     int startIndex = 0;
 
-                    if (!forceResync && checkpoint != null && checkpoint.IsCompleted && probe.IsSuccess && checkpoint.TotalItems == serverTotal && serverTotal > 0)
+                    if (!forceResync && checkpoint != null && checkpoint.IsCompleted)
                     {
-                        needsFetch = false;
+                        since = DateTimeOffset.FromUnixTimeSeconds(checkpoint.LastSynced).UtcDateTime - IncrementalOverlap;
                     }
                     else if (!forceResync && checkpoint != null && !checkpoint.IsCompleted && checkpoint.StartIndex > 0)
                     {
                         startIndex = checkpoint.StartIndex;
                     }
 
-                    list.Add((server, view, serverTotal, needsFetch, startIndex));
+                    list.Add((server, view, serverTotal, since, startIndex));
                 }
 
                 return list;
@@ -264,8 +273,8 @@ public class SyncEngine
             var probedViews = probeResults.SelectMany(x => x).ToList();
             int totalViews = probedViews.Count;
             int totalExpectedItems = probedViews.Sum(x => x.ServerTotal);
-            int totalProcessedItems = probedViews.Where(x => !x.NeedsFetch).Sum(x => x.ServerTotal) +
-                                      probedViews.Where(x => x.NeedsFetch).Sum(x => x.StartIndex);
+            int totalProcessedItems = probedViews.Where(x => x.Since != null).Sum(x => x.ServerTotal) +
+                                      probedViews.Where(x => x.Since == null).Sum(x => x.StartIndex);
 
             // =========================================================================
             // PHASE 1: PIPELINE — PARALLELIZE NETWORK, SERIALIZE WRITES (Bounded Channel)
@@ -286,7 +295,7 @@ public class SyncEngine
             foreach (var group in probedViews.GroupBy(p => p.Server.Id))
             {
                 int sTotal = group.Sum(p => p.ServerTotal);
-                int sInitial = group.Sum(p => !p.NeedsFetch ? p.ServerTotal : p.StartIndex);
+                int sInitial = group.Sum(p => p.Since != null ? p.ServerTotal : p.StartIndex);
                 serverTotalItems[group.Key] = sTotal;
                 serverWrittenItems[group.Key] = sInitial;
                 serverFetchedItems[group.Key] = sInitial;
@@ -319,9 +328,15 @@ public class SyncEngine
                         // Matches items across servers in real time and assigns DedupGroupId prior to DB write
                         _dedupIndex.ProcessBatch(batch.Items, _db, ConcurrentDedupIndex.UntaggedEpisodes.Hold);
 
-                        if (batch.IsSeriesPrefetch)
+                        if (batch.IsSeriesPrefetch || (batch.IsIncremental && !batch.IsCompleted))
                         {
                             _db.UpsertItems(batch.Items, batch.Server.Id, batch.View.Id);
+                        }
+                        else if (batch.IsIncremental)
+                        {
+                            // The pass is done: the library checkpoint stays complete, and its time is the next "since".
+                            _db.UpsertItems(batch.Items, batch.Server.Id, batch.View.Id,
+                                checkpointStartIndex: batch.LibraryTotal, checkpointTotalItems: batch.LibraryTotal, checkpointIsCompleted: true);
                         }
                         else
                         {
@@ -398,18 +413,15 @@ public class SyncEngine
 
                     var batchController = new AdaptiveBatchController(AdaptiveBatchController.DefaultBatchSize);
 
-                    foreach (var (_, view, serverTotal, needsFetch, initialStartIndex) in group.Views)
+                    foreach (var (_, view, serverTotal, since, initialStartIndex) in group.Views)
                     {
                         if (ct.IsCancellationRequested) break;
 
                         int doneViews = Interlocked.Increment(ref completedViews);
                         ProgressChanged?.Invoke(doneViews, Math.Max(1, totalViews));
 
-                        if (!needsFetch)
-                        {
-                            NocturneLogger.Info("SyncEngine", $"{server.Name} • {view.Name} is already up to date ({serverTotal:N0} items). Skipping network download.");
-                            continue;
-                        }
+                        if (since != null)
+                            NocturneLogger.Info("SyncEngine", $"{server.Name} • {view.Name}: fetching what changed since {since:u} ({serverTotal:N0} items in the library).");
 
                         int startIndex = initialStartIndex;
                         if (startIndex > 0)
@@ -420,7 +432,7 @@ public class SyncEngine
                         // Series rows first: an episode deduplicated before its Series row is cached has no series
                         // provider ids (no ep:tvdb/tmdb/imdb keys) and groups differently from a rebuild of the same
                         // items. In SortName order half the live library's episodes came before their series (#20).
-                        if (!await SendSeriesFirstAsync(client, server, view, channel.Writer, ct))
+                        if (!await SendSeriesFirstAsync(client, server, view, since, channel.Writer, ct))
                         {
                             NocturneLogger.Error("SyncEngine", $"Network error fetching the series of {server.Name} • {view.Name}; library skipped this run.");
                             failedServers[server.Id] = 1;
@@ -440,7 +452,8 @@ public class SyncEngine
                                 parentId: view.Id,
                                 limit: currentLimit,
                                 startIndex: startIndex,
-                                fields: EmbyClient.FullSyncItemFields);
+                                fields: EmbyClient.FullSyncItemFields,
+                                minDateLastSavedForUser: since);
                             swReq.Stop();
 
                             long reqDurationMs = swReq.ElapsedMilliseconds;
@@ -467,7 +480,8 @@ public class SyncEngine
                                         parentId: view.Id,
                                         limit: currentLimit,
                                         startIndex: startIndex,
-                                        fields: EmbyClient.FullSyncItemFields);
+                                        fields: EmbyClient.FullSyncItemFields,
+                                        minDateLastSavedForUser: since);
                                     swReq.Stop();
                                     Interlocked.Add(ref totalServerRequestMs, swReq.ElapsedMilliseconds);
                                 }
@@ -487,6 +501,9 @@ public class SyncEngine
 
                             if (itemsResult.Items.Count == 0)
                             {
+                                // Nothing (more) changed: an incremental pass still records that it ran.
+                                if (since != null)
+                                    await channel.Writer.WriteAsync(new SyncBatch { Server = server, View = view, IsIncremental = true, IsCompleted = true, LibraryTotal = serverTotal }, ct);
                                 hasMore = false;
                                 break;
                             }
@@ -517,6 +534,8 @@ public class SyncEngine
                                 TotalInView = totalInView,
                                 Items = itemsResult.Items.Where(i => i.Type != "Series").ToList(), // written ahead
                                 IsCompleted = isLibraryComplete,
+                                IsIncremental = since != null,
+                                LibraryTotal = serverTotal,
                                 FetchDurationMs = reqDurationMs
                             };
 

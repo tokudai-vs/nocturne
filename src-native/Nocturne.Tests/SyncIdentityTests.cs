@@ -1,8 +1,4 @@
 using System.IO;
-using System.Net;
-using System.Net.Http;
-using System.Text.Json;
-using System.Web;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
 using Xunit;
@@ -22,33 +18,6 @@ public class SyncIdentityTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    // One library per server, listed in the order Emby's SortName paging returned the live library: the episode
-    // before its own Series row.
-    private sealed class FakeEmby : HttpMessageHandler
-    {
-        public readonly Dictionary<string, List<EmbyItem>> Libraries = new();
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        {
-            var uri = request.RequestUri!;
-            var items = Libraries[uri.Host];
-            if (uri.AbsolutePath.EndsWith("/Views"))
-                return Json(new { Items = new[] { new { Id = "lib", Name = "TV Shows", CollectionType = "tvshows", Type = "CollectionFolder" } }, TotalRecordCount = 1 });
-            if (uri.AbsolutePath.EndsWith("/Items"))
-            {
-                var q = HttpUtility.ParseQueryString(uri.Query);
-                var listed = q["IncludeItemTypes"] is { } types ? items.Where(i => types.Split(',').Contains(i.Type)).ToList() : items;
-                var start = int.Parse(q["StartIndex"] ?? "0");
-                var limit = int.Parse(q["Limit"] ?? "50");
-                return Json(new { Items = listed.Skip(start).Take(limit), TotalRecordCount = listed.Count });
-            }
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-        }
-
-        private static Task<HttpResponseMessage> Json(object body) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(body), System.Text.Encoding.UTF8, "application/json") });
-    }
-
     private static EmbyItem Series(string id, string tvdb) =>
         new() { Id = id, Name = "Bag Show", Type = "Series", ProviderIds = new() { ["Tvdb"] = tvdb } };
 
@@ -59,7 +28,7 @@ public class SyncIdentityTests : IDisposable
     [Fact]
     public async Task Sync_GroupsLikeARebuild_WhenEpisodesArriveBeforeTheirSeries()
     {
-        var fake = new FakeEmby();
+        var fake = new FakeEmbyServer();
         // The servers disagree on the series' Tvdb id, so with series ids known the episodes conflict. Season rows
         // (not deduplicated) push each Series row into a later page than its episode, as in the live library.
         List<EmbyItem> Library(string episode, string series, string tvdb) =>
@@ -105,7 +74,7 @@ public class SyncIdentityTests : IDisposable
             new() { Id = id, Name = id, Type = "Episode", SeriesId = series, SeriesName = "90 Day Diaries", ParentIndexNumber = s, IndexNumber = e,
                     ProviderIds = tvdb == null ? new() : new() { ["Tvdb"] = tvdb } };
         var fillers = Enumerable.Range(0, AdaptiveBatchController.DefaultBatchSize + 1).Select(i => new EmbyItem { Id = $"season{i}", Name = $"Season {i}", Type = "Season" });
-        var fake = new FakeEmby();
+        var fake = new FakeEmbyServer();
         fake.Libraries["raptor.test"] = new() { Ep("r", "rs", 3, 8, "9057492"), Series("rs", "393180") };
         fake.Libraries["valkyrie.test"] = new[] { Ep("vu", "vs", 3, 8, null) }.Concat(fillers).Concat(new[] { Ep("vt", "vs", 3, 6, "9057492"), Series("vs", "393180") }).ToList();
 

@@ -467,7 +467,8 @@ public class EmbyClient
         int startIndex = 0,
         string sortBy = "SortName",
         string sortOrder = "Ascending",
-        string? fields = null)
+        string? fields = null,
+        DateTime? minDateLastSavedForUser = null)
     {
         if (!IsAuthenticated) return new ItemsResult<EmbyItem> { IsSuccess = false };
 
@@ -481,6 +482,8 @@ public class EmbyClient
 
         if (!string.IsNullOrEmpty(parentId)) query["ParentId"] = parentId;
         if (!string.IsNullOrEmpty(includeItemTypes)) query["IncludeItemTypes"] = includeItemTypes;
+        // Items whose metadata or this user's data was saved since then (a superset of MinDateLastSaved on Emby 4.9).
+        if (minDateLastSavedForUser is { } since) query["MinDateLastSavedForUser"] = since.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ");
 
         int maxRetries = 3;
         for (int attempt = 1; attempt <= maxRetries; attempt++)
