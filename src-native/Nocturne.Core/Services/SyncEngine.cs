@@ -59,10 +59,12 @@ public class SyncBatch
     public ServerConfig Server { get; init; } = null!;
     public EmbyItem View { get; init; } = null!;
     public int StartIndex { get; init; }
+    public int NextStartIndex { get; init; } // the page's end in the library's paging (Items can be fewer: Series rows dropped)
     public int TotalInView { get; init; }
     public List<EmbyItem> Items { get; init; } = new();
     public bool IsCompleted { get; init; }
     public long FetchDurationMs { get; init; }
+    public bool IsSeriesPrefetch { get; init; } // written ahead of the library's paging; no checkpoint
 }
 
 public class SyncEngine
@@ -79,13 +81,17 @@ public class SyncEngine
     public event Action<SyncProgressReport>? ProgressReported;
     public event Action? SyncCompleted;
 
-    public SyncEngine(EmbyClient embyClient, DatabaseService db, DedupEngine dedup, TraktService trakt, SettingsService settings)
+    private readonly Func<ServerConfig, EmbyClient> _clientFor;
+
+    public SyncEngine(EmbyClient embyClient, DatabaseService db, DedupEngine dedup, TraktService trakt, SettingsService settings,
+        Func<ServerConfig, EmbyClient>? clientFor = null)
     {
         _embyClient = embyClient;
         _db = db;
         _dedup = dedup;
         _trakt = trakt;
         _settings = settings;
+        _clientFor = clientFor ?? EmbyClient.CreateForServer;
     }
 
     public SyncState CurrentState { get; private set; } = SyncState.Idle;
@@ -115,6 +121,27 @@ public class SyncEngine
         {
             _dedup.WriterGate.Release();
         }
+    }
+
+    // A library's Series rows, paged and written before the library itself (not checkpointed: a resumed sync
+    // fetches them again). False on a request that fails after retries.
+    private static async Task<bool> SendSeriesFirstAsync(EmbyClient client, ServerConfig server, EmbyItem view, ChannelWriter<SyncBatch> writer, CancellationToken ct)
+    {
+        const int pageSize = 2000;
+        for (int start = 0; !ct.IsCancellationRequested; start += pageSize)
+        {
+            var page = await client.GetItemsAsync(parentId: view.Id, includeItemTypes: "Series", limit: pageSize, startIndex: start, fields: EmbyClient.FullSyncItemFields);
+            if (!page.IsSuccess) return false;
+            foreach (var item in page.Items)
+            {
+                item.ServerId = server.Id;
+                item.ServerName = server.Name;
+            }
+            if (page.Items.Count > 0)
+                await writer.WriteAsync(new SyncBatch { Server = server, View = view, Items = page.Items, IsSeriesPrefetch = true }, ct);
+            if (page.Items.Count < pageSize) return true;
+        }
+        return true;
     }
 
     private async Task RunFullSyncCoreAsync(CancellationToken ct, bool forceResync)
@@ -170,8 +197,7 @@ public class SyncEngine
                     ActiveServersCount = servers.Count
                 });
 
-                var client = new EmbyClient();
-                client.Configure(server.Url, server.AccessToken, server.UserId);
+                var client = _clientFor(server);
                 try
                 {
                     var views = await client.GetViewsAsync();
@@ -206,8 +232,7 @@ public class SyncEngine
             {
                 var server = entry.Server;
                 var views = entry.Views;
-                var client = new EmbyClient();
-                client.Configure(server.Url, server.AccessToken, server.UserId);
+                var client = _clientFor(server);
 
                 var list = new List<(ServerConfig Server, EmbyItem View, int ServerTotal, bool NeedsFetch, int StartIndex)>();
 
@@ -290,22 +315,29 @@ public class SyncEngine
                     {
                         var swWrite = Stopwatch.StartNew();
 
-                        string watermarkKey = $"{batch.Server.Id}:{batch.View.Id}";
-                        int watermark = batch.StartIndex + batch.Items.Count;
-                        viewWatermarks[watermarkKey] = watermark;
-
                         // Concurrent incremental hash-index deduplication:
                         // Matches items across servers in real time and assigns DedupGroupId prior to DB write
                         _dedupIndex.ProcessBatch(batch.Items, _db, deferUntagged: true);
 
-                        // Atomic crash safety: items + checkpoint committed in the exact same transaction!
-                        _db.UpsertItems(
-                            batch.Items,
-                            batch.Server.Id,
-                            batch.View.Id,
-                            checkpointStartIndex: watermark,
-                            checkpointTotalItems: batch.TotalInView,
-                            checkpointIsCompleted: batch.IsCompleted);
+                        if (batch.IsSeriesPrefetch)
+                        {
+                            _db.UpsertItems(batch.Items, batch.Server.Id, batch.View.Id);
+                        }
+                        else
+                        {
+                            string watermarkKey = $"{batch.Server.Id}:{batch.View.Id}";
+                            int watermark = batch.NextStartIndex;
+                            viewWatermarks[watermarkKey] = watermark;
+
+                            // Atomic crash safety: items + checkpoint committed in the exact same transaction!
+                            _db.UpsertItems(
+                                batch.Items,
+                                batch.Server.Id,
+                                batch.View.Id,
+                                checkpointStartIndex: watermark,
+                                checkpointTotalItems: batch.TotalInView,
+                                checkpointIsCompleted: batch.IsCompleted);
+                        }
 
                         swWrite.Stop();
                         Interlocked.Add(ref totalSqliteWriteMs, swWrite.ElapsedMilliseconds);
@@ -319,14 +351,14 @@ public class SyncEngine
                             ? Math.Min(90.0, 10.0 + (((double)Math.Min(totalItemsFetched, totalItemsWritten) / totalExpectedItems) * 78.0))
                             : 10.0;
 
-                        var msg = $"{batch.View.Name}: {watermark:N0} / {batch.TotalInView:N0} items";
+                        var msg = batch.IsSeriesPrefetch ? $"{batch.View.Name}: series" : $"{batch.View.Name}: {batch.NextStartIndex:N0} / {batch.TotalInView:N0} items";
                         ProgressReported?.Invoke(new SyncProgressReport
                         {
                             State = SyncState.Writing,
                             ServerId = batch.Server.Id,
                             ServerName = batch.Server.Name,
                             LibraryName = batch.View.Name,
-                            CurrentItem = watermark,
+                            CurrentItem = batch.NextStartIndex,
                             TotalItems = batch.TotalInView,
                             ItemsFetched = totalItemsFetched,
                             ItemsWritten = totalItemsWritten,
@@ -362,8 +394,7 @@ public class SyncEngine
                 try
                 {
                     var server = group.Server;
-                    var client = new EmbyClient();
-                    client.Configure(server.Url, server.AccessToken, server.UserId);
+                    var client = _clientFor(server);
 
                     var batchController = new AdaptiveBatchController(AdaptiveBatchController.DefaultBatchSize);
 
@@ -384,6 +415,16 @@ public class SyncEngine
                         if (startIndex > 0)
                         {
                             NocturneLogger.Info("SyncEngine", $"Resuming sync for {server.Name} • {view.Name} from item {startIndex:N0} / {serverTotal:N0} (batch size {batchController.CurrentBatchSize})...");
+                        }
+
+                        // Series rows first: an episode deduplicated before its Series row is cached has no series
+                        // provider ids (no ep:tvdb/tmdb/imdb keys) and groups differently from a rebuild of the same
+                        // items. In SortName order half the live library's episodes came before their series (#20).
+                        if (!await SendSeriesFirstAsync(client, server, view, channel.Writer, ct))
+                        {
+                            NocturneLogger.Error("SyncEngine", $"Network error fetching the series of {server.Name} • {view.Name}; library skipped this run.");
+                            failedServers[server.Id] = 1;
+                            break;
                         }
 
                         bool hasMore = true;
@@ -472,8 +513,9 @@ public class SyncEngine
                                 Server = server,
                                 View = view,
                                 StartIndex = startIndex - itemsResult.Items.Count,
+                                NextStartIndex = startIndex,
                                 TotalInView = totalInView,
-                                Items = itemsResult.Items,
+                                Items = itemsResult.Items.Where(i => i.Type != "Series").ToList(), // written ahead
                                 IsCompleted = isLibraryComplete,
                                 FetchDurationMs = reqDurationMs
                             };
