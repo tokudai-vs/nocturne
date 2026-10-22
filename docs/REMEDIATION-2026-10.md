@@ -298,11 +298,7 @@ risk); binaries were trusted on `File.Exists` and also taken from PATH; the gues
 
 - **Trakt production client ID** (I1) — waiting on you.
 - **Watch Party with real remote guests** through a public link — flagged for you.
-- **Rebuild UI block** — a rebuild still blocks UI reads while its swap holds `_dbLock`: 233–507 s on the 1.67 M-row
-  DB (§7.6 item 18; 3.8 min on the 711k-row copy).
-  Deferred, kept on the list: the dedup plan's periodic reconcile needs rebuild to be usable. Taking the swap off
-  `_dbLock` means running it on its own connection, which turns UI writes into `SQLITE_BUSY` after 5 s; now that E5
-  surfaces DB failures, that is the next step. (The 26 s/chunk rebuild read was fixed in C.)
+- ~~**Rebuild UI block**~~ — done, §8.4 (`04939ff`): worst UI read during a rebuild 327 s → 5 s; UI writes queue.
 - ~~`trakt_queue.group_id` is not remapped by a rebuild (audit 4.3).~~ Done, §7.2 (`86dae59`).
 - ~~**Six episode groups wrongly merged on clean data** (§2).~~ Done, §7.1 (items 1, 1b, 1c; the gate in 2, 2b).
 - Deep-offset sync requests still take 13–20 s each (Emby `StartIndex` paging) and occasionally pass the 30 s
@@ -317,12 +313,15 @@ risk); binaries were trusted on `File.Exists` and also taken from PATH; the gues
 - ~~Sibling position writes still go through `Sessions/Playing/Stopped` on sibling servers~~ — user-data endpoint
   since §7.3 (`00339be`). The sibling drain still runs only after playback.
 - **Cascade on your live profile:** its groups were built by the old engine (marker `"2"`, 6 wrong groups); this build
-  is engine `"3"`, so the cascade stays off there until Settings → Rebuild (4–8½ min UI block, above) or a fresh sync.
-- **336,776 IMDb ids unread** because of `"IMDB"` key casing (§7.6 item 14). Fix: case-insensitive provider-id
-  lookup; then bump the engine marker and re-measure.
-- **Count-equality library check** re-fetches a whole library on any change in its item count (§7.6 item 19);
-  Valkyrie's TV library costs 19 min per added episode. Incremental paging (e.g. `MinDateLastSaved`) would be the
-  next step.
+  is engine `"4"`, so the cascade stays off there until Settings → Rebuild (no longer blocks the UI, §8.4) or a
+  fresh sync. Neither was run on the live DB.
+- ~~**336,776 IMDb ids unread**~~ — done, §8.1 (`527372b`). The `imdb_id` column of rows cached before it stays empty
+  until they are fetched again (only an ungrouped item's sibling fallback reads it).
+- ~~**Count-equality library check**~~ — done, §8.5 (`519c61d`): incremental paging; a whole sync 49 s.
+- **Items deleted on a server are never removed from the cache** (neither the old full re-fetch nor incremental
+  paging detects them). An id-only listing compared against the cache would be the next step.
+- **The sync channel holds up to 8 batches** of up to ~17k items on deep libraries (its comment assumes ~10k items in
+  flight); likely the 2.2 GB peak of a full re-fetch. Not measured further.
 - B5 covers the startup path only.
 
 ---
@@ -490,3 +489,105 @@ measured 10:50:46 with the prompt still open.
 19. **One new episode re-fetches a whole library.** A library counts as up to date only when its item count matches
     the checkpoint; Valkyrie's TV library went from 676,869 to 676,870 items between two syncs and was fetched in full
     again (19 min).
+
+---
+
+## 8. Follow-up pass 2 (#20), 2026-10-22
+
+Six items, in the order given, one commit each.
+
+| Item | Commit | Tests after |
+|---|---|---|
+| 1 — read provider ids regardless of case | `527372b` | 217/217 |
+| 2 — partition-identity oracle; series rows first, so a sync groups like a rebuild | `759c21d` | 221/221 |
+| 3 — untagged episodes shown at once in a held group, merged at the end | `ec70c8a` | 223/223 |
+| 4 — rebuild writes on their own connection; UI writes queue instead of `SQLITE_BUSY` | `04939ff` | 224/224 |
+| 5 — fetch completed libraries incrementally, not by item count | `519c61d` | 225/225 |
+| 6 — alert when the broader renumbering count rises above its baseline | `e61b252` | 227/227 |
+
+Method as in §7: the live DB's 1,493,660 Movie/Series/Episode rows replayed in their original sync order into a fresh
+DB, and rebuilt on a copy, each measured with `scripts/dedup-baseline.sql` (case-insensitive since item 1) and
+compared with the partition oracle (item 2).
+
+### 8.1 Item 1 — provider ids in any case
+
+`EmbyItem.ProviderId` matches provider names regardless of case ("Imdb" and "IMDB" both occur; TVDB/TMDB never
+upper-case). The gate and the baseline script read ids from the item JSON the same way. Engine marker `"4"`.
+
+| | sync order before → after | rebuild before → after |
+|---|---|---|
+| groups with conflicting same-provider ids | **94 → 0** | **94 → 0** |
+| multi-version groups | 322,985 → 322,504 | 320,500 → 319,741 |
+| merges refused | 36,567 → 37,963 | — |
+| ep:tvdb/tmdb/imdb keys | 1.63 M → 1.71 M | 2.90 M → 2.94 M |
+| gate (per server) / broader | 0 / 1 → 0 / 1 | 0 / 1 → 0 / 1 |
+
+The 94 were invisible to the old metric too: items agreeing on TMDb but carrying different IMDb ids (e.g. The Great
+Hack, TMDb 566222: Raptor "IMDB" tt9358204, Valkyrie "Imdb" tt4736550) — 32 movie, 42 series and 25 episode provider
+conflicts. Most look like one title with a wrong IMDb id on one server; C4's rule (agreement on one provider never
+outweighs disagreement on another) now splits them. Worth knowing if you see such pairs listed twice.
+
+### 8.2 Item 2 — sync/rebuild partition identity
+
+- **(a) Oracle:** `PartitionOracle` — SHA-256 per group over its sorted (server_id, item_id) members, compared as a
+  multiset; reports the divergent groups. After item 1: 3,449 groups only in the sync (3,413 with several members),
+  6,868 only in the rebuild (650), in 3,417 connected sites.
+- **(b) Categorised and verified:** every site contains an episode inserted before its own Series row (half the
+  library's episodes were: Emby pages by SortName), which leaves it without series provider ids at ingest, so without
+  ep:tvdb/tmdb/imdb keys. Typical site: a cross-server pair that merged in the sync and that the rebuild separates
+  because the servers' series ids disagree. Counterfactual: the same sync-order replay with series ids resolved from
+  the full corpus gives **1,131,415 groups each side, 0 divergent** — the only cause.
+- **(c) Fixed, not amended:** the sync pages each library's Series rows first, then the rest (Series dropped
+  client-side; `ExcludeItemTypes=Series` returned 1,305 extra items on Raptor). Re-measured with a replay doing exactly
+  that: identical to a rebuild of its own result and to the rebuild of the corpus, 1,131,415 groups, 0 divergent. The
+  plan's Phase 3 gate (M_incremental ≡ M_rebuild after a full sync) holds. Scope: a full sync; incremental changes on
+  an existing cache are what the plan's periodic reconcile is for.
+
+### 8.3 Item 3 — untagged episodes visible during a sync
+
+Written at once into a held group of their own (`is_provisional = 2`, no keys, so nothing matches into it); the end
+pass places them exactly as deferral did and drops the held groups. Real data: items without a group before the end
+pass **26,626 → 0**; partition identical to item 2's.
+
+### 8.4 Item 4 — rebuild without freezing the UI
+
+Both long rebuild transactions (state write and swap) run on a connection of their own with a private cache — on
+the shared cache `_connection` uses, the swap's table locks still blocked reads. UI writes in that window queue
+(22 methods; group-id writes translated to their items at queue time) and are applied in order on commit. During a
+full rebuild of a 1.67 M-row copy, with a thread reading a shelf every 200 ms and one marking an item played every 2 s:
+
+| | before | swap moved | + state write moved |
+|---|---|---|---|
+| worst UI read | 326,949 ms | 59,561 ms | **5,027 ms** |
+| worst UI write | 325,161 ms | 57,760 ms | **4,063 ms** |
+| writes failed | 0 | 0 | 0 |
+
+### 8.5 Item 5 — incremental library paging
+
+Checked live first: `MinDateLastSavedForUser` filters a recursive listing and is a strict superset of
+`MinDateLastSaved` (adds user-data changes, which the sync reads). A completed library is paged since its last pass
+minus 24 h; incremental pages checkpoint only on completion. In the Release app on a test profile (live DB copy)
+against both servers: all 34 libraries incremental, Valkyrie TV 490 changed items in 3.5 s, **whole sync 49 s**
+(the previous pass's syncs on the same data: 23–30 min), peak working set 614 MB, 0 ERROR.
+
+### 8.6 Item 6 — gate alerting
+
+Every sync and rebuild measures the hard gate (per server) and the broader count in one query. The broader count's
+known level is 1 (Ben Fogle, legitimate), confirmed after items 1–3 in both orders; above it the app logs a warning,
+shows it in the sync warning pill (after a sync) or the Settings status (after a rebuild). Live data: gate 0, broader
+1 → no alert, cascade on.
+
+### 8.7 Standing baseline after this pass (live items, sync order = rebuild)
+
+| Metric | Value |
+|---|---|
+| groups / multi-version | 1,131,415 / 319,741 |
+| groups with conflicting same-provider ids | 0 |
+| [gate] one server, two numberings, no shared id | 0 |
+| broader (spanning, not all sharing an id) | 1 (alert above 1) |
+| contradicted untagged joins | 0 |
+| largest group | 10 (AEW Dynamite, same-server numbering; §6) |
+| items without a group | 0 |
+
+Every row is identical between the sync-order result and the rebuild.
+
