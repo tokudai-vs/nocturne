@@ -309,6 +309,60 @@ public class DatabaseServiceTests : IDisposable
         Assert.Equal(_db.GetGroupIdForDedupKey("tmdb:movie:100"), (int)Assert.Single(_db.GetPendingTraktEvents()).GroupId);
     }
 
+    // #22 item 5: a rebuild renumbered every group from 1, so removing one early item shifted every later id and the swap
+    // rewrote every row. Groups now keep their ids; evidence keys ("{key}@{group}") follow them.
+    [Fact]
+    public void ARepeatRebuild_KeepsGroupIds_AfterAnEarlyItemIsGone()
+    {
+        EmbyItem M(string id, string srv, string tmdb, string? imdb = null) => new()
+        {
+            Id = id, ServerId = srv, Name = "Movie " + tmdb, Type = "Movie",
+            ProviderIds = imdb == null ? new() { ["Tmdb"] = tmdb } : new() { ["Tmdb"] = tmdb, ["Imdb"] = imdb },
+        };
+        var items = new[] { M("first", "s1", "1"), M("b", "s1", "2"), M("b2", "s2", "2"), M("c", "s1", "3"),
+                            M("hack-r", "s1", "566222", "tt9358204"), M("hack-v", "s2", "566222", "tt4736550") };
+        foreach (var it in items) _db.UpsertItem(it, it.ServerId!);
+        var engine = new DedupEngine();
+        engine.RebuildIndex(_db);
+        long GroupOf(string id, string srv) => long.Parse(_db.GetCachedItem(id, srv) is { } _ ? GroupIdText(id, srv) : "0");
+        var before = items.Skip(1).ToDictionary(i => i.Id, i => GroupOf(i.Id, i.ServerId!));
+
+        _db.RemoveDeletedItems("s1", new[] { "first" });
+        engine.RebuildIndex(_db);
+
+        Assert.All(items.Skip(1), i => Assert.Equal(before[i.Id], GroupOf(i.Id, i.ServerId!)));
+        Assert.Single(_db.GetConflictPairs()!); // the split pair is still found through its evidence key
+    }
+
+    private string GroupIdText(string id, string srv)
+    {
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={_tempDbPath};Mode=ReadOnly");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT group_id FROM cached_items WHERE id = $id AND server_id = $srv";
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.Parameters.AddWithValue("$srv", srv);
+        return cmd.ExecuteScalar()!.ToString()!;
+    }
+
+    // #22 item 5: the WAL kept its high-water mark: no checkpoint truncated it, and the pooled connections were never
+    // really closed, so SQLite never deleted it (217 MB left beside the live copy after a sync).
+    [Fact]
+    public void TheWal_IsTruncatedAtIdle_AndGoneWhenTheDatabaseCloses()
+    {
+        var wal = _tempDbPath + "-wal";
+        for (int i = 0; i < 300; i++)
+            _db.UpsertItem(new EmbyItem { Id = $"m{i}", ServerId = "s1", Name = new string('x', 2000), Type = "Movie" }, "s1");
+        Assert.True(new FileInfo(wal).Length > 0);
+
+        _db.CheckpointWal("the test");
+        Assert.Equal(0, new FileInfo(wal).Length);
+
+        _db.UpsertItem(new EmbyItem { Id = "late", ServerId = "s1", Name = "Late", Type = "Movie" }, "s1");
+        _db.Dispose();
+        Assert.False(File.Exists(wal));
+    }
+
     // #21 item 4: queued writes live in memory, so closing the database mid-swap (exit while a rebuild runs) interrupts
     // the swap, which rolls back, and applies them before the connection closes. Playback progress queues too: it
     // wrote straight into the swap's write lock and failed with SQLITE_BUSY.
@@ -342,48 +396,51 @@ public class DatabaseServiceTests : IDisposable
         Assert.NotNull(reopened.GetCachedItem("a", "s1")); // the rolled-back swap left the old state
     }
 
-    // Item 3 (#19, audit 4.3): group ids restart at 1 on a rebuild, so a queued Trakt event kept naming its old id,
-    // which now belongs to an unrelated group.
-    [Fact]
-    public void RebuildIndex_RemapsQueuedTraktEvents_ToTheirGroupsNewId()
+    // A wrongly grouped library: c/d in one group, a/b in another, then a moved into c/d's. The rebuild regroups them,
+    // and since #22 item 5 keeps ids where it can, a/b keep the lower of their previous ids and c/d need a new one.
+    private (long OldAb, long OldCd) SplitWrongly()
     {
         EmbyItem M(string id, string srv, string tmdb) => new() { Id = id, ServerId = srv, Name = "Movie " + tmdb, Type = "Movie", ProviderIds = new() { { "Tmdb", tmdb } } };
         var a = M("a", "s1", "100"); var b = M("b", "s2", "100");
         var c = M("c", "s1", "200"); var d = M("d", "s2", "200");
         foreach (var it in new[] { a, b, c, d }) _db.UpsertItem(it, it.ServerId!);
         var index = new ConcurrentDedupIndex();
-        index.ProcessBatch(new List<EmbyItem> { c, d }, _db); // c/d -> group 1, a/b -> group 2; the rebuild flips them
+        index.ProcessBatch(new List<EmbyItem> { c, d }, _db);
         index.ProcessBatch(new List<EmbyItem> { a, b }, _db);
-        _db.EnqueueTraktEvent(long.Parse(a.DedupGroupId!), "stop", 95, "{}");
-        _db.EnqueueTraktEvent(999, "stop", 95, "{}"); // a group that no longer exists
+        var (oldAb, oldCd) = (long.Parse(a.DedupGroupId!), long.Parse(c.DedupGroupId!));
+        _db.ExecuteSql($"UPDATE cached_items SET group_id = {oldCd}, dedup_group_id = '{oldCd}' WHERE id = 'a';");
+        return (oldAb, oldCd);
+    }
+
+    // Item 3 (#19, audit 4.3): a group can change id on a rebuild, so a queued Trakt event kept naming its old id,
+    // which then belongs to an unrelated group. It follows its old group's primary item.
+    [Fact]
+    public void RebuildIndex_RemapsQueuedTraktEvents_ToTheirGroupsNewId()
+    {
+        var (oldAb, oldCd) = SplitWrongly();
+        _db.EnqueueTraktEvent(oldAb, "stop", 95, "{}"); // the a/b group's primary is a
+        _db.EnqueueTraktEvent(999, "stop", 95, "{}");   // a group that no longer exists
 
         new DedupEngine().RebuildIndex(_db);
 
-        var events = _db.GetPendingTraktEvents();
-        var aGroup = _db.GetGroupIdForDedupKey("tmdb:movie:100");
-        Assert.Equal(1, aGroup);
-        Assert.Equal(new long[] { 1, 0 }, events.Select(e => e.GroupId));
+        long ab = _db.GetGroupIdForDedupKey("tmdb:movie:100")!.Value;
+        long cd = _db.GetGroupIdForDedupKey("tmdb:movie:200")!.Value;
+        Assert.Equal(oldCd, ab);        // a/b keep the lower previous id, which was c/d's
+        Assert.NotEqual(oldCd, cd);     // so c/d moved to a new one
+        Assert.Equal(new long[] { ab, 0 }, _db.GetPendingTraktEvents().Select(e => (long)e.GroupId));
     }
 
     [Fact]
     public void RebuildIndex_RemapsLegacyGroupColumn_SoSiblingLookupsStayInTheGroup()
     {
-        EmbyItem M(string id, string srv, string tmdb) => new() { Id = id, ServerId = srv, Name = "Movie " + tmdb, Type = "Movie", ProviderIds = new() { { "Tmdb", tmdb } } };
-        var a = M("a", "s1", "100"); var b = M("b", "s2", "100");
-        var c = M("c", "s1", "200"); var d = M("d", "s2", "200");
-        foreach (var it in new[] { a, b, c, d }) _db.UpsertItem(it, it.ServerId!);
-
-        // Incremental numbering: c/d get group 1, a/b group 2. The rebuild walks rowid order and flips them.
-        var index = new ConcurrentDedupIndex();
-        index.ProcessBatch(new List<EmbyItem> { c, d }, _db);
-        index.ProcessBatch(new List<EmbyItem> { a, b }, _db);
-        Assert.Equal("1", c.DedupGroupId);
+        var (_, oldCd) = SplitWrongly();
 
         new DedupEngine().RebuildIndex(_db);
 
-        // Before the fix c/d kept dedup_group_id "1" and joined a/b here.
-        var versions = _db.GetGroupVersions("1").Select(v => v.Id).OrderBy(x => x).ToList();
-        Assert.Equal(new[] { "a", "b" }, versions);
+        // c/d's text column must follow them to their new id, or they join a/b's lookups under oldCd.
+        Assert.Equal(new[] { "a", "b" }, _db.GetGroupVersions(oldCd.ToString()).Select(v => v.Id).OrderBy(x => x));
+        var cd = _db.GetGroupIdForDedupKey("tmdb:movie:200")!.Value;
+        Assert.Equal(new[] { "c", "d" }, _db.GetGroupVersions(cd.ToString()).Select(v => v.Id).OrderBy(x => x));
     }
 
     [Fact]

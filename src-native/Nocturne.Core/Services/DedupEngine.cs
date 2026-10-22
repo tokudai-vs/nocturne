@@ -290,16 +290,18 @@ public class DedupEngine
                 ) WITHOUT ROWID;
             ");
 
-            dedupIndex = GroupInMemory(db, serverPriority);
+            var previous = new Dictionary<(string, string), int>();
+            dedupIndex = GroupInMemory(db, serverPriority, previous);
 
             var save = System.Diagnostics.Stopwatch.StartNew();
-            db.SaveRebuildDedupState(dedupIndex); // one transaction under _dbLock
+            db.SaveRebuildDedupState(dedupIndex, previous);
             NocturneLogger.Info("DedupEngine", $"Rebuild state written in {save.ElapsedMilliseconds} ms.");
             // Counted now: the post-commit pass below works through the database, and the index then holds one batch.
             groups = dedupIndex.TotalGroupsCount;
             multiVersion = dedupIndex.MultiVersionGroupsCount;
         }, unmapped =>
         {
+            dedupIndex.InitializeFromDb(db); // the saved ids are not the index's: new groups number after them
             dedupIndex.ProcessBatch(unmapped, db);
         });
 
@@ -314,7 +316,8 @@ public class DedupEngine
     }
 
     // The rebuild's grouping: every Movie/Series/Episode row in insertion order, untagged episodes last, held in memory.
-    private static ConcurrentDedupIndex GroupInMemory(DatabaseService db, IList<string>? serverPriority)
+    // With previous, also each item's group before the rebuild (SaveRebuildDedupState keeps ids where it can).
+    private static ConcurrentDedupIndex GroupInMemory(DatabaseService db, IList<string>? serverPriority, Dictionary<(string, string), int>? previous = null)
     {
         var index = new ConcurrentDedupIndex();
         index.SetServerPriority(serverPriority);
@@ -325,6 +328,9 @@ public class DedupEngine
         {
             var (batch, lastRowId) = db.GetCachedItemsChunk(afterRowId, chunkSize);
             if (lastRowId == afterRowId) break;
+            if (previous != null)
+                foreach (var i in batch)
+                    if (int.TryParse(i.DedupGroupId, out var gid)) previous[(i.ServerId ?? string.Empty, i.Id)] = gid;
             index.ResolveSeriesProviderIds(batch, db);
             index.ProcessBatch(batch, null, ConcurrentDedupIndex.UntaggedEpisodes.Defer);
             untagged.AddRange(batch.Where(ConcurrentDedupIndex.IsUntaggedEpisode));
@@ -352,7 +358,9 @@ public class DedupEngine
         WriterGate.Wait();
         try
         {
-            return MeasureDriftCore(db, serverPriority, servers);
+            var drift = MeasureDriftCore(db, serverPriority, servers);
+            db.CheckpointWal("a drift measurement");
+            return drift;
         }
         finally
         {

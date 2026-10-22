@@ -32,7 +32,7 @@ public static class PartitionOracle
     {
         var byGroup = new Dictionary<int, (List<(string, string)> Members, (string, string)? Primary)>();
         var singles = new List<Group>();
-        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"SELECT c.group_id, c.server_id, c.id, g.primary_server, g.primary_item_id FROM cached_items c

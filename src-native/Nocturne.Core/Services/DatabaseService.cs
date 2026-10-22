@@ -90,11 +90,15 @@ public class DatabaseService : IDisposable
         }
         // Private cache (the default): with WAL and one writer, a shared cache bought nothing, and its table locks made
         // the rebuild's swap block every reader on the cache (#21 item 3).
+        // Unpooled (#22 item 5): _connection stays open for the app's life and the other connections are rare long scans,
+        // so a pool bought nothing, and a pooled Close() leaves the handle open: SQLite deletes the WAL only at the last
+        // real close, so it outlived every run at its high-water mark.
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            DefaultTimeout = 5
+            DefaultTimeout = 5,
+            Pooling = false
         }.ToString();
 
         Initialize();
@@ -113,6 +117,7 @@ public class DatabaseService : IDisposable
                 PRAGMA synchronous = NORMAL;
                 PRAGMA busy_timeout = 5000;
                 PRAGMA cache_size = -262144;
+                PRAGMA journal_size_limit = 67108864; -- #22 item 5: the WAL file shrinks back to 64 MB when it resets
 
                 CREATE TABLE IF NOT EXISTS cached_items (
                     id TEXT NOT NULL,
@@ -3240,7 +3245,7 @@ public class DatabaseService : IDisposable
         }
     }
 
-    private static readonly string SqlGetCachedItemsChunk = Checked("SELECT rowid, json_data, server_id FROM cached_items NOT INDEXED WHERE rowid > $after AND type IN ('Movie', 'Series', 'Episode') ORDER BY rowid LIMIT $limit;");
+    private static readonly string SqlGetCachedItemsChunk = Checked("SELECT rowid, json_data, server_id, group_id FROM cached_items NOT INDEXED WHERE rowid > $after AND type IN ('Movie', 'Series', 'Episode') ORDER BY rowid LIMIT $limit;");
 
     // Keyset paging: the caller passes the last rowid it saw. LIMIT/OFFSET re-read and re-sorted every
     // preceding row's JSON per chunk (26 s per chunk at offset 600k on the live DB; the rebuild never finished).
@@ -3264,6 +3269,7 @@ public class DatabaseService : IDisposable
                 if (item != null)
                 {
                     item.ServerId = reader.GetString(2);
+                    item.DedupGroupId = reader.IsDBNull(3) ? null : reader.GetInt64(3).ToString(); // its group now: the rebuild keeps ids where it can
                     items.Add(item);
                 }
             }
@@ -3271,17 +3277,62 @@ public class DatabaseService : IDisposable
         return (items, lastRowId);
     }
 
-    public void SaveRebuildDedupState(ConcurrentDedupIndex index)
+    // #22 item 5: a rebuilt group keeps the id most of its members had (unless another group took it first), so the swap
+    // rewrites only the rows whose group changed. Every rebuild renumbered from 1, so one change early in the library
+    // shifted every later id: a repeat rebuild of the live copy rewrote nearly all 1.67 M rows (4.5 GB of WAL, 245 s).
+    private static Dictionary<int, int> StableGroupIds(List<DedupGroupRecord> groups, IReadOnlyDictionary<(string, string), int> previous)
+    {
+        var map = new Dictionary<int, int>(groups.Count);
+        var taken = new HashSet<int>();
+        int next = Math.Max(previous.Count > 0 ? previous.Values.Max() : 0, groups.Count > 0 ? groups.Max(g => g.GroupId) : 0) + 1;
+        foreach (var g in groups.OrderBy(g => g.GroupId))
+        {
+            var id = g.ItemIds.Keys.Select(m => previous.TryGetValue(m, out var old) ? old : 0).Where(old => old > 0)
+                .GroupBy(old => old).OrderByDescending(x => x.Count()).ThenBy(x => x.Key).Select(x => x.Key)
+                .FirstOrDefault(old => !taken.Contains(old));
+            if (id == 0) id = next++;
+            taken.Add(id);
+            map[g.GroupId] = id;
+        }
+        return map;
+    }
+
+    public void SaveRebuildDedupState(ConcurrentDedupIndex index, IReadOnlyDictionary<(string, string), int>? previous = null)
     {
         var (groups, keys, items) = index.GetRebuildState();
-        // Only the *_rebuild tables, which nothing else reads: on its own connection, so UI reads go on (#20 item 4).
+        var map = StableGroupIds(groups, previous ?? new Dictionary<(string, string), int>());
+        // An evidence key names its group: "{key}@{group}".
+        string Key(string key)
+        {
+            var at = key.LastIndexOf('@');
+            return at > 0 && int.TryParse(key.AsSpan(at + 1), out var gid) && map.TryGetValue(gid, out var to) ? $"{key[..at]}@{to}" : key;
+        }
+        int Id(int gid) => map.TryGetValue(gid, out var to) ? to : gid;
+        var oldMax = previous is { Count: > 0 } ? previous.Values.Max() : 0; // fresh ids start above it
+        NocturneLogger.Info("DatabaseService", $"Rebuild keeps the previous id of {groups.Count(g => Id(g.GroupId) <= oldMax)} of {groups.Count} groups.");
+
+        // Only the *_rebuild tables, which nothing else reads: on its own connection, so UI reads go on (#20 item 4). In
+        // transactions of 50,000 rows, so the WAL recycles between them (one transaction grew it by about 1 GB); an
+        // interrupted write leaves tables the next rebuild drops first.
         WithWritesQueued("rebuild state write", conn =>
         {
-            using var tx = conn.BeginTransaction();
+            var tx = conn.BeginTransaction();
+            var commands = new List<SqliteCommand>();
+            int rows = 0;
+            void Step(SqliteCommand cmd)
+            {
+                cmd.ExecuteNonQuery();
+                if (++rows % 50_000 != 0) return;
+                tx.Commit();
+                tx.Dispose();
+                tx = conn.BeginTransaction();
+                foreach (var c in commands) c.Transaction = tx;
+            }
             try
             {
                 // 1. dedup_groups_rebuild
                 using var grpCmd = conn.CreateCommand();
+                commands.Add(grpCmd);
                 grpCmd.Transaction = tx;
                 grpCmd.CommandText = @"
                     INSERT INTO dedup_groups_rebuild (
@@ -3328,7 +3379,7 @@ public class DatabaseService : IDisposable
 
                 foreach (var g in groups)
                 {
-                    pGroupId.Value = g.GroupId;
+                    pGroupId.Value = Id(g.GroupId);
                     pItemType.Value = g.ItemType;
                     pPrimaryItemId.Value = g.PrimaryItemId;
                     pPrimaryServer.Value = g.PrimaryServerId;
@@ -3355,37 +3406,41 @@ public class DatabaseService : IDisposable
                     pBackdropServerId.Value = (object?)g.BackdropServerId ?? DBNull.Value;
                     pTmdbKey.Value = (object?)g.TmdbKey ?? DBNull.Value;
                     pPrimaryScore.Value = g.PrimaryScore;
-                    grpCmd.ExecuteNonQuery();
+                    Step(grpCmd);
                 }
 
                 // 2. dedup_keys_rebuild
                 using var keyCmd = conn.CreateCommand();
+                commands.Add(keyCmd);
                 keyCmd.Transaction = tx;
                 keyCmd.CommandText = "INSERT INTO dedup_keys_rebuild (key, group_id, is_authoritative) VALUES ($k, $g, $a);";
                 var pkK = keyCmd.Parameters.Add("$k", SqliteType.Text);
                 var pkG = keyCmd.Parameters.Add("$g", SqliteType.Integer);
                 var pkA = keyCmd.Parameters.Add("$a", SqliteType.Integer);
-                foreach (var (k, gid, isAuth) in keys)
+                // In key order: these B-trees are keyed by text, and 5 M keys inserted at random touched a random page each,
+                // about 200 MB of WAL a transaction.
+                foreach (var (k, gid, isAuth) in keys.Select(x => (Key: Key(x.Key), x.GroupId, x.IsAuthoritative)).OrderBy(x => x.Key, StringComparer.Ordinal))
                 {
                     pkK.Value = k;
-                    pkG.Value = gid;
+                    pkG.Value = Id(gid);
                     pkA.Value = isAuth ? 1 : 0;
-                    keyCmd.ExecuteNonQuery();
+                    Step(keyCmd);
                 }
 
                 // 3. item_group_rebuild
                 using var mapCmd = conn.CreateCommand();
+                commands.Add(mapCmd);
                 mapCmd.Transaction = tx;
                 mapCmd.CommandText = "INSERT INTO item_group_rebuild (id, server_id, group_id) VALUES ($id, $srv, $gid);";
                 var pmId = mapCmd.Parameters.Add("$id", SqliteType.Text);
                 var pmSrv = mapCmd.Parameters.Add("$srv", SqliteType.Text);
                 var pmGid = mapCmd.Parameters.Add("$gid", SqliteType.Integer);
-                foreach (var (srv, id, gid) in items)
+                foreach (var (srv, id, gid) in items.OrderBy(x => x.ItemId, StringComparer.Ordinal).ThenBy(x => x.ServerId, StringComparer.Ordinal))
                 {
                     pmId.Value = id;
                     pmSrv.Value = srv;
-                    pmGid.Value = gid;
-                    mapCmd.ExecuteNonQuery();
+                    pmGid.Value = Id(gid);
+                    Step(mapCmd);
                 }
 
                 tx.Commit();
@@ -3395,6 +3450,10 @@ public class DatabaseService : IDisposable
                 tx.Rollback();
                 NocturneLogger.Error("DatabaseService", "Failed to save rebuild dedup state", ex);
                 throw;
+            }
+            finally
+            {
+                tx.Dispose();
             }
         });
     }
@@ -3619,11 +3678,11 @@ public class DatabaseService : IDisposable
         }
         try
         {
-            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Pooling = false }.ToString());
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString).ToString());
             conn.Open();
             using (var pragma = conn.CreateCommand())
             {
-                pragma.CommandText = "PRAGMA cache_size = -262144; PRAGMA busy_timeout = 5000;";
+                pragma.CommandText = "PRAGMA cache_size = -262144; PRAGMA busy_timeout = 5000; PRAGMA journal_size_limit = 67108864;";
                 pragma.ExecuteNonQuery();
             }
             // Dispose aborts the running statement through this (its transaction rolls back). Not sqlite3_interrupt:
@@ -3633,11 +3692,12 @@ public class DatabaseService : IDisposable
             if (!_abortWindow)
             {
                 var clock = System.Diagnostics.Stopwatch.StartNew();
+                var wal = File.Exists(_dbPath + "-wal") ? new FileInfo(_dbPath + "-wal").Length / 1048576 : 0;
                 using var checkpoint = conn.CreateCommand();
                 checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);"; // waits out readers on the pre-swap snapshot
                 using var r = checkpoint.ExecuteReader();
                 r.Read();
-                NocturneLogger.Info("DatabaseService", $"WAL checkpoint after the {what}: {(r.GetInt32(0) == 0 ? "complete" : "partial (readers)")} in {clock.ElapsedMilliseconds} ms.");
+                NocturneLogger.Info("DatabaseService", $"WAL checkpoint after the {what}: {wal} MB, {(r.GetInt32(0) == 0 ? "complete" : "partial (readers)")} in {clock.ElapsedMilliseconds} ms.");
             }
         }
         finally
@@ -4610,6 +4670,36 @@ public class DatabaseService : IDisposable
         return null;
     }
 
+    // #22 item 5: at idle (after a sync, the deletion sweep, a drift measurement, and at exit), the WAL is copied back and
+    // truncated, so it does not keep its high-water mark (217 MB after a sync on the live copy, gigabytes after a first
+    // rebuild until the next commit paid for it). Own connection: readers carry on; it waits out those on an older
+    // snapshot (busy_timeout).
+    public void CheckpointWal(string after)
+    {
+        try
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var walPath = _dbPath + "-wal";
+            var before = File.Exists(walPath) ? new FileInfo(walPath).Length : 0;
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+            using (var pragma = conn.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA busy_timeout = 5000;";
+                pragma.ExecuteNonQuery();
+            }
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);"; // alone: a reader over both would read busy_timeout's row
+            using var r = cmd.ExecuteReader();
+            r.Read();
+            NocturneLogger.Info("DatabaseService", $"WAL checkpoint after {after}: {before / 1048576} MB, {(r.GetInt32(0) == 0 ? "truncated" : "partial (readers)")} in {clock.ElapsedMilliseconds} ms.");
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("DatabaseService", $"WAL checkpoint after {after} failed: {ex.Message}");
+        }
+    }
+
     public void Dispose()
     {
         // An open rebuild window holds UI writes in memory (a playback stop's last position, at exit): abort its
@@ -4619,10 +4709,12 @@ public class DatabaseService : IDisposable
             NocturneLogger.Warn("DatabaseService", "Closing with a rebuild window still open; writes made during it are lost.");
         lock (_dbLock)
         {
-            _connection?.Close();
-            _connection?.Dispose();
+            if (_connection == null) return;
+            _connection.Close();
+            _connection.Dispose();
             _connection = null;
         }
+        CheckpointWal("closing");
     }
 }
 

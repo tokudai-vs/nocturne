@@ -137,6 +137,7 @@ public class SyncEngine
                 _db.SetMigrationState(SyncRunningKey, "0");
                 await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
                 if (FeatureFlags.DedupAlert(_db) is { } alert) DedupAlertRaised?.Invoke(alert);
+                await Task.Run(() => _db.CheckpointWal("a sync"), CancellationToken.None);
             }
         }
         finally
@@ -189,6 +190,7 @@ public class SyncEngine
         {
             var result = await DeletionSweepCoreAsync(ct);
             if (result.Removed > 0) await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
+            await Task.Run(() => _db.CheckpointWal("the deletion sweep"), CancellationToken.None);
             return result;
         }
         finally
