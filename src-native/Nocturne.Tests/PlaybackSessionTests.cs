@@ -264,6 +264,44 @@ public class PlaybackSessionTests : IDisposable
         Assert.Empty(_db.GetPendingSiblingWrites(10));
     }
 
+    // Item 4 (#19): a sibling server is not streaming, so its resume position goes through the user-data endpoint;
+    // a Sessions/Playing report there would open a session nothing ends.
+    [Fact]
+    public async Task SiblingPositionWrite_UsesUserData_AndKeepsTheServersOtherFields()
+    {
+        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 900 * TicksPerSecond, markPlayed: false);
+        var http = new RecordingHandler
+        {
+            GetJson = path => path.EndsWith("/Users/user2/Items/r1")
+                ? "{\"Id\":\"r1\",\"UserData\":{\"PlaybackPositionTicks\":0,\"PlayCount\":2,\"IsFavorite\":true,\"Played\":true,\"LastPlayedDate\":\"2026-08-08T17:49:49.0000000Z\"}}"
+                : null
+        };
+        var raptor = new EmbyClient(http);
+        raptor.Configure("http://raptor.test", "token", "user2");
+
+        await NewSession().DrainSiblingWritesAsync(_ => raptor);
+
+        Assert.DoesNotContain(http.Requests, r => r.Path.Contains("/Sessions/Playing"));
+        var sent = Assert.Single(http.Bodies("/Users/user2/Items/r1/UserData"));
+        Assert.Equal(900 * TicksPerSecond, sent.GetProperty("PlaybackPositionTicks").GetInt64());
+        Assert.True(sent.GetProperty("Played").GetBoolean());       // Emby resets fields left out of the body
+        Assert.True(sent.GetProperty("IsFavorite").GetBoolean());
+        Assert.Equal(2, sent.GetProperty("PlayCount").GetInt32());
+        Assert.Empty(_db.GetPendingSiblingWrites(10));
+    }
+
+    [Fact]
+    public async Task SiblingPositionWrite_StaysQueued_WhenTheItemCannotBeRead()
+    {
+        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 900 * TicksPerSecond, markPlayed: false);
+        var raptor = new EmbyClient(new RecordingHandler { Status = HttpStatusCode.NotFound });
+        raptor.Configure("http://raptor.test", "token", "user2");
+
+        await NewSession().DrainSiblingWritesAsync(_ => raptor);
+
+        Assert.Single(_db.GetPendingSiblingWrites(10));
+    }
+
     [Fact]
     public async Task SiblingDrain_DropsRowsForServersNoLongerConfigured()
     {
@@ -354,6 +392,7 @@ public class PlaybackSessionTests : IDisposable
     {
         public readonly List<(string Method, string Path, string Body)> Requests = new();
         public HttpStatusCode Status { get; init; } = HttpStatusCode.NoContent;
+        public Func<string, string?> GetJson { get; init; } = _ => null; // body for a GET path, if any
 
         public IEnumerable<JsonElement> Bodies(string pathSuffix)
         {
@@ -365,6 +404,8 @@ public class PlaybackSessionTests : IDisposable
         {
             var body = request.Content == null ? string.Empty : await request.Content.ReadAsStringAsync(ct);
             lock (Requests) Requests.Add((request.Method.Method, request.RequestUri!.PathAndQuery, body));
+            if (request.Method == HttpMethod.Get && GetJson(request.RequestUri!.AbsolutePath) is { } json)
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") };
             return new HttpResponseMessage(Status);
         }
     }

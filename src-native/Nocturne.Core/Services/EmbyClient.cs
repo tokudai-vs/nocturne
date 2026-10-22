@@ -753,6 +753,28 @@ public class EmbyClient
         }
     }
 
+    // Sets the resume position through the user-data endpoint, for a server that is not streaming the item: a
+    // Sessions/Playing report there opens a playback session that nothing ends (a phantom session). The body is
+    // the item's current user data with only the position changed: Emby 4.9 resets Played when it is left out.
+    public async Task<bool> SetPlaybackPositionAsync(string itemId, long positionTicks)
+    {
+        if (!IsAuthenticated) return false;
+        try
+        {
+            var item = await _http.GetFromJsonAsync<System.Text.Json.Nodes.JsonObject>(BuildUrl($"/Users/{_userId}/Items/{itemId}"));
+            if (item?["UserData"] is not System.Text.Json.Nodes.JsonObject userData) return false;
+            userData["PlaybackPositionTicks"] = positionTicks;
+            using var content = new StringContent(userData.ToJsonString(), Encoding.UTF8, "application/json");
+            var resp = await _http.PostAsync(BuildUrl($"/Users/{_userId}/Items/{itemId}/UserData"), content);
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("EmbyClient", $"SetPlaybackPosition ({itemId}) failed: {ex.Message}");
+            return false;
+        }
+    }
+
     public async Task<bool> ToggleFavoriteAsync(string itemId, bool isFavorite)
     {
         if (!IsAuthenticated) return false;

@@ -201,7 +201,7 @@ public sealed class PlaybackSession
             {
                 ok = write.MarkPlayed
                     ? await client.MarkPlayedAsync(write.ItemId)
-                    : write.PositionTicks.HasValue && await client.ReportPlaybackStoppedAsync(write.ItemId, write.ItemId, write.PositionTicks.Value);
+                    : write.PositionTicks.HasValue && await client.SetPlaybackPositionAsync(write.ItemId, write.PositionTicks.Value);
             }
             catch (Exception ex)
             {
