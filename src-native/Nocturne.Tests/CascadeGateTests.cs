@@ -66,6 +66,45 @@ public class CascadeGateTests : IDisposable
 
         Assert.Equal("0", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
         Assert.True(FeatureFlags.SiblingCascade(_db));
+        Assert.Null(FeatureFlags.DedupAlert(_db)); // the known level: one such group
+    }
+
+    private void PlantBenFogleShape(string group, string tvdb)
+    {
+        Plant($"{group}v1", "valkyrie", 19, 8, group, tvdb);
+        Plant($"{group}v2", "valkyrie", 20, 9, group, tvdb);
+        Plant($"{group}r", "raptor", 20, 9, group, null);
+    }
+
+    // #20 item 6: the broader count is not a gate, but a rise above its known level is reported.
+    [Fact]
+    public void BroaderCountAboveItsBaseline_RaisesAnAlert_WhileTheHardGateStillDecides()
+    {
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        PlantBenFogleShape("1", "11035496");
+        PlantBenFogleShape("2", "11035497");
+
+        FeatureFlags.MeasureCascadeGate(_db);
+
+        Assert.Equal("2", _db.GetMigrationState(FeatureFlags.SpanningUnsharedGroupsKey));
+        Assert.Contains("2 episode groups", FeatureFlags.DedupAlert(_db));
+        Assert.True(FeatureFlags.SiblingCascade(_db)); // per-server gate: 0
+    }
+
+    [Fact]
+    public async Task Sync_RaisesTheDedupAlert()
+    {
+        PlantBenFogleShape("1", "11035496");
+        PlantBenFogleShape("2", "11035497");
+        var settings = new SettingsService(Path.Combine(_dir, SettingsService.SettingsFileName));
+        settings.Update(s => s.Servers.Add(new ServerConfig { Id = "v1", Name = "Valkyrie", Url = "http://127.0.0.1:9", AccessToken = "t", UserId = "u" }));
+        var sync = new SyncEngine(new EmbyClient(), _db, new DedupEngine(), new TraktService(new TraktAuthService(_db)), settings);
+        string? raised = null;
+        sync.DedupAlertRaised += a => raised = a;
+
+        await sync.RunFullSyncAsync().WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.NotNull(raised);
     }
 
     // The imdb_id column of rows cached before the casing fix is empty; the gate reads the JSON, any case.

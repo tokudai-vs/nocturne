@@ -2,6 +2,8 @@
 --   sqlite3 -readonly nocturne-v4.db < scripts/dedup-baseline.sql
 -- Rows marked [gate] must be 0: the sibling cascade (FeatureFlags.SiblingCascade) measures the same condition
 -- after every sync and rebuild and stays off while it is not.
+-- The row marked [alert above 1] is measured with it; the app reports a rise above its known level
+-- (FeatureFlags.SpanningUnsharedBaseline: one legitimate group on the live library, 2026-10-22).
 .mode list
 .separator " | "
 
@@ -59,7 +61,7 @@ per AS (
   FROM ep GROUP BY g)
 SELECT 'episode groups spanning > 1 (season, episode)', COUNT(*) FROM per
 UNION ALL
-SELECT '... whose items do not all share one episode id', COUNT(*) FROM per
+SELECT '[alert above 1] ... whose items do not all share one episode id', COUNT(*) FROM per
  WHERE NOT ((n_tvdb = n AND d_tvdb = 1) OR (n_tmdb = n AND d_tmdb = 1) OR (n_imdb = n AND d_imdb = 1))
 UNION ALL
 -- One server holding two items under different numbering that share no episode id: the server's own numbering

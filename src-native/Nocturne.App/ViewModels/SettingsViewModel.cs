@@ -1274,7 +1274,7 @@ public class SettingsViewModel : BaseViewModel
         });
         RefreshDatabaseStats();
         IsSyncing = false;
-        SyncStatusText = "Deduplication index rebuild complete.";
+        SyncStatusText = FeatureFlags.DedupAlert(_db) ?? "Deduplication index rebuild complete.";
     }
 
     // Playback & Skip Segments

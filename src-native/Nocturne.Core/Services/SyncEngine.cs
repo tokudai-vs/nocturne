@@ -82,6 +82,7 @@ public class SyncEngine
     public event Action<int, int>? ProgressChanged;
     public event Action<SyncProgressReport>? ProgressReported;
     public event Action? SyncCompleted;
+    public event Action<string>? DedupAlertRaised; // FeatureFlags.DedupAlert after a sync's gate measurement
 
     private readonly Func<ServerConfig, EmbyClient> _clientFor;
 
@@ -121,7 +122,11 @@ public class SyncEngine
         try
         {
             await RunFullSyncCoreAsync(ct, forceResync);
-            if (!ct.IsCancellationRequested) await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
+            if (!ct.IsCancellationRequested)
+            {
+                await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
+                if (FeatureFlags.DedupAlert(_db) is { } alert) DedupAlertRaised?.Invoke(alert);
+            }
         }
         finally
         {

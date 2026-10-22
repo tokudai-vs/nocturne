@@ -6,6 +6,14 @@ namespace Nocturne.Core.Services;
 public static class FeatureFlags
 {
     public const string UnsharedRenumberedGroupsKey = "dedup_unshared_renumbered_groups";
+    public const string SpanningUnsharedGroupsKey = "dedup_spanning_unshared_groups";
+
+    // The broader count (episode groups spanning more than one (season, episode) whose items do not all share an
+    // episode id) is not a gate: it also counts legitimate groups. Its known level on the live library is 1 (Ben
+    // Fogle "Spain": Raptor's untagged S20E09 of an episode Valkyrie keeps as 19x8, 19x9 and 20x9), measured on
+    // 2026-10-22 in sync order and on rebuild. A rise above it is reported (DedupAlert), so a new kind of
+    // season/episode over-merge the hard gate does not refuse gets seen (#20 item 6).
+    public const int SpanningUnsharedBaseline = 1;
 
     // Sibling cascade: a completion / resume / Remove-from-CW on one version is also written to every other
     // version in its dedup group (locally and, via sibling_write_queue, on the other servers). Engaged only once
@@ -21,10 +29,18 @@ public static class FeatureFlags
     public static void MeasureCascadeGate(DatabaseService db)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        var count = db.CountUnsharedRenumberedGroups();
-        db.SetMigrationState(UnsharedRenumberedGroupsKey, count?.ToString() ?? "unmeasured");
-        NocturneLogger.Info("FeatureFlags", $"Cascade gate: {(count is { } n ? $"{n} renumbered episode group(s) without a shared episode id" : "measurement failed")} ({clock.ElapsedMilliseconds} ms); sibling cascade {(SiblingCascade(db) ? "on" : "off")}.");
+        var counts = db.CountUnsharedRenumberedGroups();
+        db.SetMigrationState(UnsharedRenumberedGroupsKey, counts?.Gate.ToString() ?? "unmeasured");
+        db.SetMigrationState(SpanningUnsharedGroupsKey, counts?.Spanning.ToString() ?? "unmeasured");
+        NocturneLogger.Info("FeatureFlags", $"Cascade gate: {(counts is { } c ? $"{c.Gate} renumbered episode group(s) without a shared episode id; {c.Spanning} spanning without one (known {SpanningUnsharedBaseline})" : "measurement failed")} ({clock.ElapsedMilliseconds} ms); sibling cascade {(SiblingCascade(db) ? "on" : "off")}.");
+        if (DedupAlert(db) is { } alert) NocturneLogger.Warn("FeatureFlags", alert);
     }
+
+    // Non-null when the last measurement's broader count is above its known level.
+    public static string? DedupAlert(DatabaseService db) =>
+        int.TryParse(db.GetMigrationState(SpanningUnsharedGroupsKey), out var n) && n > SpanningUnsharedBaseline
+            ? $"Dedup check: {n} episode groups mix numberings without a shared episode id (known: {SpanningUnsharedBaseline}). The sibling cascade's gate still decides; this may be a new kind of over-merge."
+            : null;
 }
 
 public enum PlaybackStopReason

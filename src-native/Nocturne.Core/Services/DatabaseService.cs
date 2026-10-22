@@ -3041,7 +3041,8 @@ public class DatabaseService : IDisposable
     // server tags with the group's id). Servers numbering one episode differently share its id and pass, and so do
     // the copies one server keeps under several numberings. Ids come from the item's JSON, provider names in any
     // case, as the dedup engine reads them (the imdb_id column is stale for rows cached before that fix). Same
-    // query as the [gate] row of scripts/dedup-baseline.sql.
+    // query as the [gate] row of scripts/dedup-baseline.sql. The second count is the broader row above it (items
+    // spanning more than one (season, episode) without all sharing one episode id), which item 6 alerts on.
     private static readonly string SqlCountUnsharedRenumberedGroups = Checked(@"
                     WITH spans AS (
                       SELECT group_id FROM cached_items
@@ -3059,15 +3060,22 @@ public class DatabaseService : IDisposable
                         CASE WHEN tvdb GLOB '[0-9]*' AND tvdb NOT GLOB '*[^0-9]*' THEN tvdb END tvdb,
                         CASE WHEN tmdb GLOB '[0-9]*' AND tmdb NOT GLOB '*[^0-9]*' THEN tmdb END tmdb,
                         CASE WHEN imdb GLOB 'tt[0-9]*' AND substr(imdb, 3) NOT GLOB '*[^0-9]*' THEN imdb END imdb
-                      FROM raw)
-                    SELECT COUNT(DISTINCT a.g) FROM ep a JOIN ep b
-                      ON b.g = a.g AND b.srv = a.srv AND a.id < b.id AND (a.s != b.s OR a.e != b.e)
-                    WHERE NOT ((a.tvdb = b.tvdb OR a.tmdb = b.tmdb OR a.imdb = b.imdb) IS TRUE);
+                      FROM raw),
+                    per AS (
+                      SELECT COUNT(*) n, COUNT(tvdb) n_tvdb, COUNT(DISTINCT tvdb) d_tvdb, COUNT(tmdb) n_tmdb,
+                             COUNT(DISTINCT tmdb) d_tmdb, COUNT(imdb) n_imdb, COUNT(DISTINCT imdb) d_imdb
+                      FROM ep GROUP BY g)
+                    SELECT
+                      (SELECT COUNT(DISTINCT a.g) FROM ep a JOIN ep b
+                         ON b.g = a.g AND b.srv = a.srv AND a.id < b.id AND (a.s != b.s OR a.e != b.e)
+                       WHERE NOT ((a.tvdb = b.tvdb OR a.tmdb = b.tmdb OR a.imdb = b.imdb) IS TRUE)),
+                      (SELECT COUNT(*) FROM per
+                       WHERE NOT ((n_tvdb = n AND d_tvdb = 1) OR (n_tmdb = n AND d_tmdb = 1) OR (n_imdb = n AND d_imdb = 1)));
                 ");
 
     // Own read-only connection, like the index load: the scan takes seconds on a large library and must not hold
     // _dbLock. Null when the query fails.
-    public int? CountUnsharedRenumberedGroups()
+    public (int Gate, int Spanning)? CountUnsharedRenumberedGroups()
     {
         try
         {
@@ -3079,7 +3087,9 @@ public class DatabaseService : IDisposable
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = SqlCountUnsharedRenumberedGroups;
-            return Convert.ToInt32(cmd.ExecuteScalar());
+            using var reader = cmd.ExecuteReader();
+            reader.Read();
+            return (reader.GetInt32(0), reader.GetInt32(1));
         }
         catch (Exception ex) when (QueryFailed(ex, SqlCountUnsharedRenumberedGroups))
         {

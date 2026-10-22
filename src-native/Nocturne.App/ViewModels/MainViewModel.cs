@@ -178,6 +178,9 @@ public class MainViewModel : BaseViewModel
             });
         };
 
+        // Raised after the sync's gate measurement, which follows SyncCompleted (whose handler clears the pill).
+        _sync.DedupAlertRaised += alert => Application.Current?.Dispatcher?.BeginInvoke(() => SyncProblemText = alert);
+
         SettingsVM.CacheCleared += () =>
         {
             Application.Current?.Dispatcher?.Invoke(() =>
