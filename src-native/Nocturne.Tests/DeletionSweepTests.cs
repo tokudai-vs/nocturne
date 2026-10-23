@@ -72,11 +72,11 @@ public class DeletionSweepTests : IDisposable
         var alone = Count("SELECT group_id FROM cached_items WHERE id = 'r-alone'");
         Assert.Equal(("r-shared", "rposter", "rbackdrop", 2), (shared.PrimaryItemId, shared.ImageTag, shared.BackdropTag, shared.VersionCount));
         _db.UpdateUserDataState("raptor", "r-shared", 100, 1000, false, 1);
-        _db.EnqueueSiblingWrite("raptor", "r-shared", 100, false);
+        _db.EnqueueSiblingWrite("raptor", "r-shared", 100, false, Origin.Local);
         _db.UpsertWatchlistEntry("raptor", "r-shared", "Movie", 1);
         _db.UpsertWatchlistEntry("raptor", "r-alone", "Movie", 1);
-        _db.EnqueueTraktEvent(alone, "scrobble", 50, null);
-        _db.EnqueueTraktEvent(shared.GroupId, "scrobble", 50, null);
+        _db.EnqueueTraktEvent(alone, "scrobble", 50, null, Origin.Local);
+        _db.EnqueueTraktEvent(shared.GroupId, "scrobble", 50, null, Origin.Local);
 
         Delete("raptor.test", "r-shared");
         Delete("raptor.test", "r-alone");

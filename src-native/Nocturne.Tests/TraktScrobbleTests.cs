@@ -170,8 +170,11 @@ public class TraktScrobbleTests : IDisposable
         Assert.Equal(1, _scrobbler.SkippedProvisionalCount);
     }
 
+    // #24 (T5): playing a title in Nocturne is a local change, even when its last change came from a Trakt pull; the
+    // scrobble used to read that stored origin and stay silent, so re-watching anything Trakt had marked never scrobbled.
+    // D7 is enforced on changes whose origin is Trakt (OriginTests), not on what a row last held.
     [Fact]
-    public void OriginD7SkipGuard_PreventsEchoToTrakt()
+    public void ReWatchingATitleTraktMarked_StillScrobbles()
     {
         var group = new DedupGroupRecord
         {
@@ -203,7 +206,6 @@ public class TraktScrobbleTests : IDisposable
 
         _scrobbler.Start(404, 50.0);
 
-        // Must NOT enqueue scrobble back to Trakt
-        Assert.Equal(0, _db.GetTraktQueueCount());
+        Assert.Equal(1, _db.GetTraktQueueCount());
     }
 }

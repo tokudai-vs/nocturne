@@ -41,13 +41,6 @@ public class TraktScrobbleService : ITraktScrobbleService
             return;
         }
 
-        // Rule: D7 origin skip. If last played came from Trakt, do not echo back to Trakt
-        var origin = _db.GetUserDataOrigin(group.PrimaryServerId, group.PrimaryItemId);
-        if (string.Equals(origin, "trakt", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
         var payload = BuildScrobblePayload(group, progress);
         if (payload == null)
         {
@@ -55,7 +48,9 @@ public class TraktScrobbleService : ITraktScrobbleService
             return;
         }
 
-        _db.EnqueueTraktEvent(groupId, action, progress, payload);
+        // A scrobble is playback in Nocturne: origin local, so D7 never drops it. (It used to skip any title whose last
+        // change came from a Trakt pull, which silenced re-watching anything Trakt had marked.)
+        _db.EnqueueTraktEvent(groupId, action, progress, payload, Origin.Local);
         NocturneLogger.Info("TraktScrobbleService", $"Enqueued Trakt scrobble event: {action} (group: {groupId}, progress: {progress:F1}%)");
     }
 

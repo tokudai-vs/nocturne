@@ -257,7 +257,7 @@ public class HomeViewModel : BaseViewModel
                 {
                     if (it.UserData != null && it.UserData.PlaybackPositionTicks > 0)
                     {
-                        _db.UpdateLocalPlaybackProgress(it.ServerId ?? string.Empty, it.Id, it.UserData.PlaybackPositionTicks, it.UserData.Played);
+                        _db.UpdateLocalPlaybackProgress(it.ServerId ?? string.Empty, it.Id, it.UserData.PlaybackPositionTicks, it.UserData.Played, origin: Origin.Emby(it.ServerId ?? string.Empty)); // the server's resume point, not a local change
                     }
                 }
                 var dbResume = _db.GetContinueWatchingItems();
@@ -325,7 +325,7 @@ public class HomeViewModel : BaseViewModel
                     it.ServerName = activeSname;
                     if (it.UserData != null && it.UserData.PlaybackPositionTicks > 0)
                     {
-                        _db.UpdateLocalPlaybackProgress(activeSid, it.Id, it.UserData.PlaybackPositionTicks, it.UserData.Played);
+                        _db.UpdateLocalPlaybackProgress(activeSid, it.Id, it.UserData.PlaybackPositionTicks, it.UserData.Played, origin: Origin.Emby(activeSid)); // the server's resume point
                     }
                 }
                 foreach (var it in nextUpItems) { it.ServerId = activeSid; it.ServerName = activeSname; }
@@ -405,7 +405,7 @@ public class HomeViewModel : BaseViewModel
                     _db.ClearResumeProgress(sib.Id, sib.ServerId);
                     if (!string.IsNullOrEmpty(sib.ServerId) && sib.ServerId != item.ServerId)
                     {
-                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, 0, markPlayed: false);
+                        _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, 0, markPlayed: false, Origin.Local);
                     }
                 }
             }

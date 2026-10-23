@@ -295,7 +295,7 @@ public class DatabaseServiceTests : IDisposable
         {
             _db.MarkLocalItemPlayed("s1", "c");
             _db.MarkLocalGroupPlayed(oldAb);
-            _db.EnqueueTraktEvent(oldAb, "stop", 95, "{}");
+            _db.EnqueueTraktEvent(oldAb, "stop", 95, "{}", Origin.Local);
         });
         Assert.True(writes.Wait(TimeSpan.FromSeconds(5)), "a UI write waited for the swap");
         Assert.NotEqual(true, _db.GetUserData("s1", "c")?.Played); // queued, not applied yet
@@ -418,8 +418,8 @@ public class DatabaseServiceTests : IDisposable
     public void RebuildIndex_RemapsQueuedTraktEvents_ToTheirGroupsNewId()
     {
         var (oldAb, oldCd) = SplitWrongly();
-        _db.EnqueueTraktEvent(oldAb, "stop", 95, "{}"); // the a/b group's primary is a
-        _db.EnqueueTraktEvent(999, "stop", 95, "{}");   // a group that no longer exists
+        _db.EnqueueTraktEvent(oldAb, "stop", 95, "{}", Origin.Local); // the a/b group's primary is a
+        _db.EnqueueTraktEvent(999, "stop", 95, "{}", Origin.Local);   // a group that no longer exists
 
         new DedupEngine().RebuildIndex(_db);
 
@@ -473,8 +473,8 @@ public class DatabaseServiceTests : IDisposable
     [Fact]
     public void SiblingWriteQueue_EnqueueDrainAndRemove_WorksReliably()
     {
-        _db.EnqueueSiblingPlaybackWrite("srv_b", "item_999", 500_000_000, false);
-        _db.EnqueueSiblingPlaybackWrite("srv_c", "item_888", 0, true);
+        _db.EnqueueSiblingPlaybackWrite("srv_b", "item_999", 500_000_000, false, Origin.Local);
+        _db.EnqueueSiblingPlaybackWrite("srv_c", "item_888", 0, true, Origin.Local);
 
         var pending = _db.GetPendingSiblingWrites(limit: 10);
         Assert.Equal(2, pending.Count);

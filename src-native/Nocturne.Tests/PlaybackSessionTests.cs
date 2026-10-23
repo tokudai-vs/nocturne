@@ -246,8 +246,8 @@ public class PlaybackSessionTests : IDisposable
     [Fact]
     public async Task SiblingDrain_KeepsFailedWrites_AndRemovesAcceptedOnes()
     {
-        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 0, markPlayed: true);
-        _db.EnqueueSiblingPlaybackWrite("other", "o1", 0, markPlayed: true);
+        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 0, markPlayed: true, Origin.Local);
+        _db.EnqueueSiblingPlaybackWrite("other", "o1", 0, markPlayed: true, Origin.Local);
         var failing = new RecordingHandler { Status = HttpStatusCode.InternalServerError };
         var raptor = new EmbyClient(failing);
         raptor.Configure("http://raptor.test", "token", "user2");
@@ -269,7 +269,7 @@ public class PlaybackSessionTests : IDisposable
     [Fact]
     public async Task SiblingPositionWrite_UsesUserData_AndKeepsTheServersOtherFields()
     {
-        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 900 * TicksPerSecond, markPlayed: false);
+        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 900 * TicksPerSecond, markPlayed: false, Origin.Local);
         var http = new RecordingHandler
         {
             GetJson = path => path.EndsWith("/Users/user2/Items/r1")
@@ -293,7 +293,7 @@ public class PlaybackSessionTests : IDisposable
     [Fact]
     public async Task SiblingPositionWrite_StaysQueued_WhenTheItemCannotBeRead()
     {
-        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 900 * TicksPerSecond, markPlayed: false);
+        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 900 * TicksPerSecond, markPlayed: false, Origin.Local);
         var raptor = new EmbyClient(new RecordingHandler { Status = HttpStatusCode.NotFound });
         raptor.Configure("http://raptor.test", "token", "user2");
 
@@ -305,7 +305,7 @@ public class PlaybackSessionTests : IDisposable
     [Fact]
     public async Task SiblingDrain_DropsRowsForServersNoLongerConfigured()
     {
-        _db.EnqueueSiblingPlaybackWrite("gone", "g1", 0, markPlayed: true);
+        _db.EnqueueSiblingPlaybackWrite("gone", "g1", 0, markPlayed: true, Origin.Local);
 
         await NewSession().DrainSiblingWritesAsync(_ => null);
 

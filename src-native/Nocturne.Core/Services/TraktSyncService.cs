@@ -316,7 +316,7 @@ public class TraktSyncService : ITraktSyncService
             _db.UpdateUserDataState(srv, id, positionTicks: 0, runtimeTicks: null, played: true, lastPlayedUtc: watchedAtSec, origin: "trakt");
 
             // Enqueue touched version to sibling_write_queue (safe under D7 because origin is 'trakt')
-            _db.EnqueueSiblingWrite(srv, id, positionTicks: 0, markPlayed: true);
+            _db.EnqueueSiblingWrite(srv, id, positionTicks: 0, markPlayed: true, Origin.Trakt);
         }
     }
 

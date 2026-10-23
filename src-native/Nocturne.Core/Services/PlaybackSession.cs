@@ -241,7 +241,7 @@ public sealed class PlaybackSession
         foreach (var sib in _db.GetGroupVersions(groupId.ToString()))
         {
             if (!string.IsNullOrEmpty(sib.ServerId) && sib.ServerId != serverId)
-                _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, positionTicks, markPlayed);
+                _db.EnqueueSiblingPlaybackWrite(sib.ServerId, sib.Id, positionTicks, markPlayed, Origin.Local);
         }
     }
 

@@ -64,7 +64,7 @@ public class WatchlistService : IWatchlistService
                     );
                 }
 
-                _db.EnqueueTraktEvent(groupId, "watchlist_add", 0, payload);
+                _db.EnqueueTraktEvent(groupId, "watchlist_add", 0, payload, Origin.Local);
             }
         }
 
@@ -90,7 +90,7 @@ public class WatchlistService : IWatchlistService
             var payload = BuildWatchlistPayload(group);
             if (!string.IsNullOrEmpty(payload))
             {
-                _db.EnqueueTraktEvent(groupId, "watchlist_remove", 0, payload);
+                _db.EnqueueTraktEvent(groupId, "watchlist_remove", 0, payload, Origin.Local);
             }
         }
 
@@ -118,7 +118,7 @@ public class WatchlistService : IWatchlistService
             var payload = BuildUnownedPayload(tmdbKey, title, year, itemType);
             if (!string.IsNullOrEmpty(payload))
             {
-                _db.EnqueueTraktEvent(0, "watchlist_add", 0, payload);
+                _db.EnqueueTraktEvent(0, "watchlist_add", 0, payload, Origin.Local);
             }
         }
 

@@ -567,12 +567,13 @@ public class DatabaseService : IDisposable
                     last_synced = excluded.last_synced;
             ");
     private static readonly string SqlUpsertItem2 = Checked(@"
-                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
-                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 0)
+                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, origin, updated_locally)
+                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 'emby:' || $u_srv, 0)
                     ON CONFLICT(server_id, item_id) DO UPDATE SET
                         position_ticks = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.position_ticks ELSE excluded.position_ticks END,
                         played = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.played ELSE excluded.played END,
-                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END;
+                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END,
+                        origin = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.origin ELSE excluded.origin END;
                 ");
 
     public void UpsertItem(EmbyItem item, string serverId, string? parentId = null)
@@ -681,12 +682,13 @@ public class DatabaseService : IDisposable
                         last_synced = excluded.last_synced;
                 ");
     private static readonly string SqlUpsertItems2 = Checked(@"
-                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
-                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 0)
+                    INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, origin, updated_locally)
+                    VALUES ($u_srv, $u_item, $u_pos, $u_run, $u_played, $u_last, 'emby:' || $u_srv, 0)
                     ON CONFLICT(server_id, item_id) DO UPDATE SET
                         position_ticks = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.position_ticks ELSE excluded.position_ticks END,
                         played = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.played ELSE excluded.played END,
-                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END;
+                        last_played_utc = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.last_played_utc ELSE excluded.last_played_utc END,
+                        origin = CASE WHEN user_data.updated_locally = 1 AND user_data.last_played_utc > excluded.last_played_utc THEN user_data.origin ELSE excluded.origin END;
                 ");
     private static readonly string SqlUpsertItems3 = Checked(@"
                     INSERT INTO watchlist_entries (source, ref, item_type, added_utc, title, year, tmdb_key)
@@ -2485,8 +2487,8 @@ public class DatabaseService : IDisposable
 
                 using var udCmd = _connection!.CreateCommand();
                 udCmd.CommandText = string.IsNullOrEmpty(serverId)
-                    ? "UPDATE user_data SET position_ticks = 0, updated_locally = 1 WHERE item_id = @id"
-                    : "UPDATE user_data SET position_ticks = 0, updated_locally = 1 WHERE item_id = @id AND server_id = @srv";
+                    ? "UPDATE user_data SET position_ticks = 0, origin = 'local', updated_locally = 1 WHERE item_id = @id"
+                    : "UPDATE user_data SET position_ticks = 0, origin = 'local', updated_locally = 1 WHERE item_id = @id AND server_id = @srv";
                 udCmd.Parameters.AddWithValue("@id", itemId);
                 if (!string.IsNullOrEmpty(serverId)) udCmd.Parameters.AddWithValue("@srv", serverId);
                 udCmd.ExecuteNonQuery();
@@ -2827,21 +2829,22 @@ public class DatabaseService : IDisposable
     }
 
     private static readonly string SqlUpdateLocalPlaybackProgress = Checked(@"
-                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
-                VALUES ($server_id, $item_id, $position_ticks, $runtime_ticks, $played, $last_played_utc, 1)
+                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, origin, updated_locally)
+                VALUES ($server_id, $item_id, $position_ticks, $runtime_ticks, $played, $last_played_utc, $origin, 1)
                 ON CONFLICT(server_id, item_id) DO UPDATE SET
                     position_ticks = excluded.position_ticks,
                     runtime_ticks = COALESCE(excluded.runtime_ticks, user_data.runtime_ticks),
                     played = excluded.played,
                     last_played_utc = excluded.last_played_utc,
+                    origin = excluded.origin,
                     updated_locally = 1;
             ");
 
-    public void UpdateLocalPlaybackProgress(string serverId, string itemId, long positionTicks, bool played, long? runtimeTicks = null)
+    public void UpdateLocalPlaybackProgress(string serverId, string itemId, long positionTicks, bool played, long? runtimeTicks = null, string origin = Origin.Local)
     {
         lock (_dbLock)
         {
-            if (QueueDuringRebuildWrite(() => UpdateLocalPlaybackProgress(serverId, itemId, positionTicks, played, runtimeTicks))) return;
+            if (QueueDuringRebuildWrite(() => UpdateLocalPlaybackProgress(serverId, itemId, positionTicks, played, runtimeTicks, origin))) return;
             if (_connection == null) return;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlUpdateLocalPlaybackProgress;
@@ -2851,6 +2854,7 @@ public class DatabaseService : IDisposable
             cmd.Parameters.AddWithValue("$runtime_ticks", (object?)runtimeTicks ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$played", played ? 1 : 0);
             cmd.Parameters.AddWithValue("$last_played_utc", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue("$origin", origin);
             cmd.ExecuteNonQuery();
         }
     }
@@ -2862,7 +2866,7 @@ public class DatabaseService : IDisposable
 
     private static readonly string SqlMarkLocalGroupPlayed = Checked(@"
                 UPDATE user_data
-                   SET played = 1, position_ticks = 0, last_played_utc = $now, updated_locally = 1
+                   SET played = 1, position_ticks = 0, last_played_utc = $now, origin = 'local', updated_locally = 1
                  WHERE (server_id, item_id) IN (
                      SELECT server_id, id FROM cached_items WHERE group_id = $group_id
                  );
@@ -2889,12 +2893,13 @@ public class DatabaseService : IDisposable
     }
 
     private static readonly string SqlMarkLocalItemPlayed = Checked(@"
-                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, updated_locally)
-                VALUES ($server_id, $item_id, 0, NULL, 1, $now, 1)
+                INSERT INTO user_data (server_id, item_id, position_ticks, runtime_ticks, played, last_played_utc, origin, updated_locally)
+                VALUES ($server_id, $item_id, 0, NULL, 1, $now, 'local', 1)
                 ON CONFLICT(server_id, item_id) DO UPDATE SET
                     played = 1,
                     position_ticks = 0,
                     last_played_utc = excluded.last_played_utc,
+                    origin = 'local',
                     updated_locally = 1;
             ");
 
@@ -2945,9 +2950,9 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public void EnqueueSiblingWrite(string serverId, string itemId, long? positionTicks, bool markPlayed)
+    public void EnqueueSiblingWrite(string serverId, string itemId, long? positionTicks, bool markPlayed, string origin)
     {
-        EnqueueSiblingPlaybackWrite(serverId, itemId, positionTicks, markPlayed);
+        EnqueueSiblingPlaybackWrite(serverId, itemId, positionTicks, markPlayed, origin);
     }
 
     private static readonly string SqlGetContinueWatchingItems = Checked(@"
@@ -3025,11 +3030,13 @@ public class DatabaseService : IDisposable
                     attempts = 0;
             ");
 
-    public void EnqueueSiblingPlaybackWrite(string serverId, string itemId, long? positionTicks, bool markPlayed)
+    // origin: where the change came from (Origin); D7 drops the write to the server named there.
+    public void EnqueueSiblingPlaybackWrite(string serverId, string itemId, long? positionTicks, bool markPlayed, string origin)
     {
+        if (!Origin.WritesTo(origin, serverId)) return;
         lock (_dbLock)
         {
-            if (QueueDuringRebuildWrite(() => EnqueueSiblingPlaybackWrite(serverId, itemId, positionTicks, markPlayed))) return;
+            if (QueueDuringRebuildWrite(() => EnqueueSiblingPlaybackWrite(serverId, itemId, positionTicks, markPlayed, origin))) return;
             if (_connection == null) return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             using var cmd = _connection.CreateCommand();
@@ -3795,7 +3802,7 @@ public class DatabaseService : IDisposable
 
     private static readonly string SqlMarkLocalItemsPlayed = Checked(@"
                 UPDATE user_data
-                   SET played = 1, position_ticks = 0, last_played_utc = $now, updated_locally = 1
+                   SET played = 1, position_ticks = 0, last_played_utc = $now, origin = 'local', updated_locally = 1
                  WHERE server_id = $server_id AND item_id = $item_id;
             ");
 
@@ -3948,15 +3955,17 @@ public class DatabaseService : IDisposable
                     VALUES ($group_id, $action, $progress, $payload, $queued_utc, 0);
                 ");
 
-    public void EnqueueTraktEvent(long groupId, string action, double progress, string? payload)
+    // origin: where the change came from (Origin); D7 drops it when that is Trakt itself.
+    public void EnqueueTraktEvent(long groupId, string action, double progress, string? payload, string origin)
     {
+        if (!Origin.WritesToTrakt(origin)) return;
         lock (_dbLock)
         {
             // During a rebuild write the group id may be about to change: follow the group's primary item instead.
             if (_queuedWrites != null && GetDedupGroup(groupId) is { } group)
             {
                 var (srv, id) = (group.PrimaryServerId, group.PrimaryItemId);
-                if (QueueDuringRebuildWrite(() => EnqueueTraktEvent(GroupIdOfItem(srv, id) ?? 0, action, progress, payload))) return;
+                if (QueueDuringRebuildWrite(() => EnqueueTraktEvent(GroupIdOfItem(srv, id) ?? 0, action, progress, payload, origin))) return;
             }
             if (_connection == null) return;
             try
