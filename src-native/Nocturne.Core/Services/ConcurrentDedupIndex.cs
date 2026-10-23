@@ -913,13 +913,25 @@ public class ConcurrentDedupIndex
         target.Has4k = Math.Max(target.Has4k, is4k);
         AppendAudioCodec(target, audio);
 
-        if (ShouldElectImage(target, item.ServerId, item.Id, item.ImageTag))
+        // The version holding the poster or backdrop, again: its new tag, or (gone) a re-election at the batch's end, or
+        // a lost poster kept its stale tag and the group never became TMDB-eligible (#23).
+        if (target.ImageServerId == item.ServerId && target.ImageItemId == item.Id)
+        {
+            if (!string.IsNullOrEmpty(item.ImageTag)) target.ImageTag = item.ImageTag;
+            else _reelect.Add(target);
+        }
+        else if (ShouldElectImage(target, item.ServerId, item.Id, item.ImageTag))
         {
             target.ImageTag = item.ImageTag;
             target.ImageItemId = item.Id;
             target.ImageServerId = item.ServerId;
         }
-        if (ShouldElectBackdrop(target, item.ServerId, item.Id, item.BackdropTag))
+        if (target.BackdropServerId == item.ServerId && target.BackdropItemId == item.Id)
+        {
+            if (!string.IsNullOrEmpty(item.BackdropTag)) target.BackdropTag = item.BackdropTag;
+            else _reelect.Add(target);
+        }
+        else if (ShouldElectBackdrop(target, item.ServerId, item.Id, item.BackdropTag))
         {
             target.BackdropTag = item.BackdropTag;
             target.BackdropItemId = item.Id;
@@ -994,6 +1006,24 @@ public class ConcurrentDedupIndex
         if (members.Count == 0) return;
         var best = ElectPrimary(members, _serverPriority);
         UpdatePrimary(g, best, DedupEngine.ScorePrimaryItem(best, _serverPriority));
+        ElectArtwork(g, members, _serverPriority);
+    }
+
+    // Spec §3.2 in full, over the members as they are now: a poster and a backdrop each from the highest-priority
+    // server's member that has one, then the lowest "server:id"; none leaves the group TMDB-eligible.
+    internal static void ElectArtwork(DedupGroupRecord g, IList<EmbyItem> members, IList<string>? priority)
+    {
+        int Rank(EmbyItem m)
+        {
+            var i = priority?.IndexOf(m.ServerId ?? string.Empty) ?? -1;
+            return i >= 0 ? i : 999;
+        }
+        EmbyItem? First(Func<EmbyItem, string?> tag) =>
+            members.Where(m => !string.IsNullOrEmpty(tag(m))).OrderBy(Rank).ThenBy(m => $"{m.ServerId}:{m.Id}", StringComparer.Ordinal).FirstOrDefault();
+        var poster = First(m => m.ImageTag);
+        (g.ImageTag, g.ImageItemId, g.ImageServerId) = (poster?.ImageTag, poster?.Id, poster?.ServerId);
+        var backdrop = First(m => m.BackdropTag);
+        (g.BackdropTag, g.BackdropItemId, g.BackdropServerId) = (backdrop?.BackdropTag, backdrop?.Id, backdrop?.ServerId);
     }
 
     internal static void UpdatePrimary(DedupGroupRecord g, EmbyItem item, int score)

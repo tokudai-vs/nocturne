@@ -85,7 +85,6 @@ public class SearchViewModel : BaseViewModel
                         {
                             it.ServerId = srv.Id;
                             it.ServerName = srv.Name;
-                            it.PrimaryImageUrl = client.BuildImageUrl(it.Id, "Primary", 320, it.ImageTags?.GetValueOrDefault("Primary"), srv.Url, srv.AccessToken);
                         }
                         return items;
                     }
@@ -97,20 +96,22 @@ public class SearchViewModel : BaseViewModel
 
                 if (allLive.Count > 0)
                 {
-                    var deduped = _dedup.Deduplicate(allLive);
+                    var primaries = _dedup.Deduplicate(allLive).Select(g => g.PrimaryItem).ToList();
+                    Artwork.Apply(primaries, _db, _settings.Current.Servers); // spec §3.3: the group's elected poster
                     Results.Clear();
-                    foreach (var g in deduped) Results.Add(g.PrimaryItem);
+                    foreach (var item in primaries) Results.Add(item);
                 }
             }
             else if (_embyClient.IsAuthenticated)
             {
                 var activeServer = _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
                 var serverItems = await _embyClient.SearchAsync(term, 30);
+                foreach (var sItem in serverItems) sItem.ServerId = activeServer?.Id;
+                Artwork.Apply(serverItems, _db, _settings.Current.Servers);
                 foreach (var sItem in serverItems)
                 {
                     sItem.ServerId = activeServer?.Id;
                     sItem.ServerName = activeServer?.Name;
-                    sItem.PrimaryImageUrl = _embyClient.BuildImageUrl(sItem.Id, "Primary", 320, sItem.ImageTags?.GetValueOrDefault("Primary"), activeServer?.Url, activeServer?.AccessToken);
                     if (!Results.Any(r => r.Id == sItem.Id))
                     {
                         Results.Add(sItem);

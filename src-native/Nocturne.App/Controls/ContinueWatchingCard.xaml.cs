@@ -91,22 +91,14 @@ public partial class ContinueWatchingCard : UserControl
             }
 
             // Load 16:9 Landscape Artwork (Episode Primary thumbnail or Backdrop)
-            var emby = (Application.Current as App)?.Services.GetService<EmbyClient>();
+            // Spec §3.3 (A0): the URL the view model resolved, else the group's poster, else its backdrop (Artwork).
             var settings = (Application.Current as App)?.Services.GetService<SettingsService>();
-            if (emby != null)
+            if (settings != null)
             {
-                ServerConfig? server = null;
-                if (!string.IsNullOrEmpty(item.ServerId) && settings != null)
-                {
-                    server = settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId);
-                }
-
-                var tag = item.ImageTags?.GetValueOrDefault("Primary") ?? item.BackdropImageTags?.FirstOrDefault();
-                var imageType = (item.ImageTags != null && item.ImageTags.ContainsKey("Primary")) ? "Primary" : "Backdrop";
-
+                var servers = settings.Current.Servers;
                 var url = !string.IsNullOrEmpty(item.PrimaryImageUrl)
                     ? item.PrimaryImageUrl
-                    : emby.BuildImageUrl(item.Id, imageType, 500, tag, server?.Url, server?.AccessToken);
+                    : Artwork.Poster(item, servers, 500) ?? Artwork.Backdrop(item, servers, 500);
 
                 if (!string.IsNullOrEmpty(url))
                 {

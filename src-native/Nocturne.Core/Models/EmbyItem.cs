@@ -139,6 +139,27 @@ public class EmbyItem : INotifyPropertyChanged
     [JsonIgnore]
     public string? TmdbPosterPath { get; set; }
 
+    // Spec §3 (A0), set by DatabaseService.AttachGroupArtwork: the version its dedup group elected for the poster
+    // (ImageServerId/ImageItemId above) and the backdrop, which may be a sibling on another server, plus the TMDB
+    // fallbacks. ArtworkAttached: the item's group was found, so its own images are not what to show.
+    [JsonIgnore]
+    public bool ArtworkAttached { get; set; }
+
+    [JsonIgnore]
+    public string? ElectedImageTag { get; set; }
+
+    [JsonIgnore]
+    public string? ArtworkBackdropServerId { get; set; }
+
+    [JsonIgnore]
+    public string? ArtworkBackdropItemId { get; set; }
+
+    [JsonIgnore]
+    public string? ElectedBackdropTag { get; set; }
+
+    [JsonIgnore]
+    public string? TmdbBackdropPath { get; set; }
+
     [JsonIgnore]
     public bool IsInWatchlist { get; set; }
 

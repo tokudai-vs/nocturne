@@ -75,33 +75,13 @@ public partial class MediaCard : UserControl
             PosterImage.Source = null;
             FallbackTile.Visibility = Visibility.Visible;
 
-            // ── Artwork Resolution Order (§3.3) ──
-            var emby = (Application.Current as App)?.Services.GetService<EmbyClient>();
+            // ── Artwork Resolution Order (§3.3): the URL the view model resolved, else Artwork on the same rules ──
             var settings = (Application.Current as App)?.Services.GetService<SettingsService>();
             string? finalImageUrl = null;
 
-            if (emby != null && settings != null)
+            if (settings != null)
             {
-                // Order 1: Owning server (§3.3)
-                string imageServer = !string.IsNullOrEmpty(item.ImageServerId) ? item.ImageServerId : (item.ServerId ?? string.Empty);
-                string imageItem = !string.IsNullOrEmpty(item.ImageItemId) ? item.ImageItemId : item.Id;
-                var server = settings.Current.Servers.FirstOrDefault(s => s.Id == imageServer);
-                var tag = item.ImageTags?.GetValueOrDefault("Primary");
-
-                if (!string.IsNullOrEmpty(item.PrimaryImageUrl))
-                {
-                    finalImageUrl = item.PrimaryImageUrl;
-                }
-                else if (server != null && !string.IsNullOrEmpty(imageItem))
-                {
-                    finalImageUrl = emby.BuildImageUrl(imageItem, "Primary", 320, tag, server.Url, server.AccessToken);
-                }
-
-                // Order 2: TMDB fallback poster (§3.3)
-                if (string.IsNullOrEmpty(finalImageUrl) && !string.IsNullOrEmpty(item.TmdbPosterPath))
-                {
-                    finalImageUrl = $"https://image.tmdb.org/t/p/w342{item.TmdbPosterPath}";
-                }
+                finalImageUrl = !string.IsNullOrEmpty(item.PrimaryImageUrl) ? item.PrimaryImageUrl : Artwork.Poster(item, settings.Current.Servers, 320);
 
                 if (!string.IsNullOrEmpty(finalImageUrl))
                 {

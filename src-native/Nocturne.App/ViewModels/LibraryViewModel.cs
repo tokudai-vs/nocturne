@@ -274,6 +274,7 @@ public class LibraryViewModel : BaseViewModel
                 var cached = _db.GetCombinedLibraryItems(libraryIds, type: typeFilter, sortBy: SortBy, sortOrder: SortOrder, limit: 200);
                 if (cached.Count > 0)
                 {
+                    Artwork.Apply(cached, _db, _settings.Current.Servers); // spec §3.3: the group's elected poster
                     foreach (var item in cached) Items.Add(item);
                 }
 
@@ -301,7 +302,6 @@ public class LibraryViewModel : BaseViewModel
                             {
                                 it.ServerId = srv.Id;
                                 it.ServerName = srv.Name;
-                                it.PrimaryImageUrl = client.BuildImageUrl(it.Id, "Primary", 320, it.ImageTags?.GetValueOrDefault("Primary"), srv.Url, srv.AccessToken);
                             }
                             return res.Items;
                         }
@@ -317,14 +317,12 @@ public class LibraryViewModel : BaseViewModel
 
                     if (allFetched.Count > 0)
                     {
-                        var dedupGroups = _dedup.Deduplicate(allFetched);
+                        var primaries = _dedup.Deduplicate(allFetched).Select(g => g.PrimaryItem).ToList();
+                        Artwork.Apply(primaries, _db, _settings.Current.Servers);
                         Application.Current.Dispatcher.Invoke(() =>
                         {
                             Items.Clear();
-                            foreach (var g in dedupGroups)
-                            {
-                                Items.Add(g.PrimaryItem);
-                            }
+                            foreach (var item in primaries) Items.Add(item);
                         });
                     }
                 }
@@ -345,11 +343,12 @@ public class LibraryViewModel : BaseViewModel
                             : EmbyClient.CreateForServer(srv);
 
                         var res = await client.GetItemsAsync(parentId: libId, limit: 120, sortBy: SortBy, sortOrder: SortOrder, fields: EmbyClient.LightItemFields);
+                        foreach (var it in res.Items) it.ServerId = srv.Id;
+                        Artwork.Apply(res.Items, _db, _settings.Current.Servers);
                         foreach (var it in res.Items)
                         {
                             it.ServerId = srv.Id;
                             it.ServerName = srv.Name;
-                            it.PrimaryImageUrl = client.BuildImageUrl(it.Id, "Primary", 320, it.ImageTags?.GetValueOrDefault("Primary"), srv.Url, srv.AccessToken);
                             Items.Add(it);
                         }
                     }
@@ -379,11 +378,12 @@ public class LibraryViewModel : BaseViewModel
                 if (res.Items.Count > 0 || Items.Count == 0)
                 {
                     Items.Clear();
+                    foreach (var item in res.Items) item.ServerId = activeSid;
+                    Artwork.Apply(res.Items, _db, _settings.Current.Servers);
                     foreach (var item in res.Items)
                     {
                         item.ServerId = activeSid;
                         item.ServerName = activeSname;
-                        item.PrimaryImageUrl = _embyClient.BuildImageUrl(item.Id, "Primary", 320, item.ImageTags?.GetValueOrDefault("Primary"), activeServer?.Url, activeServer?.AccessToken);
                         Items.Add(item);
                     }
                 }

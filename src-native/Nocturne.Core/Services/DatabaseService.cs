@@ -926,7 +926,63 @@ public class DatabaseService : IDisposable
                 }
             }
         }
+        AttachGroupArtwork(items);
         return items;
+    }
+
+    private static readonly string SqlGroupOfItem = Checked("SELECT group_id FROM cached_items WHERE id = $id AND server_id = $srv;");
+
+    // Spec §3 (A0): a card shows its dedup group's elected artwork: the poster and backdrop of whichever version has
+    // them, on that version's own server, then TMDB's. Every display query ends here, as do items fetched live from a
+    // server (looked up by (server, id)). Items without a group keep their own images.
+    public void AttachGroupArtwork(IList<EmbyItem> items)
+    {
+        if (items.Count == 0) return;
+        lock (_dbLock)
+        {
+            if (_connection == null) return;
+            var groupOf = new Dictionary<EmbyItem, int>();
+            using (var lookup = _connection.CreateCommand())
+            {
+                lookup.CommandText = SqlGroupOfItem;
+                var pId = lookup.Parameters.Add("$id", SqliteType.Text);
+                var pSrv = lookup.Parameters.Add("$srv", SqliteType.Text);
+                foreach (var item in items)
+                {
+                    if (item.ArtworkAttached) continue;
+                    if (int.TryParse(item.DedupGroupId, out var gid) && gid > 0) { groupOf[item] = gid; continue; }
+                    if (string.IsNullOrEmpty(item.ServerId) || string.IsNullOrEmpty(item.Id)) continue;
+                    pId.Value = item.Id;
+                    pSrv.Value = item.ServerId;
+                    if (lookup.ExecuteScalar() is long found) groupOf[item] = (int)found;
+                }
+            }
+
+            var art = new Dictionary<int, (string? Tag, string? Item, string? Server, string? BTag, string? BItem, string? BServer, string? Poster, string? Backdrop)>();
+            foreach (var chunk in groupOf.Values.Distinct().Chunk(500))
+            {
+                using var cmd = _connection.CreateCommand();
+                var names = chunk.Select((gid, i) => { cmd.Parameters.AddWithValue($"$g{i}", gid); return $"$g{i}"; });
+                cmd.CommandText = $@"
+                    SELECT g.group_id, g.image_tag, g.image_item_id, g.image_server_id, g.backdrop_tag, g.backdrop_item_id, g.backdrop_server_id,
+                           COALESCE(t.poster_path, t.still_path), t.backdrop_path
+                    FROM dedup_groups g
+                    LEFT JOIN tmdb_metadata t ON t.provider_key = g.tmdb_key AND t.not_found = 0
+                    WHERE g.group_id IN ({string.Join(",", names)});";
+                using var r = cmd.ExecuteReader();
+                string? S(int i) => r.IsDBNull(i) ? null : r.GetString(i);
+                while (r.Read()) art[r.GetInt32(0)] = (S(1), S(2), S(3), S(4), S(5), S(6), S(7), S(8));
+            }
+
+            foreach (var (item, gid) in groupOf)
+            {
+                if (!art.TryGetValue(gid, out var a)) continue;
+                item.ArtworkAttached = true;
+                (item.ElectedImageTag, item.ImageItemId, item.ImageServerId) = (a.Tag, a.Item, a.Server);
+                (item.ElectedBackdropTag, item.ArtworkBackdropItemId, item.ArtworkBackdropServerId) = (a.BTag, a.BItem, a.BServer);
+                (item.TmdbPosterPath, item.TmdbBackdropPath) = (a.Poster, a.Backdrop);
+            }
+        }
     }
 
     private static readonly string SqlSaveContinueWatchingCache = Checked("DELETE FROM continue_watching_cache;");
@@ -987,6 +1043,7 @@ public class DatabaseService : IDisposable
                 }
             }
         }
+        AttachGroupArtwork(items);
         return items;
     }
 
@@ -1053,6 +1110,7 @@ public class DatabaseService : IDisposable
                 {
                     item.ServerId = serverId;
                 }
+                if (item != null) AttachGroupArtwork(new[] { item });
                 return item;
             }
             catch (Exception ex) when (QueryFailed(ex, $"json_data of cached item {itemId}"))
@@ -1101,6 +1159,7 @@ public class DatabaseService : IDisposable
                 catch (Exception ex) when (QueryFailed(ex, sql)) { }
             }
         }
+        AttachGroupArtwork(items);
         return items;
     }
 
@@ -1173,6 +1232,7 @@ public class DatabaseService : IDisposable
                 }
             }
         }
+        AttachGroupArtwork(items);
         return items;
     }
 
@@ -2950,6 +3010,7 @@ public class DatabaseService : IDisposable
                 }
             }
         }
+        AttachGroupArtwork(list);
         return list;
     }
 
@@ -3622,11 +3683,6 @@ public class DatabaseService : IDisposable
     // comes from the highest-priority server's member, then the lowest "server:id".
     private static void RecountAfterRemoval(DedupGroupRecord g, List<EmbyItem> left, IList<string>? priority)
     {
-        int Rank(EmbyItem m)
-        {
-            var i = priority?.IndexOf(m.ServerId ?? string.Empty) ?? -1;
-            return i >= 0 ? i : 999;
-        }
         bool Has(EmbyItem m, string? srv, string? id) => m.ServerId == srv && m.Id == id;
 
         g.VersionCount = left.Count;
@@ -3641,16 +3697,8 @@ public class DatabaseService : IDisposable
             var best = ConcurrentDedupIndex.ElectPrimary(left, priority);
             ConcurrentDedupIndex.UpdatePrimary(g, best, DedupEngine.ScorePrimaryItem(best, priority));
         }
-        if (!left.Any(m => Has(m, g.ImageServerId, g.ImageItemId)))
-        {
-            var m = left.Where(m => !string.IsNullOrEmpty(m.ImageTag)).OrderBy(Rank).ThenBy(m => $"{m.ServerId}:{m.Id}", StringComparer.Ordinal).FirstOrDefault();
-            (g.ImageTag, g.ImageItemId, g.ImageServerId) = (m?.ImageTag, m?.Id, m?.ServerId);
-        }
-        if (!left.Any(m => Has(m, g.BackdropServerId, g.BackdropItemId)))
-        {
-            var m = left.Where(m => !string.IsNullOrEmpty(m.BackdropTag)).OrderBy(Rank).ThenBy(m => $"{m.ServerId}:{m.Id}", StringComparer.Ordinal).FirstOrDefault();
-            (g.BackdropTag, g.BackdropItemId, g.BackdropServerId) = (m?.BackdropTag, m?.Id, m?.ServerId);
-        }
+        if (!left.Any(m => Has(m, g.ImageServerId, g.ImageItemId)) || !left.Any(m => Has(m, g.BackdropServerId, g.BackdropItemId)))
+            ConcurrentDedupIndex.ElectArtwork(g, left, priority);
     }
 
     // Non-null while one of the rebuild's long write transactions runs on its own connection (WithWritesQueued):

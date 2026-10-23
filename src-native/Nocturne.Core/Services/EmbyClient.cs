@@ -928,13 +928,17 @@ public class EmbyClient
         var bUrl = !string.IsNullOrEmpty(serverUrl) ? NormalizeServerUrl(serverUrl) : _baseUrl;
         var tok = !string.IsNullOrEmpty(serverToken) ? serverToken : _token;
         if (string.IsNullOrEmpty(bUrl)) return string.Empty;
+        return ImageUrl(bUrl, tok, itemId, imageType, maxWidth, tag);
+    }
 
-        var url = $"{bUrl}/Items/{itemId}/Images/{imageType}";
+    // An image on a named server (Artwork, spec §3.3), never falling back to this client's own server.
+    public static string ImageUrl(string serverUrl, string? token, string itemId, string imageType, int? maxWidth, string? tag)
+    {
+        var url = $"{NormalizeServerUrl(serverUrl)}/Items/{itemId}/Images/{imageType}";
         var query = new List<string>();
         if (maxWidth.HasValue) query.Add($"MaxWidth={maxWidth.Value}");
         if (!string.IsNullOrEmpty(tag)) query.Add($"Tag={tag}");
-        if (!string.IsNullOrEmpty(tok)) query.Add($"api_key={tok}");
-
+        if (!string.IsNullOrEmpty(token)) query.Add($"api_key={token}");
         return query.Count > 0 ? $"{url}?{string.Join("&", query)}" : url;
     }
 

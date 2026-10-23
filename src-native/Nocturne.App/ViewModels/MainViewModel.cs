@@ -1433,18 +1433,8 @@ public class MainViewModel : BaseViewModel
     {
         if (_currentPlayingItem == null) return null;
         var item = _currentPlayingItem;
-        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == item.ServerId)
-               ?? _settings.Current.Servers.FirstOrDefault(s => s.Id == _settings.Current.ActiveServerId);
-        var client = (srv == null || (srv.Id == _settings.Current.ActiveServerId && _embyClient.IsAuthenticated))
-            ? _embyClient
-            : EmbyClient.CreateForServer(srv);
-
-        var backdropTag = item.BackdropImageTags?.FirstOrDefault();
-        if (!string.IsNullOrEmpty(backdropTag))
-        {
-            return client.BuildImageUrl(item.Id, "Backdrop", 500, backdropTag, srv?.Url, srv?.AccessToken);
-        }
-        var primaryTag = item.ImageTags?.GetValueOrDefault("Primary");
-        return client.BuildImageUrl(item.Id, "Primary", 500, primaryTag, srv?.Url, srv?.AccessToken);
+        var servers = _settings.Current.Servers;
+        _db.AttachGroupArtwork(new[] { item }); // spec §3.3: the group's elected artwork, from its version's own server
+        return Artwork.Backdrop(item, servers, 500) ?? Artwork.Poster(item, servers, 500);
     }
 }

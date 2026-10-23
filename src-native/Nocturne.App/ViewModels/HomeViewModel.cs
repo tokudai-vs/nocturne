@@ -63,6 +63,26 @@ public class HomeViewModel : BaseViewModel
         set => SetProperty(ref _heroTrailerUrl, value);
     }
 
+    // Spec §3.3 (A0): every shelf shows its dedup group's elected artwork, from the version's own server (Artwork).
+    // Continue Watching cards are landscape, so they ask for a wider image.
+    private void ApplyArtwork(List<EmbyItem> resume, List<EmbyItem> movies, List<EmbyItem> episodes, List<EmbyItem>? nextUp = null)
+    {
+        var servers = _settings.Current.Servers;
+        Artwork.Apply(resume, _db, servers, 500);
+        Artwork.Apply(movies, _db, servers);
+        Artwork.Apply(episodes, _db, servers);
+        if (nextUp != null) Artwork.Apply(nextUp, _db, servers);
+    }
+
+    private EmbyItem? PickHero()
+    {
+        var servers = _settings.Current.Servers;
+        return ContinueWatching.FirstOrDefault(h => Artwork.Backdrop(h, servers, 1920) != null)
+               ?? LatestMovies.FirstOrDefault(h => Artwork.Backdrop(h, servers, 1920) != null)
+               ?? ContinueWatching.FirstOrDefault()
+               ?? LatestMovies.FirstOrDefault();
+    }
+
     private async Task ResolveHeroTrailerAsync(EmbyItem hero, string? srvUrl, string? token)
     {
         HeroTrailerUrl = null;
@@ -135,7 +155,9 @@ public class HomeViewModel : BaseViewModel
                     {
                         var resume = _db.GetContinueWatchingItems();
                         if (resume.Count == 0) resume = _db.GetCachedContinueWatching();
-                        return (resume, _db.GetCachedItems("Movie", limit: 20), _db.GetCachedItems("Episode", limit: 20));
+                        var (movies, episodes) = (_db.GetCachedItems("Movie", limit: 20), _db.GetCachedItems("Episode", limit: 20));
+                        ApplyArtwork(resume, movies, episodes);
+                        return (resume, movies, episodes);
                     });
 
                     if (cachedResume.Count > 0 || cachedMovies.Count > 0 || cachedEpisodes.Count > 0)
@@ -150,7 +172,6 @@ public class HomeViewModel : BaseViewModel
                                 var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == it.ServerId) ?? activeServer;
                                 it.ServerId ??= srv?.Id;
                                 it.ServerName ??= srv?.Name;
-                                it.PrimaryImageUrl ??= _embyClient.BuildImageUrl(it.Id, "Primary", 320, it.ImageTags?.GetValueOrDefault("Primary"), srv?.Url, srv?.AccessToken);
                                 ContinueWatching.Add(it);
                             }
 
@@ -159,7 +180,6 @@ public class HomeViewModel : BaseViewModel
                                 var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == m.ServerId) ?? activeServer;
                                 m.ServerId ??= srv?.Id;
                                 m.ServerName ??= srv?.Name;
-                                m.PrimaryImageUrl ??= _embyClient.BuildImageUrl(m.Id, "Primary", 320, m.ImageTags?.GetValueOrDefault("Primary"), srv?.Url, srv?.AccessToken);
                                 LatestMovies.Add(m);
                             }
 
@@ -168,23 +188,13 @@ public class HomeViewModel : BaseViewModel
                                 var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == ep.ServerId) ?? activeServer;
                                 ep.ServerId ??= srv?.Id;
                                 ep.ServerName ??= srv?.Name;
-                                ep.PrimaryImageUrl ??= _embyClient.BuildImageUrl(ep.Id, "Primary", 320, ep.ImageTags?.GetValueOrDefault("Primary"), srv?.Url, srv?.AccessToken);
                                 LatestEpisodes.Add(ep);
                             }
 
-                            if (HeroItem == null)
+                            if (HeroItem == null && PickHero() is { } heroCandidate)
                             {
-                                var heroCandidate = ContinueWatching.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                                                 ?? LatestMovies.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                                                 ?? ContinueWatching.FirstOrDefault()
-                                                 ?? LatestMovies.FirstOrDefault();
-                                if (heroCandidate != null)
-                                {
-                                    HeroItem = heroCandidate;
-                                    var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == heroCandidate.ServerId) ?? activeServer;
-                                    var tag = heroCandidate.BackdropImageTags?.FirstOrDefault() ?? heroCandidate.ImageTags?.GetValueOrDefault("Primary");
-                                    HeroBackdropUrl = _embyClient.BuildImageUrl(heroCandidate.Id, "Backdrop", 1920, tag, srv?.Url, srv?.AccessToken);
-                                }
+                                HeroItem = heroCandidate;
+                                HeroBackdropUrl = Artwork.Backdrop(heroCandidate, _settings.Current.Servers, 1920);
                             }
                             OnPropertyChanged(nameof(ShowSkeleton));
                         });
@@ -222,10 +232,10 @@ public class HomeViewModel : BaseViewModel
                         var movItems = (await moviesTask).Items;
                         var epItems = (await episodesTask).Items;
 
-                        foreach (var it in resItems) { it.ServerId = srv.Id; it.ServerName = srv.Name; it.PrimaryImageUrl = client.BuildImageUrl(it.Id, "Primary", 320, it.ImageTags?.GetValueOrDefault("Primary"), srv.Url, srv.AccessToken); }
-                        foreach (var it in nxtItems) { it.ServerId = srv.Id; it.ServerName = srv.Name; it.PrimaryImageUrl = client.BuildImageUrl(it.Id, "Primary", 320, it.ImageTags?.GetValueOrDefault("Primary"), srv.Url, srv.AccessToken); }
-                        foreach (var it in movItems) { it.ServerId = srv.Id; it.ServerName = srv.Name; it.PrimaryImageUrl = client.BuildImageUrl(it.Id, "Primary", 320, it.ImageTags?.GetValueOrDefault("Primary"), srv.Url, srv.AccessToken); }
-                        foreach (var it in epItems) { it.ServerId = srv.Id; it.ServerName = srv.Name; it.PrimaryImageUrl = client.BuildImageUrl(it.Id, "Primary", 320, it.ImageTags?.GetValueOrDefault("Primary"), srv.Url, srv.AccessToken); }
+                        foreach (var it in resItems) { it.ServerId = srv.Id; it.ServerName = srv.Name; }
+                        foreach (var it in nxtItems) { it.ServerId = srv.Id; it.ServerName = srv.Name; }
+                        foreach (var it in movItems) { it.ServerId = srv.Id; it.ServerName = srv.Name; }
+                        foreach (var it in epItems) { it.ServerId = srv.Id; it.ServerName = srv.Name; }
 
                         return (resItems, nxtItems, movItems, epItems);
                     }
@@ -260,6 +270,7 @@ public class HomeViewModel : BaseViewModel
                 var mergedEpisodes = DeduplicateEpisodes(allEpisodes).Take(20).ToList();
 
                 _db.SaveContinueWatchingCache(mergedResume);
+                ApplyArtwork(mergedResume, mergedMovies, mergedEpisodes, mergedNextUp);
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {
@@ -275,17 +286,11 @@ public class HomeViewModel : BaseViewModel
                     LatestEpisodes.Clear();
                     foreach (var it in mergedEpisodes) LatestEpisodes.Add(it);
 
-                    var hero = ContinueWatching.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                            ?? LatestMovies.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                            ?? ContinueWatching.FirstOrDefault()
-                            ?? LatestMovies.FirstOrDefault();
-
-                    if (hero != null)
+                    if (PickHero() is { } hero)
                     {
                         HeroItem = hero;
                         var heroServer = servers.FirstOrDefault(s => s.Id == hero.ServerId);
-                        var tag = hero.BackdropImageTags?.FirstOrDefault() ?? hero.ImageTags?.GetValueOrDefault("Primary");
-                        HeroBackdropUrl = _embyClient.BuildImageUrl(hero.Id, "Backdrop", 1920, tag, heroServer?.Url, heroServer?.AccessToken);
+                        HeroBackdropUrl = Artwork.Backdrop(hero, servers, 1920);
                         _ = ResolveHeroTrailerAsync(hero, heroServer?.Url, heroServer?.AccessToken);
                     }
 
@@ -331,6 +336,7 @@ public class HomeViewModel : BaseViewModel
                 var displayResume = singleDbResume.Count > 0 ? singleDbResume : resumeItems;
 
                 _db.SaveContinueWatchingCache(displayResume);
+                ApplyArtwork(displayResume, movies, eps, nextUpItems);
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {
@@ -352,16 +358,10 @@ public class HomeViewModel : BaseViewModel
                         foreach (var ep in eps) LatestEpisodes.Add(ep);
                     }
 
-                    var hero = ContinueWatching.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                            ?? LatestMovies.FirstOrDefault(h => h.BackdropImageTags?.Count > 0)
-                            ?? ContinueWatching.FirstOrDefault()
-                            ?? LatestMovies.FirstOrDefault();
-
-                    if (hero != null)
+                    if (PickHero() is { } hero)
                     {
                         HeroItem = hero;
-                        var tag = hero.BackdropImageTags?.FirstOrDefault() ?? hero.ImageTags?.GetValueOrDefault("Primary");
-                        HeroBackdropUrl = _embyClient.BuildImageUrl(hero.Id, "Backdrop", 1920, tag, activeServer?.Url, activeServer?.AccessToken);
+                        HeroBackdropUrl = Artwork.Backdrop(hero, _settings.Current.Servers, 1920);
                         _ = ResolveHeroTrailerAsync(hero, activeServer?.Url, activeServer?.AccessToken);
                     }
 

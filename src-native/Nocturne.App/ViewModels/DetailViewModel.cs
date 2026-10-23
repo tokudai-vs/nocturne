@@ -327,9 +327,9 @@ public class DetailViewModel : BaseViewModel
                             {
                                 sim.ServerId = _currentServer?.Id;
                                 sim.ServerName = _currentServer?.Name;
-                                sim.PrimaryImageUrl = client.BuildImageUrl(sim.Id, "Primary", 320, sim.ImageTags?.GetValueOrDefault("Primary"), _currentServer?.Url, _currentServer?.AccessToken);
-                                SimilarItems.Add(sim);
                             }
+                            Artwork.Apply(similar, _db, _settings.Current.Servers);
+                            foreach (var sim in similar) SimilarItems.Add(sim);
                             OnPropertyChanged(nameof(SimilarItems));
                             OnPropertyChanged(nameof(HasSimilar));
                         }
@@ -355,33 +355,20 @@ public class DetailViewModel : BaseViewModel
         OnPropertyChanged(nameof(PlayButtonText));
         OnPropertyChanged(nameof(PlayedButtonText));
 
-        // If this is an episode, load parent series from cache or memory to inherit backdrop & cast
+        // If this is an episode, load parent series from cache or memory to inherit backdrop & cast. On the episode's own
+        // server: item ids are per server and collide across them.
         EmbyItem? parentSeries = null;
         if (string.Equals(item.Type, "Episode", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(item.SeriesId))
         {
-            parentSeries = _db.GetCachedItem(item.SeriesId);
+            parentSeries = _db.GetCachedItem(item.SeriesId, item.ServerId);
         }
 
-        var primaryTag = item.ImageTags?.GetValueOrDefault("Primary");
-        PosterUrl = client.BuildImageUrl(item.Id, "Primary", 500, primaryTag, _currentServer?.Url, _currentServer?.AccessToken);
-
-        var backdropTag = item.BackdropImageTags?.FirstOrDefault();
-        string? backdropId = item.Id;
-
-        if (string.IsNullOrEmpty(backdropTag) && parentSeries != null)
-        {
-            backdropTag = parentSeries.BackdropImageTags?.FirstOrDefault() ?? parentSeries.ImageTags?.GetValueOrDefault("Primary");
-            backdropId = parentSeries.Id;
-        }
-
-        if (string.IsNullOrEmpty(backdropTag))
-        {
-            backdropTag = primaryTag;
-        }
-
-        BackdropUrl = !string.IsNullOrEmpty(backdropTag)
-            ? client.BuildImageUrl(backdropId, "Backdrop", 1920, backdropTag, _currentServer?.Url, _currentServer?.AccessToken)
-            : null;
+        // Spec §3.3 (A0): the group's elected poster and backdrop, each from its version's own server; an episode with
+        // no backdrop anywhere borrows its series'.
+        var servers = _settings.Current.Servers;
+        _db.AttachGroupArtwork(new[] { item });
+        PosterUrl = Artwork.Poster(item, servers, 500);
+        BackdropUrl = Artwork.Backdrop(item, servers, 1920) ?? (parentSeries == null ? null : Artwork.Backdrop(parentSeries, servers, 1920));
 
         // Cast & Crew
         var peopleSource = (item.People != null && item.People.Count > 0)
@@ -534,12 +521,10 @@ public class DetailViewModel : BaseViewModel
             Application.Current.Dispatcher.Invoke(() =>
             {
                 Episodes.Clear();
+                Artwork.Apply(cachedEps, _db, _settings.Current.Servers, 400);
                 foreach (var ep in cachedEps)
                 {
-                    var tag = ep.ImageTags?.GetValueOrDefault("Primary");
-                    ep.ServerId = _currentServer?.Id;
                     ep.ServerName = _currentServer?.Name;
-                    ep.PrimaryImageUrl = client.BuildImageUrl(ep.Id, "Primary", 400, tag, _currentServer?.Url, _currentServer?.AccessToken);
                     ep.SeriesImdbId = Item?.ImdbId;
                     Episodes.Add(ep);
                 }
@@ -557,6 +542,8 @@ public class DetailViewModel : BaseViewModel
                 if (eps != null && eps.Count > 0)
                 {
                     _db.UpsertItems(eps, _currentServer?.Id ?? "server", seasonId);
+                    foreach (var ep in eps) ep.ServerId = _currentServer?.Id;
+                    Artwork.Apply(eps, _db, _settings.Current.Servers, 400);
 
                     Application.Current.Dispatcher.Invoke(() =>
                     {
@@ -565,10 +552,7 @@ public class DetailViewModel : BaseViewModel
                             Episodes.Clear();
                             foreach (var ep in eps)
                             {
-                                var tag = ep.ImageTags?.GetValueOrDefault("Primary");
-                                ep.ServerId = _currentServer?.Id;
                                 ep.ServerName = _currentServer?.Name;
-                                ep.PrimaryImageUrl = client.BuildImageUrl(ep.Id, "Primary", 400, tag, _currentServer?.Url, _currentServer?.AccessToken);
                                 ep.SeriesImdbId = Item?.ImdbId;
                                 Episodes.Add(ep);
                             }
