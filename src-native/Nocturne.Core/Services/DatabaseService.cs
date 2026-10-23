@@ -35,6 +35,7 @@ public class DatabaseService : IDisposable
     private readonly string _connectionString;
     private readonly string _dbPath;
     public string DbPath => _dbPath; // for readers on their own connection (PartitionOracle)
+    public bool IsClosed { get { lock (_dbLock) return _connection == null; } } // after Dispose (app exit)
     private SqliteConnection? _connection;
 
     public DatabaseService() : this(ResolveDefaultPath(AppPaths.DataDirectory))

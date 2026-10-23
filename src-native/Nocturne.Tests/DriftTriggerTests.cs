@@ -25,6 +25,7 @@ public class DriftTriggerTests : IDisposable
         });
         EmbyClient ClientFor(ServerConfig s) { var c = new EmbyClient(_fake); c.Configure(s.Url, s.AccessToken, s.UserId); return c; }
         _sync = new SyncEngine(new EmbyClient(), _db, new DedupEngine(), new TraktService(new TraktAuthService(_db)), settings, ClientFor);
+        _settingsStatus = () => settings.Current.SyncStatus;
         foreach (var host in new[] { "raptor.test", "valkyrie.test" })
             _fake.Libraries[host] = Enumerable.Range(1, 3).Select(i => new EmbyItem { Id = $"{host[0]}{i}", Name = $"Movie {i}", Type = "Movie", ProviderIds = new() { ["Tmdb"] = i.ToString() } }).ToList();
     }
@@ -37,6 +38,7 @@ public class DriftTriggerTests : IDisposable
     }
 
     private bool Measured() => _db.GetMigrationState(DedupEngine.DriftMeasuredKey) != null;
+    private Func<string?> _settingsStatus = () => null;
     private Task Sync() => _sync.RunFullSyncAsync().WaitAsync(TimeSpan.FromSeconds(60));
 
     [Fact]
@@ -67,6 +69,15 @@ public class DriftTriggerTests : IDisposable
         await Sync();
         Assert.True(Measured());
         Assert.Equal("0", _db.GetMigrationState(SyncEngine.SyncRunningKey));
+    }
+
+    // Closing the app mid-sync closes the database under it: stopped, not failed, and no drift run on a closed database.
+    [Fact]
+    public async Task ASyncWhoseDatabaseCloses_StopsQuietly()
+    {
+        _fake.Fail = uri => { if (uri.Query.Contains("Limit=1&")) _db.Dispose(); return false; }; // closes during the probe
+        await Sync();
+        Assert.NotEqual("failed", _settingsStatus());
     }
 
     [Fact]

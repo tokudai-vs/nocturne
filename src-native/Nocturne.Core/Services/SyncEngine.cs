@@ -125,7 +125,7 @@ public class SyncEngine
             _db.SetMigrationState(SyncRunningKey, "1"); // cleared below once the run completes; still set, the next run was interrupted
             _resumedFromCheckpoint = false;
             await RunFullSyncCoreAsync(ct, forceResync);
-            if (!ct.IsCancellationRequested)
+            if (!ct.IsCancellationRequested && !_db.IsClosed)
             {
                 var status = _settings.Current.SyncStatus;
                 if (status != "failed" && DeletionSweepDue()) await DeletionSweepCoreAsync(ct);
@@ -912,6 +912,12 @@ public class SyncEngine
             });
             NocturneLogger.Info("SyncEngine", $"Multi-server sync completed successfully: {totalIndexed} items indexed across {servers.Count} server(s), {multiVersionGroups} multi-version deduplicated groups.");
             SyncCompleted?.Invoke();
+        }
+        catch (Exception) when (_db.IsClosed)
+        {
+            // The app exited mid-sync and closed the database under it. Not an error; sync_running stays set, so the
+            // next launch treats the run as interrupted.
+            NocturneLogger.Info("SyncEngine", "Sync stopped: the database closed (the app is exiting).");
         }
         catch (Exception ex)
         {
