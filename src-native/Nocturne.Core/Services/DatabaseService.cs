@@ -3255,7 +3255,20 @@ public class DatabaseService : IDisposable
     // A row to fix on the server. Episodes: the episode pairs it accounts for (0 for a movie). A series row shows the
     // series' own conflicting ids when it has them (its Series rows split, or its season/episode keys, whose ids are
     // the series'); otherwise one episode pair's, as an example.
-    public sealed record ConflictRoot(string ItemType, string Title, int? Year, string Provider, string IdsA, string ServersA, string IdsB, string ServersB, int Episodes, bool SeriesIds);
+    public sealed record ConflictRoot(string ItemType, string Title, int? Year, string Provider, string IdsA, string ServersA, string IdsB, string ServersB, int Episodes, bool SeriesIds)
+    {
+        public string? TruncatedOn { get; init; } // the servers holding the shorter id, when one is a strict prefix of the other
+    }
+
+    // #23: one id a strict prefix of the other (TMDb 43 vs 43982; doubled, 568012 vs 568012568012) reads as a damaged id
+    // on the server holding the shorter one (Raptor's API returns them so). Diagnostic only: the matcher never treats a
+    // prefix as a match, as short ids are valid ids and prefix collisions across 170K titles are not rare.
+    public static string? TruncatedOn(string idsA, string serversA, string idsB, string serversB)
+    {
+        if (idsA.Contains(',') || idsB.Contains(',') || idsA.Length == idsB.Length) return null;
+        var (shortId, longId, servers) = idsA.Length < idsB.Length ? (idsA, idsB, serversA) : (idsB, idsA, serversB);
+        return longId.StartsWith(shortId, StringComparison.OrdinalIgnoreCase) ? servers : null;
+    }
 
     // #22 item 1: by root cause. Most pairs are episodes split because their series carries a conflicting id; the
     // series is what gets fixed, so a series and every episode pair under it (keyed by the series' groups on each
@@ -3264,7 +3277,8 @@ public class DatabaseService : IDisposable
     {
         var roots = new List<ConflictRoot>();
         foreach (var p in pairs.Where(p => p.ItemType == "Movie"))
-            roots.Add(new ConflictRoot("Movie", p.TitleA, p.YearA ?? p.YearB, p.Provider, p.IdsA, p.ServersA, p.IdsB, p.ServersB, 0, false));
+            roots.Add(new ConflictRoot("Movie", p.TitleA, p.YearA ?? p.YearB, p.Provider, p.IdsA, p.ServersA, p.IdsB, p.ServersB, 0, false)
+                { TruncatedOn = TruncatedOn(p.IdsA, p.ServersA, p.IdsB, p.ServersB) });
 
         (int, int) SeriesKey(ConflictPair p) => p.ItemType == "Series"
             ? (p.GroupA, p.GroupB)
@@ -3275,9 +3289,12 @@ public class DatabaseService : IDisposable
             var shown = own ?? series.First();
             var title = shown.ItemType == "Series" ? shown.TitleA : shown.Series ?? shown.TitleA;
             roots.Add(new ConflictRoot("Series", title, shown.ItemType == "Series" ? shown.YearA ?? shown.YearB : null, shown.Provider,
-                shown.IdsA, shown.ServersA, shown.IdsB, shown.ServersB, series.Count(p => p.ItemType == "Episode"), own != null));
+                shown.IdsA, shown.ServersA, shown.IdsB, shown.ServersB, series.Count(p => p.ItemType == "Episode"), own != null)
+                { TruncatedOn = TruncatedOn(shown.IdsA, shown.ServersA, shown.IdsB, shown.ServersB) });
         }
-        return roots.OrderBy(r => r.ItemType == "Movie" ? 1 : 0).ThenByDescending(r => r.Episodes).ThenBy(r => r.Title, StringComparer.OrdinalIgnoreCase).ToList();
+        // Damaged ids first: each is one re-identify on the server that holds it.
+        return roots.OrderBy(r => r.TruncatedOn == null ? 1 : 0).ThenBy(r => r.ItemType == "Movie" ? 1 : 0)
+            .ThenByDescending(r => r.Episodes).ThenBy(r => r.Title, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private static readonly string SqlRemoveSiblingWrite = Checked("DELETE FROM sibling_write_queue WHERE queue_id = $qid;");

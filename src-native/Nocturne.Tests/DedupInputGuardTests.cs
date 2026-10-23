@@ -185,6 +185,20 @@ public class DedupInputGuardTests
         }
     }
 
+    // #23: a conflicting id that is a strict prefix of the other is flagged on the server holding the short one, listed
+    // first; ids that merely differ are not.
+    [Fact]
+    public void ConflictRollUp_FlagsTruncatedIds_OnTheServerHoldingTheShortOne()
+    {
+        DatabaseService.ConflictPair Pair(string a, string b) =>
+            new(1, 2, "Movie", "Line of Duty", "Line of Duty", 2012, 2012, "tmdb:movie", a, "raptor", b, "valkyrie", null, null, null);
+
+        var roots = DatabaseService.RollUpConflicts(new[] { Pair("101", "202"), Pair("43", "43982"), Pair("568012568012", "568012") });
+
+        Assert.Equal(new string?[] { "raptor", "valkyrie", null }, roots.Select(r => r.TruncatedOn));
+        Assert.Null(DatabaseService.TruncatedOn("tt1, tt2", "raptor", "tt1", "valkyrie")); // several ids: no call
+    }
+
     // #22 item 1: episodes split because their series carries a conflicting id roll up into that series' row.
     [Fact]
     public void ConflictRollUp_MakesASeriesAndItsSplitEpisodesOneRow()

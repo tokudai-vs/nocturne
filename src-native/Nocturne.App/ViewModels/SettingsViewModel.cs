@@ -1329,14 +1329,18 @@ public class SettingsViewModel : BaseViewModel
         // #22 item 1: one row per thing to fix on the server: a series stands for every episode split under it.
         var roots = DatabaseService.RollUpConflicts(pairs);
         var series = roots.Where(r => r.ItemType == "Series").ToList();
-        var summary = $"{series.Count:N0} series with conflicting ids, {series.Sum(r => r.Episodes):N0} episodes affected; " +
-                      $"{roots.Count - series.Count:N0} movies ({pairs.Count:N0} split pairs).";
         var names = _settings.Current.Servers.ToDictionary(s => s.Id, s => s.Name);
         string Servers(string ids) => string.Join(" + ", ids.Split(',').Select(id => names.GetValueOrDefault(id, id)));
+        var truncated = roots.Where(r => r.TruncatedOn != null).ToList();
+        var summary = $"{series.Count:N0} series with conflicting ids, {series.Sum(r => r.Episodes):N0} episodes affected; " +
+                      $"{roots.Count - series.Count:N0} movies ({pairs.Count:N0} split pairs)." +
+                      (truncated.Count == 0 ? "" : $" {truncated.Count:N0} look like truncated ids, listed first: " +
+                          string.Join(", ", truncated.GroupBy(r => Servers(r.TruncatedOn!)).Select(g => $"{g.Count():N0} on {g.Key}")) + ".");
         ConflictSplits.Add(summary);
         foreach (var r in roots)
             ConflictSplits.Add($"{r.Title}{(r.Year is { } y ? $" ({y})" : "")} [{r.ItemType}{(r.Episodes > 0 ? $", {r.Episodes:N0} episode(s)" : "")}]: " +
-                               $"{(r.ItemType == "Series" && !r.SeriesIds ? "episode ids differ, e.g. " : "")}{ProviderName(r.Provider)} {r.IdsA} on {Servers(r.ServersA)}, {r.IdsB} on {Servers(r.ServersB)}");
+                               $"{(r.ItemType == "Series" && !r.SeriesIds ? "episode ids differ, e.g. " : "")}{ProviderName(r.Provider)} {r.IdsA} on {Servers(r.ServersA)}, {r.IdsB} on {Servers(r.ServersB)}" +
+                               (r.TruncatedOn is { } t ? $" (likely truncated id on {Servers(t)})" : ""));
         SyncStatusText = summary + " Fix the wrong id on the server, then rebuild.";
     }
 
