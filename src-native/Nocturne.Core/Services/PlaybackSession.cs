@@ -206,9 +206,13 @@ public sealed class PlaybackSession
 
     // Sends queued sibling writes. A row is removed only when its server accepted the write; failures stay
     // queued with an attempt count. clientFor returns null when the server is no longer configured.
-    public async Task DrainSiblingWritesAsync(Func<string, EmbyClient?> clientFor)
+    // Drains one page and returns its size. freshOnly takes only writes not yet attempted: the Trakt pull cycle drains
+    // those page by page every 15 minutes, which would otherwise spend an offline server's retries
+    // (MaxSiblingWriteAttempts) in a few hours; retries stay with the drain after each playback.
+    public async Task<int> DrainSiblingWritesAsync(Func<string, EmbyClient?> clientFor, bool freshOnly = false)
     {
-        foreach (var write in _db.GetPendingSiblingWrites(limit: 50))
+        var page = _db.GetPendingSiblingWrites(limit: 50, maxAttempts: freshOnly ? 1 : DatabaseService.MaxSiblingWriteAttempts);
+        foreach (var write in page)
         {
             var client = clientFor(write.ServerId);
             if (client == null)
@@ -222,7 +226,7 @@ public sealed class PlaybackSession
             try
             {
                 ok = write.MarkPlayed
-                    ? await client.MarkPlayedAsync(write.ItemId)
+                    ? await client.MarkPlayedAsync(write.ItemId, _db.GetUserData(write.ServerId, write.ItemId)?.LastPlayedDate)
                     : write.PositionTicks.HasValue && await client.SetPlaybackPositionAsync(write.ItemId, write.PositionTicks.Value);
             }
             catch (Exception ex)
@@ -234,6 +238,7 @@ public sealed class PlaybackSession
             if (ok) _db.RemoveSiblingWrite(write.QueueId);
             else _db.RecordSiblingWriteFailure(write.QueueId);
         }
+        return page.Count;
     }
 
     private void EnqueueOtherServerSiblings(long groupId, string? serverId, long positionTicks, bool markPlayed)

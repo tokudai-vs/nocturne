@@ -3052,7 +3052,7 @@ public class DatabaseService : IDisposable
 
     private static readonly string SqlGetPendingSiblingWrites = Checked("SELECT queue_id, server_id, item_id, position_ticks, mark_played FROM sibling_write_queue WHERE attempts < $max_attempts ORDER BY queued_utc ASC LIMIT $limit;");
 
-    public List<(int QueueId, string ServerId, string ItemId, long? PositionTicks, bool MarkPlayed)> GetPendingSiblingWrites(int limit = 50)
+    public List<(int QueueId, string ServerId, string ItemId, long? PositionTicks, bool MarkPlayed)> GetPendingSiblingWrites(int limit = 50, int maxAttempts = MaxSiblingWriteAttempts)
     {
         var list = new List<(int, string, string, long?, bool)>();
         lock (_dbLock)
@@ -3060,7 +3060,7 @@ public class DatabaseService : IDisposable
             if (_connection == null) return list;
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlGetPendingSiblingWrites;
-            cmd.Parameters.AddWithValue("$max_attempts", MaxSiblingWriteAttempts);
+            cmd.Parameters.AddWithValue("$max_attempts", maxAttempts);
             cmd.Parameters.AddWithValue("$limit", limit);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())

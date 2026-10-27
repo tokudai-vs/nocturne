@@ -58,30 +58,30 @@ public class TraktSyncService : ITraktSyncService
             bool needWatchlist = string.IsNullOrEmpty(storedWatchlistUpdated) ||
                                  string.Compare(activities.Watchlist.UpdatedAt, storedWatchlistUpdated, StringComparison.Ordinal) > 0;
 
+            // A stored timestamp advances only when its pull succeeded; a failed GET is retried next cycle.
+            var ok = true;
             if (needMovies)
             {
                 NocturneLogger.Info("TraktSyncService", "Pulling updated watched movies from Trakt...");
-                await PullWatchedMoviesInternalAsync(token, clientId, ct);
-                if (!string.IsNullOrEmpty(activities.Movies.WatchedAt))
-                    _db.SetIntegrationState("trakt", "last_movies_watched_at", activities.Movies.WatchedAt);
+                if (await PullWatchedMoviesInternalAsync(token, clientId, ct)) Advance("last_movies_watched_at", activities.Movies.WatchedAt);
+                else ok = false;
             }
 
             if (needEpisodes)
             {
                 NocturneLogger.Info("TraktSyncService", "Pulling updated watched episodes from Trakt...");
-                await PullWatchedShowsInternalAsync(token, clientId, ct);
-                if (!string.IsNullOrEmpty(activities.Episodes.WatchedAt))
-                    _db.SetIntegrationState("trakt", "last_episodes_watched_at", activities.Episodes.WatchedAt);
+                if (await PullWatchedShowsInternalAsync(token, clientId, ct)) Advance("last_episodes_watched_at", activities.Episodes.WatchedAt);
+                else ok = false;
             }
 
             if (needWatchlist)
             {
                 NocturneLogger.Info("TraktSyncService", "Pulling updated watchlist from Trakt...");
-                await PullWatchlistInternalAsync(token, clientId, ct);
-                if (!string.IsNullOrEmpty(activities.Watchlist.UpdatedAt))
-                    _db.SetIntegrationState("trakt", "last_watchlist_updated_at", activities.Watchlist.UpdatedAt);
+                if (await PullWatchlistInternalAsync(token, clientId, ct)) Advance("last_watchlist_updated_at", activities.Watchlist.UpdatedAt);
+                else ok = false;
             }
 
+            if (!ok) return;
             _lastPullTime = DateTime.UtcNow;
             _db.SetIntegrationState("trakt", "last_pull_utc", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
         }
@@ -138,6 +138,11 @@ public class TraktSyncService : ITraktSyncService
         NocturneLogger.Info("TraktSyncService", "Full Trakt reconcile complete.");
     }
 
+    private void Advance(string key, string value)
+    {
+        if (!string.IsNullOrEmpty(value)) _db.SetIntegrationState("trakt", key, value);
+    }
+
     private async Task<TraktLastActivitiesDto?> FetchLastActivitiesAsync(string token, string clientId, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, "/sync/last_activities");
@@ -149,20 +154,21 @@ public class TraktSyncService : ITraktSyncService
         {
             return await resp.Content.ReadFromJsonAsync<TraktLastActivitiesDto>(cancellationToken: ct);
         }
+        Fail("last_activities", resp);
         return null;
     }
 
-    private async Task PullWatchedMoviesInternalAsync(string token, string clientId, CancellationToken ct)
+    private async Task<bool> PullWatchedMoviesInternalAsync(string token, string clientId, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, "/sync/watched/movies?extended=noseasons");
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         req.Headers.Add("trakt-api-key", clientId);
 
         using var resp = await _http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode) return;
+        if (!resp.IsSuccessStatusCode) return Fail("watched movies", resp);
 
         var movies = await resp.Content.ReadFromJsonAsync<List<TraktWatchedMovieDto>>(cancellationToken: ct);
-        if (movies == null) return;
+        if (movies == null) return false;
 
         foreach (var m in movies)
         {
@@ -183,19 +189,20 @@ public class TraktSyncService : ITraktSyncService
 
             ApplyWatchedStateToGroup(gid.Value, watchedAtSec);
         }
+        return !ct.IsCancellationRequested;
     }
 
-    private async Task PullWatchedShowsInternalAsync(string token, string clientId, CancellationToken ct)
+    private async Task<bool> PullWatchedShowsInternalAsync(string token, string clientId, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, "/sync/watched/shows");
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         req.Headers.Add("trakt-api-key", clientId);
 
         using var resp = await _http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode) return;
+        if (!resp.IsSuccessStatusCode) return Fail("watched shows", resp);
 
         var shows = await resp.Content.ReadFromJsonAsync<List<TraktWatchedShowDto>>(cancellationToken: ct);
-        if (shows == null) return;
+        if (shows == null) return false;
 
         foreach (var show in shows)
         {
@@ -233,10 +240,12 @@ public class TraktSyncService : ITraktSyncService
                 }
             }
         }
+        return !ct.IsCancellationRequested;
     }
 
-    private async Task PullWatchlistInternalAsync(string token, string clientId, CancellationToken ct)
+    private async Task<bool> PullWatchlistInternalAsync(string token, string clientId, CancellationToken ct)
     {
+        var ok = true;
         // 1. Movies watchlist
         using (var reqM = new HttpRequestMessage(HttpMethod.Get, "/sync/watchlist/movies"))
         {
@@ -261,6 +270,7 @@ public class TraktSyncService : ITraktSyncService
                     }
                 }
             }
+            else ok = Fail("watchlist movies", respM);
         }
 
         // 2. Shows watchlist
@@ -287,7 +297,15 @@ public class TraktSyncService : ITraktSyncService
                     }
                 }
             }
+            else ok = Fail("watchlist shows", respS);
         }
+        return ok;
+    }
+
+    private static bool Fail(string what, HttpResponseMessage resp)
+    {
+        NocturneLogger.Warn("TraktSyncService", $"Trakt {what} pull failed: HTTP {(int)resp.StatusCode}");
+        return false;
     }
 
     private void ApplyWatchedStateToGroup(int groupId, long watchedAtSec)
@@ -304,8 +322,8 @@ public class TraktSyncService : ITraktSyncService
         foreach (var (srv, id) in items)
         {
             var existing = _db.GetUserData(srv, id);
-            // Idempotence check (§8.2 step 3)
-            if (existing != null && existing.Played && existing.LastPlayedDate.HasValue)
+            // Idempotence (§8.2 step 3): anything at or after Trakt's watch, played or a later partial play, wins.
+            if (existing?.LastPlayedDate != null)
             {
                 long existingSec = ((DateTimeOffset)existing.LastPlayedDate.Value).ToUnixTimeSeconds();
                 if (watchedAtSec <= existingSec)

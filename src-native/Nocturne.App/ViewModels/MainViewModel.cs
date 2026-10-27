@@ -24,6 +24,7 @@ public class MainViewModel : BaseViewModel
     private readonly ITmdbEnrichmentService _tmdbEnrichment;
     private readonly TraktQueueDrainWorker _traktDrain;
     private readonly ITraktAuthService _traktAuth;
+    private TraktPullScheduler? _traktPull;
     private readonly PlaybackSession _session;
 
     private BaseViewModel _currentViewModel;
@@ -943,7 +944,7 @@ public class MainViewModel : BaseViewModel
     }
 
     // I5: refresh the Trakt token at startup (it was only refreshed before a queue drain, so an expired token
-    // stayed "connected" until the first scrobble), then pull watched state.
+    // stayed "connected" until the first scrobble), then start the watched pull: now, after Connect, every 15 minutes.
     private async Task StartTraktAsync()
     {
         try
@@ -957,7 +958,9 @@ public class MainViewModel : BaseViewModel
                 NocturneLogger.Info("MainViewModel", "Moved the Trakt Client ID from the legacy settings field to the Trakt auth service.");
             }
             await _traktAuth.RefreshIfNeededAsync(System.Threading.CancellationToken.None);
-            await _traktSync.PullWatchedAsync(System.Threading.CancellationToken.None);
+            _traktPull = new TraktPullScheduler(_traktSync, _traktAuth, () => IsPlayerActive,
+                () => _session.DrainSiblingWritesAsync(SiblingClient, freshOnly: true));
+            _traktPull.Start();
         }
         catch (Exception ex)
         {
@@ -1374,15 +1377,17 @@ public class MainViewModel : BaseViewModel
         catch { }
     }
 
+    private EmbyClient? SiblingClient(string serverId)
+    {
+        var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == serverId);
+        return srv == null ? null : EmbyClient.CreateForServer(srv);
+    }
+
     private async Task DrainSiblingWriteQueueAsync()
     {
         try
         {
-            await _session.DrainSiblingWritesAsync(serverId =>
-            {
-                var srv = _settings.Current.Servers.FirstOrDefault(s => s.Id == serverId);
-                return srv == null ? null : EmbyClient.CreateForServer(srv);
-            });
+            await _session.DrainSiblingWritesAsync(SiblingClient);
         }
         catch (Exception ex)
         {

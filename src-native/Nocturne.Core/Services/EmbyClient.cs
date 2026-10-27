@@ -784,12 +784,14 @@ public class EmbyClient
         return new List<EmbyItem>();
     }
 
-    public async Task<bool> MarkPlayedAsync(string itemId)
+    // datePlayed: when it was watched (D8: a Trakt watch keeps Trakt's time); without it Emby stamps now.
+    public async Task<bool> MarkPlayedAsync(string itemId, DateTime? datePlayed = null)
     {
         if (!IsAuthenticated) return false;
         try
         {
-            var resp = await _http.PostAsync(BuildUrl($"/Users/{_userId}/PlayedItems/{itemId}"), null);
+            var query = datePlayed is { } d ? $"?DatePlayed={d.ToUniversalTime():yyyyMMddHHmmss}" : "";
+            var resp = await _http.PostAsync(BuildUrl($"/Users/{_userId}/PlayedItems/{itemId}{query}"), null);
             return resp.IsSuccessStatusCode;
         }
         catch (Exception ex)

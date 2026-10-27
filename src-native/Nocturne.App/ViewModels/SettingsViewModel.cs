@@ -651,6 +651,8 @@ public class SettingsViewModel : BaseViewModel
             var sizeBytes = _db.GetDatabaseSize();
             DatabaseSizeText = FormatBytes(sizeBytes);
             RefreshDriftText();
+            OnPropertyChanged(nameof(TraktQueueDepth));
+            OnPropertyChanged(nameof(TraktLastPullText));
         }
         catch { }
     }
@@ -1525,6 +1527,9 @@ public class SettingsViewModel : BaseViewModel
     public string TraktStateText => _traktAuth.State.ToString();
     public string? TraktUsername => _traktAuth.Username ?? _settings.Current.TraktUsername;
     public int TraktQueueDepth => _traktDrain.PendingQueueDepth;
+    // Spec §14: the last successful watched pull; TraktSyncService records it only when every part of the pull worked.
+    public string TraktLastPullText => long.TryParse(_db.GetIntegrationState("trakt", "last_pull_utc"), out var t)
+        ? DateTimeOffset.FromUnixTimeSeconds(t).LocalDateTime.ToString("g") : "never";
 
     public string? TraktAuthCode
     {

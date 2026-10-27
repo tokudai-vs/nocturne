@@ -143,18 +143,7 @@ public class TraktWiringTests : IDisposable
     [InlineData(true)]
     public async Task PulledWatchedState_MarksTheWholeGroup_OnlyWithTheCascadeOn(bool cascadeOn)
     {
-        var a = new EmbyItem { Id = "arr_a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
-        var b = new EmbyItem { Id = "arr_b", ServerId = "s2", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
-        _db.UpsertItem(a, "s1");
-        _db.UpsertItem(b, "s2");
-        var index = new ConcurrentDedupIndex();
-        index.SetServerPriority(new List<string> { "s1", "s2" });
-        index.ProcessBatch(new List<EmbyItem> { a, b }, _db);
-        if (cascadeOn)
-        {
-            _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
-            FeatureFlags.MeasureCascadeGate(_db);
-        }
+        ArrivalOnTwoServers(cascadeOn);
 
         SeedConnected("c1", expiresInSec: 30 * 86400);
         var trakt = new Trakt
@@ -172,5 +161,140 @@ public class TraktWiringTests : IDisposable
 
         Assert.True(_db.GetUserData("s1", "arr_a")?.Played);
         Assert.Equal(cascadeOn, _db.GetUserData("s2", "arr_b")?.Played == true);
+    }
+
+    private void ArrivalOnTwoServers(bool cascadeOn)
+    {
+        var a = new EmbyItem { Id = "arr_a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
+        var b = new EmbyItem { Id = "arr_b", ServerId = "s2", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };
+        _db.UpsertItem(a, "s1");
+        _db.UpsertItem(b, "s2");
+        var index = new ConcurrentDedupIndex();
+        index.SetServerPriority(new List<string> { "s1", "s2" });
+        index.ProcessBatch(new List<EmbyItem> { a, b }, _db);
+        if (cascadeOn)
+        {
+            _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+            FeatureFlags.MeasureCascadeGate(_db);
+        }
+    }
+
+    private const string Activities = "{\"movies\":{\"watched_at\":\"2026-10-21T05:00:00.000Z\"},\"episodes\":{\"watched_at\":\"2026-10-01T00:00:00.000Z\"},\"watchlist\":{\"updated_at\":\"2026-10-01T00:00:00.000Z\"}}";
+    private const string ArrivalWatched = "[{\"plays\":1,\"last_watched_at\":\"2026-10-21T05:00:00.000Z\",\"movie\":{\"title\":\"Arrival\",\"year\":2016,\"ids\":{\"trakt\":1,\"tmdb\":329865}}}]";
+
+    private sealed class Emby : HttpMessageHandler
+    {
+        public readonly List<string> Posts = new(); // host + path and query
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            lock (Posts) if (request.Method == HttpMethod.Post) Posts.Add(request.RequestUri!.Host + request.RequestUri.PathAndQuery);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+        }
+    }
+
+    // T6 gate (the loop test): a watch marked on trakt.tv lands in Nocturne and on both servers within one cycle,
+    // with Trakt's timestamp (D8), and nothing goes back to Trakt: no queued event, and the next cycle is one request.
+    [Fact]
+    public async Task AWatchMarkedOnTrakt_ReachesBothServersInOneCycle_AndNothingGoesBack()
+    {
+        ArrivalOnTwoServers(cascadeOn: true);
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var trakt = new Trakt
+        {
+            Route = path => path switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, Activities),
+                "/sync/watched/movies" => Json(HttpStatusCode.OK, ArrivalWatched),
+                _ => null
+            }
+        };
+        var auth = new TraktAuthService(_db, Client(trakt));
+        var emby = new Emby();
+        EmbyClient ClientFor(string sid) { var c = new EmbyClient(emby); c.Configure($"http://{sid}.test", "tok", "u"); return c; }
+        var playing = false;
+        using var cycle = new TraktPullScheduler(new TraktSyncService(_db, auth, Client(trakt)), auth, () => playing,
+            () => new PlaybackSession(_db).DrainSiblingWritesAsync(ClientFor, freshOnly: true));
+
+        Assert.True(await cycle.PullAsync());
+
+        var watchedAt = new DateTime(2026, 10, 21, 5, 0, 0, DateTimeKind.Utc);
+        foreach (var (srv, id) in new[] { ("s1", "arr_a"), ("s2", "arr_b") })
+        {
+            Assert.True(_db.GetUserData(srv, id)!.Played);
+            Assert.Equal(watchedAt, _db.GetUserData(srv, id)!.LastPlayedDate);
+            Assert.Equal(Origin.Trakt, _db.GetUserDataOrigin(srv, id));
+        }
+        Assert.Equal(new[] { "s1.test/emby/Users/u/PlayedItems/arr_a?DatePlayed=20261021050000", "s2.test/emby/Users/u/PlayedItems/arr_b?DatePlayed=20261021050000" },
+            emby.Posts.OrderBy(p => p));
+        Assert.Empty(_db.GetPendingSiblingWrites(10));
+        Assert.Equal(0, _db.GetTraktQueueCount());
+        Assert.DoesNotContain(trakt.Requests, r => r.Method != "GET");
+
+        trakt.Requests.Clear();
+        Assert.True(await cycle.PullAsync());
+        Assert.Equal("/sync/last_activities", Assert.Single(trakt.Requests).Path);
+        Assert.Equal(2, emby.Posts.Count);
+
+        playing = true; // §8.3: paused during playback
+        trakt.Requests.Clear();
+        Assert.False(await cycle.PullAsync());
+        Assert.Empty(trakt.Requests);
+    }
+
+    // A failed watched GET leaves the stored timestamp, so the next cycle fetches it again instead of losing it.
+    [Fact]
+    public async Task AFailedWatchedPull_IsRetriedNextCycle()
+    {
+        ArrivalOnTwoServers(cascadeOn: true);
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var down = true;
+        var trakt = new Trakt
+        {
+            Route = path => path switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, Activities),
+                "/sync/watched/movies" => down ? Json(HttpStatusCode.BadGateway, "{}") : Json(HttpStatusCode.OK, ArrivalWatched),
+                _ => null
+            }
+        };
+        var auth = new TraktAuthService(_db, Client(trakt));
+        var sync = new TraktSyncService(_db, auth, Client(trakt));
+
+        await sync.PullWatchedAsync(CancellationToken.None);
+        Assert.Null(_db.GetIntegrationState("trakt", "last_movies_watched_at"));
+        Assert.Null(_db.GetIntegrationState("trakt", "last_pull_utc"));
+        Assert.NotNull(_db.GetIntegrationState("trakt", "last_episodes_watched_at")); // the parts that worked advance
+
+        down = false;
+        await sync.PullWatchedAsync(CancellationToken.None);
+        Assert.Equal("2026-10-21T05:00:00.000Z", _db.GetIntegrationState("trakt", "last_movies_watched_at"));
+        Assert.True(_db.GetUserData("s2", "arr_b")!.Played);
+    }
+
+    // §8.2 step 3: a later local play, finished or not, is newer than Trakt's watch and is kept.
+    [Fact]
+    public async Task ALaterPartialPlay_IsNotOverwrittenByAnOlderTraktWatch()
+    {
+        ArrivalOnTwoServers(cascadeOn: true);
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var later = new DateTimeOffset(2026, 10, 22, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+        _db.UpdateUserDataState("s1", "arr_a", positionTicks: 600 * 10_000_000L, runtimeTicks: null, played: false, lastPlayedUtc: later, origin: Origin.Local);
+        var trakt = new Trakt
+        {
+            Route = path => path switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, Activities),
+                "/sync/watched/movies" => Json(HttpStatusCode.OK, ArrivalWatched),
+                _ => null
+            }
+        };
+        var auth = new TraktAuthService(_db, Client(trakt));
+
+        await new TraktSyncService(_db, auth, Client(trakt)).PullWatchedAsync(CancellationToken.None);
+
+        Assert.False(_db.GetUserData("s1", "arr_a")!.Played);
+        Assert.Equal(Origin.Local, _db.GetUserDataOrigin("s1", "arr_a"));
+        Assert.True(_db.GetUserData("s2", "arr_b")!.Played);
+        Assert.Equal(new[] { "s2" }, _db.GetPendingSiblingWrites(10).Select(w => w.ServerId));
     }
 }

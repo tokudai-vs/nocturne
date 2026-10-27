@@ -264,6 +264,23 @@ public class PlaybackSessionTests : IDisposable
         Assert.Empty(_db.GetPendingSiblingWrites(10));
     }
 
+    // #24 (T6): the 15-minute Trakt cycle drains only writes not yet attempted, so an offline server does not spend a
+    // write's retries in a few hours; a failed write waits for the drain after a playback.
+    [Fact]
+    public async Task FreshOnlyDrain_LeavesRetriesToThePlaybackDrain()
+    {
+        _db.EnqueueSiblingPlaybackWrite("raptor", "r1", 0, markPlayed: true, Origin.Local);
+        var failing = new RecordingHandler { Status = HttpStatusCode.InternalServerError };
+        var raptor = new EmbyClient(failing);
+        raptor.Configure("http://raptor.test", "token", "user2");
+        Assert.Equal(1, await NewSession().DrainSiblingWritesAsync(_ => raptor, freshOnly: true));
+
+        Assert.Equal(0, await NewSession().DrainSiblingWritesAsync(_ => raptor, freshOnly: true));
+        Assert.Single(failing.Requests);
+        await NewSession().DrainSiblingWritesAsync(_ => raptor);
+        Assert.Equal(2, failing.Requests.Count);
+    }
+
     // Item 4 (#19): a sibling server is not streaming, so its resume position goes through the user-data endpoint;
     // a Sessions/Playing report there would open a session nothing ends.
     [Fact]
