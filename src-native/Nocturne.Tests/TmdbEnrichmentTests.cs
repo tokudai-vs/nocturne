@@ -38,12 +38,20 @@ public class TmdbEnrichmentTests : IDisposable
     {
         public readonly List<string> Paths = new();
         public Func<string, HttpResponseMessage?> Route { get; set; } = _ => null;
+        public int DelayMs { get; set; }
+        public int MaxInFlight { get; private set; }
+        private int _inFlight;
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             var path = request.RequestUri!.AbsolutePath;
-            lock (Paths) Paths.Add(path);
-            return Task.FromResult(Route(path) ?? new HttpResponseMessage(HttpStatusCode.NotFound));
+            lock (Paths) { Paths.Add(path); MaxInFlight = Math.Max(MaxInFlight, ++_inFlight); }
+            try
+            {
+                if (DelayMs > 0) await Task.Delay(DelayMs, ct);
+                return Route(path) ?? new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+            finally { lock (Paths) _inFlight--; }
         }
     }
 
@@ -110,6 +118,81 @@ public class TmdbEnrichmentTests : IDisposable
         Assert.Equal(1, service.PendingCount);
         await Run(service);
         Assert.Equal(2, _tmdb.Paths.Count);
+    }
+
+    private EmbyItem[] FortyMovies() => Enumerable.Range(1, 40).Select(i => Movie($"m{i}", "a", $"Movie {i}", (1000 + i).ToString())).ToArray();
+    private static HttpResponseMessage? Poster(string path) =>
+        path.StartsWith("/3/movie/") ? Json($"{{\"poster_path\":\"/{path.Split('/').Last()}.jpg\"}}") : null;
+
+    // M2 gate, cold pass: every title fetched, in parallel, never faster than the 20 req/s budget (20 at once, then 20/s).
+    [Fact]
+    public async Task AColdLibrary_Completes_InParallel_Within20RequestsASecond()
+    {
+        Index(FortyMovies());
+        (_tmdb.Route, _tmdb.DelayMs) = (Poster, 30);
+        var service = Service();
+
+        var clock = Stopwatch.StartNew();
+        await Run(service);
+
+        Assert.Equal(40, _tmdb.Paths.Distinct().Count());
+        Assert.Equal(0, service.PendingCount);
+        Assert.True(clock.Elapsed >= TimeSpan.FromSeconds(0.9), $"40 requests took {clock.Elapsed.TotalSeconds:F2}s");
+        Assert.True(_tmdb.MaxInFlight > 1, "fetchers ran one at a time");
+    }
+
+    // M2 gate, network loss: the pass stops, the library stays usable, and the next pass asks only for what is missing.
+    [Fact]
+    public async Task APassCutByNetworkLoss_LeavesTheLibraryUsable_AndResumes()
+    {
+        Index(FortyMovies());
+        var (answered, down) = (0, true);
+        _tmdb.Route = path =>
+        {
+            if (down && Interlocked.Increment(ref answered) > 15) throw new HttpRequestException("No such host is known.");
+            return Poster(path);
+        };
+        var service = Service();
+
+        await Run(service);
+        var first = _tmdb.Paths.ToList();
+        Assert.True(first.Count < 40, "the pass kept going with TMDB unreachable");
+        Assert.Equal(15, 40 - service.PendingCount);
+        var library = _db.GetCombinedLibraryItems(new[] { "lib" });
+        Assert.Equal(40, library.Count);
+        Assert.Equal(15, library.Count(i => Artwork.Poster(i, Servers, 320)?.StartsWith(Artwork.TmdbImageBase) == true));
+
+        down = false;
+        _tmdb.Paths.Clear();
+        await Run(service);
+        Assert.Equal(0, service.PendingCount);
+        Assert.Equal(25, _tmdb.Paths.Count);                                    // only what was missing
+        Assert.Empty(_tmdb.Paths.Intersect(first.Take(15)));
+    }
+
+    // M3 gate: one /season call populates a whole season: 20 episodes, one request. An episode TMDB's season does not
+    // list is not_found. Stills come at w300 (§10.7).
+    [Fact]
+    public async Task OneSeasonCall_FillsEveryEpisodeOfTheSeason()
+    {
+        var episodes = Enumerable.Range(1, 21).Select(n => new EmbyItem
+        {
+            Id = $"e{n}", ServerId = "a", Name = $"Episode {n}", Type = "Episode", SeriesName = "Breaking Bad", SeriesId = "bb",
+            ParentIndexNumber = 1, IndexNumber = n, SeriesProviderIds = new() { ["Tmdb"] = "1396" },
+        }).ToArray();
+        Index(episodes);
+        var listed = string.Join(",", Enumerable.Range(1, 20).Select(n => $"{{\"episode_number\":{n},\"still_path\":\"/s{n}.jpg\"}}"));
+        _tmdb.Route = path => path == "/3/tv/1396/season/1" ? Json($"{{\"episodes\":[{listed}]}}") : null;
+        var service = Service();
+
+        await Run(service);
+
+        Assert.Equal(new[] { "/3/tv/1396/season/1" }, _tmdb.Paths);
+        var cards = episodes.Select(e => new EmbyItem { Id = e.Id, ServerId = "a", Name = e.Name, Type = "Episode" }).ToList();
+        _db.AttachGroupArtwork(cards);
+        Assert.Equal("https://image.tmdb.org/t/p/w300/s7.jpg", Artwork.Poster(cards[6], Servers, 320));
+        Assert.Equal(20, cards.Count(c => Artwork.Poster(c, Servers, 320) != null));
+        Assert.Equal((0, 1), (service.PendingCount, service.NotFoundCount));
     }
 
     private class MockTmdbHandler : HttpMessageHandler

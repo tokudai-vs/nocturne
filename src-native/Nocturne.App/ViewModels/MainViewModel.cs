@@ -129,11 +129,8 @@ public class MainViewModel : BaseViewModel
         SearchVM.NavigateToDetail += item => NavigateToDetail(item);
         DetailVM.NavigateBack += () => CurrentViewModel = HomeVM;
 
-        // Wire TMDB fallback enrichment trigger on sync complete (D12)
-        _sync.SyncCompleted += () =>
-        {
-            _ = _tmdbEnrichment.RunAsync(new Progress<EnrichProgress>(), System.Threading.CancellationToken.None);
-        };
+        // TMDB fallback enrichment runs when a sync completes (D12)
+        _sync.SyncCompleted += StartEnrichment;
 
         // Wire playback requests to embedded player
         HomeVM.PlayRequested += item => _ = StartPlaybackAsync(item, item.UserData?.PlaybackPositionTicks ?? 0);
@@ -609,7 +606,12 @@ public class MainViewModel : BaseViewModel
     public bool IsSyncing
     {
         get => _isSyncing;
-        set => SetProperty(ref _isSyncing, value);
+        set
+        {
+            if (!SetProperty(ref _isSyncing, value)) return;
+            if (value) PauseEnrichment();
+            else if (_enrichmentDeferred) StartEnrichment();
+        }
     }
 
     public string HeaderSyncStatusText
@@ -667,7 +669,43 @@ public class MainViewModel : BaseViewModel
     public bool IsPlayerActive
     {
         get => _isPlayerActive;
-        set => SetProperty(ref _isPlayerActive, value);
+        set
+        {
+            if (!SetProperty(ref _isPlayerActive, value)) return;
+            if (value) PauseEnrichment();
+            else if (_enrichmentDeferred) StartEnrichment();
+        }
+    }
+
+    // D12: TMDB enrichment runs after a sync completes, never alongside a sync or during playback. A pass stopped by
+    // playback resumes when playback ends; one stopped by a sync waits for that sync to complete. A pass picks up
+    // whatever is still missing, so stopping one loses nothing done.
+    private readonly object _enrichmentLock = new();
+    private System.Threading.CancellationTokenSource? _enrichmentStop;
+    private Task _enrichmentPass = Task.CompletedTask;
+    private bool _enrichmentDeferred;
+
+    private void StartEnrichment()
+    {
+        lock (_enrichmentLock)
+        {
+            _enrichmentDeferred = _isPlayerActive || _isSyncing;
+            if (_enrichmentDeferred) return;
+            _enrichmentStop?.Cancel();
+            _enrichmentStop = new System.Threading.CancellationTokenSource();
+            var token = _enrichmentStop.Token; // off the caller: SyncCompleted fires inside the dedup writer gate
+            _enrichmentPass = Task.Run(() => _tmdbEnrichment.RunAsync(new Progress<EnrichProgress>(), token));
+        }
+    }
+
+    private void PauseEnrichment()
+    {
+        lock (_enrichmentLock)
+        {
+            if (_enrichmentPass.IsCompleted) return;
+            _enrichmentStop?.Cancel();
+            _enrichmentDeferred = true;
+        }
     }
 
     public string PlayerTitle

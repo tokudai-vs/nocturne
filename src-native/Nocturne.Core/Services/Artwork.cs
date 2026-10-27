@@ -18,7 +18,7 @@ public static class Artwork
             ? (item.ImageServerId, item.ImageItemId, item.ElectedImageTag)
             : (item.ServerId, item.Id, item.ImageTag);
         return Url(servers, server, itemId, "Primary", tag, width)
-               ?? Tmdb(item.TmdbPosterPath, width <= 342 ? "w342" : "w780");
+               ?? Tmdb(item.TmdbPosterPath, IsEpisode(item) ? "w300" : width <= 342 ? "w342" : "w780"); // §10.7: stills come in w300
     }
 
     public static string? Backdrop(EmbyItem item, IReadOnlyList<ServerConfig> servers, int width)
@@ -43,6 +43,8 @@ public static class Artwork
         var server = servers.FirstOrDefault(s => s.Id == serverId);
         return server == null || string.IsNullOrEmpty(server.Url) ? null : EmbyClient.ImageUrl(server.Url, server.AccessToken, itemId, type, width, tag);
     }
+
+    private static bool IsEpisode(EmbyItem item) => string.Equals(item.Type, "Episode", StringComparison.OrdinalIgnoreCase);
 
     private static string? Tmdb(string? path, string size) => string.IsNullOrEmpty(path) ? null : $"{TmdbImageBase}{size}{path}";
 }

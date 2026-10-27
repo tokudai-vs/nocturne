@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -67,199 +68,140 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
     {
         var cached = _db.GetTmdbMetadata(providerKey);
         if (cached != null) return cached;
-
-        // If not cached, attempt single fetch if key is authoritative TMDB key
-        var m = Regex.Match(providerKey, @"^tmdb:(movie|tv):(\d+)$", RegexOptions.IgnoreCase);
-        if (m.Success)
-        {
-            string type = m.Groups[1].Value.ToLowerInvariant();
-            int id = int.Parse(m.Groups[2].Value);
-            return await FetchTitleMetadataAsync(providerKey, type, id, ct);
-        }
-
-        return null;
+        return TitleKey.IsMatch(providerKey) ? await FetchTitleAsync(providerKey, ct) : null;
     }
 
+    // Group keys as ConcurrentDedupIndex writes them: 'tmdb:movie:550', 'tmdb:tv:1396', 'tmdb:tv:1396:s01e01'.
+    private static readonly Regex TitleKey = new(@"^tmdb:(movie|tv):(\d+)$", RegexOptions.IgnoreCase);
+    private static readonly Regex EpisodeKey = new(@"^tmdb:tv:(\d+):s(\d+)e(\d+)$", RegexOptions.IgnoreCase);
+    private const int Fetchers = 4;                // enough in flight to use the 20 req/s budget at TMDB's latency
+    private const int TransportFailuresToStop = 10; // TMDB unreachable: stop the pass; the next one resumes
+    private readonly SemaphoreSlim _pass = new(1, 1);
+
+    // §10.6, D12: called when a sync completes (and from Settings). Everything still eligible (§10.2) is fetched:
+    // titles one request per group key, episodes one /season request per season (§10.3, M3). Results are written as
+    // each unit completes, so a pass stopped by cancellation (playback, a new sync) or network loss loses nothing
+    // done, and the next pass picks up what is still missing. One pass at a time; a second waits for the first.
+    // ponytail: the eligible set is held in memory (~30 MB at 370K episodes); page it if libraries grow tenfold.
     public async Task RunAsync(IProgress<EnrichProgress> progress, CancellationToken ct)
     {
-        var apiKey = GetActiveApiKey();
-        if (string.IsNullOrWhiteSpace(apiKey))
+        if (string.IsNullOrWhiteSpace(GetActiveApiKey()))
         {
             NocturneLogger.Info("TmdbEnrichmentService", "TMDB enrichment skipped: No TMDB API key configured.");
             return;
         }
+        try { await _pass.WaitAsync(ct); }
+        catch (OperationCanceledException) { return; }
 
-        NocturneLogger.Info("TmdbEnrichmentService", "Starting TMDB fallback enrichment pass...");
-
-        var candidates = _db.GetGroupsNeedingTmdbArt(2000);
-        int total = candidates.Count;
-        int processed = 0;
-        int enriched = 0;
-        int notFound = 0;
-
-        if (total == 0)
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        int processed = 0, enriched = 0, notFound = 0, transportFailures = 0, total = 0;
+        try
         {
-            progress.Report(new EnrichProgress(0, 0, 0, 0, "All artwork up to date."));
+            var titles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seasons = new Dictionary<(int Show, int Season), List<(string Key, int Episode)>>();
+            foreach (var g in _db.GetGroupsNeedingTmdbArt(int.MaxValue))
+            {
+                if (EpisodeKey.Match(g.TmdbKey) is { Success: true } e)
+                {
+                    var season = (int.Parse(e.Groups[1].Value), int.Parse(e.Groups[2].Value));
+                    if (!seasons.TryGetValue(season, out var eps)) seasons[season] = eps = new();
+                    eps.Add((g.TmdbKey, int.Parse(e.Groups[3].Value)));
+                }
+                else if (TitleKey.IsMatch(g.TmdbKey)) titles.Add(g.TmdbKey);
+            }
+            total = titles.Count + seasons.Count;
+            if (total == 0)
+            {
+                progress.Report(new EnrichProgress(0, 0, 0, 0, "All artwork up to date."));
+                return;
+            }
+            NocturneLogger.Info("TmdbEnrichmentService", $"TMDB enrichment: {titles.Count} title(s), {seasons.Count} season(s) to fetch.");
+
+            async Task Unit(string label, Func<CancellationToken, Task<(int Found, int Missing)?>> fetch, CancellationToken token)
+            {
+                try
+                {
+                    if (await fetch(token) is { } r) { Interlocked.Add(ref enriched, r.Found); Interlocked.Add(ref notFound, r.Missing); }
+                    Interlocked.Exchange(ref transportFailures, 0);
+                }
+                catch (HttpRequestException) { Fail(); }
+                catch (TaskCanceledException) when (!token.IsCancellationRequested) { Fail(); } // HttpClient timeout
+                progress.Report(new EnrichProgress(total, Interlocked.Increment(ref processed), enriched, notFound, label));
+            }
+            void Fail()
+            {
+                if (Interlocked.Increment(ref transportFailures) == TransportFailuresToStop) stop.Cancel();
+            }
+
+            var options = new ParallelOptions { MaxDegreeOfParallelism = Fetchers, CancellationToken = stop.Token };
+            await Parallel.ForEachAsync(titles, options, (key, token) =>
+                new ValueTask(Unit(key, async t => await FetchTitleAsync(key, t) is { } m ? (m.NotFound ? (0, 1) : (1, 0)) : null, token)));
+            await Parallel.ForEachAsync(seasons, options, (season, token) =>
+                new ValueTask(Unit($"tmdb:tv:{season.Key.Show} season {season.Key.Season}", t => FetchSeasonAsync(season.Key.Show, season.Key.Season, season.Value, t), token)));
+        }
+        catch (OperationCanceledException)
+        {
+            NocturneLogger.Info("TmdbEnrichmentService", transportFailures >= TransportFailuresToStop
+                ? $"TMDB unreachable; enrichment stopped after {processed}/{total}. The next pass resumes."
+                : $"TMDB enrichment paused after {processed}/{total}. The next pass resumes.");
             return;
         }
-
-        // Season-level batching cache for episodes (§10.3)
-        // Key: (SeriesTmdbId, SeasonNumber) -> Json Document with all episode stills
-        var seasonCache = new Dictionary<(int SeriesId, int SeasonNum), List<TmdbEpisodeDto>>();
-
-        foreach (var item in candidates)
+        finally
         {
-            if (ct.IsCancellationRequested) break;
-
-            processed++;
-            string title = item.Title ?? "Unknown Title";
-            progress.Report(new EnrichProgress(total, processed, enriched, notFound, title));
-
-            try
-            {
-                // Check if this is an episode needing a still
-                if (string.Equals(item.ItemType, "Episode", StringComparison.OrdinalIgnoreCase))
-                {
-                    var epMatch = Regex.Match(item.TmdbKey, @"^tmdb:tv:(\d+)$", RegexOptions.IgnoreCase);
-                    if (epMatch.Success && item.SeasonNumber.HasValue && item.EpisodeNumber.HasValue)
-                    {
-                        int seriesId = int.Parse(epMatch.Groups[1].Value);
-                        int seasonNum = item.SeasonNumber.Value;
-                        int epNum = item.EpisodeNumber.Value;
-                        var seasonKey = (seriesId, seasonNum);
-
-                        if (!seasonCache.TryGetValue(seasonKey, out var epList))
-                        {
-                            epList = await FetchSeasonEpisodesAsync(seriesId, seasonNum, ct);
-                            if (epList != null)
-                            {
-                                seasonCache[seasonKey] = epList;
-                            }
-                        }
-
-                        if (epList != null)
-                        {
-                            var epDto = epList.Find(e => e.EpisodeNumber == epNum);
-                            if (epDto != null && !string.IsNullOrEmpty(epDto.StillPath))
-                            {
-                                var meta = new TmdbMetadata
-                                {
-                                    ProviderKey = item.TmdbKey,
-                                    StillPath = epDto.StillPath,
-                                    Overview = epDto.Overview,
-                                    VoteAverage = epDto.VoteAverage,
-                                    FetchedUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                                    NotFound = false
-                                };
-                                _db.UpsertTmdbMetadata(meta);
-                                enriched++;
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                // Movie or Series
-                var m = Regex.Match(item.TmdbKey, @"^tmdb:(movie|tv):(\d+)$", RegexOptions.IgnoreCase);
-                if (m.Success)
-                {
-                    string type = m.Groups[1].Value.ToLowerInvariant();
-                    int tmdbId = int.Parse(m.Groups[2].Value);
-
-                    var res = await FetchTitleMetadataAsync(item.TmdbKey, type, tmdbId, ct);
-                    if (res != null)
-                    {
-                        if (res.NotFound) notFound++;
-                        else enriched++;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                NocturneLogger.Warn("TmdbEnrichmentService", $"Failed to enrich {item.TmdbKey}: {ex.Message}");
-            }
+            _pass.Release();
         }
-
         NocturneLogger.Info("TmdbEnrichmentService", $"Enrichment finished. Processed {processed}/{total} (Enriched: {enriched}, Not Found: {notFound}).");
     }
 
-    private async Task<TmdbMetadata?> FetchTitleMetadataAsync(string providerKey, string type, int id, CancellationToken ct)
+    // One title: 404 records not_found (§10.6: never asked again on every pass); any other failure leaves it for the next.
+    private async Task<TmdbMetadata?> FetchTitleAsync(string providerKey, CancellationToken ct)
     {
-        for (int attempt = 0; attempt < 2; attempt++)
-        {
-            await WaitForRateLimitAsync(ct);
-
-            var endpoint = $"/{type}/{id}";
-            using var req = CreateRequest(endpoint);
-
-            using var resp = await _http.SendAsync(req, ct);
-
-            if (resp.StatusCode == HttpStatusCode.NotFound)
+        var m = TitleKey.Match(providerKey);
+        var (status, dto) = await GetJsonAsync<TmdbDetailDto>($"/{m.Groups[1].Value.ToLowerInvariant()}/{m.Groups[2].Value}", ct);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        TmdbMetadata? meta = status == HttpStatusCode.NotFound ? new TmdbMetadata { ProviderKey = providerKey, FetchedUtc = now, NotFound = true }
+            : dto == null ? null
+            : new TmdbMetadata
             {
-                var nf = new TmdbMetadata
-                {
-                    ProviderKey = providerKey,
-                    FetchedUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    NotFound = true
-                };
-                _db.UpsertTmdbMetadata(nf);
-                return nf;
-            }
-
-            if (resp.StatusCode == (HttpStatusCode)429)
-            {
-                await HandleRateLimitBackoffAsync(resp, ct);
-                continue;
-            }
-
-            if (resp.IsSuccessStatusCode)
-            {
-                var dto = await resp.Content.ReadFromJsonAsync<TmdbDetailDto>(cancellationToken: ct);
-                if (dto != null)
-                {
-                    var meta = new TmdbMetadata
-                    {
-                        ProviderKey = providerKey,
-                        PosterPath = dto.PosterPath,
-                        BackdropPath = dto.BackdropPath,
-                        Overview = dto.Overview,
-                        VoteAverage = dto.VoteAverage,
-                        FetchedUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                        NotFound = false
-                    };
-                    _db.UpsertTmdbMetadata(meta);
-                    return meta;
-                }
-            }
-
-            break;
-        }
-
-        return null;
+                ProviderKey = providerKey, PosterPath = dto.PosterPath, BackdropPath = dto.BackdropPath,
+                Overview = dto.Overview, VoteAverage = dto.VoteAverage, FetchedUtc = now
+            };
+        if (meta != null) _db.UpsertTmdbMetadata(meta);
+        return meta;
     }
 
-    private async Task<List<TmdbEpisodeDto>?> FetchSeasonEpisodesAsync(int seriesId, int seasonNumber, CancellationToken ct)
+    // M3: one /season call covers every episode of the season. An episode TMDB's season does not list, or a season it
+    // does not know, is not_found; all of the season's rows are written in one transaction.
+    private async Task<(int Found, int Missing)?> FetchSeasonAsync(int show, int season, List<(string Key, int Episode)> episodes, CancellationToken ct)
     {
-        await WaitForRateLimitAsync(ct);
+        var (status, dto) = await GetJsonAsync<TmdbSeasonDto>($"/tv/{show}/season/{season}", ct);
+        if (status != HttpStatusCode.NotFound && dto == null) return null;
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var byNumber = (dto?.Episodes ?? new()).GroupBy(e => e.EpisodeNumber).ToDictionary(g => g.Key, g => g.First());
+        var rows = episodes.Select(e => byNumber.TryGetValue(e.Episode, out var ep)
+            ? new TmdbMetadata { ProviderKey = e.Key, StillPath = ep.StillPath, Overview = ep.Overview, VoteAverage = ep.VoteAverage, FetchedUtc = now }
+            : new TmdbMetadata { ProviderKey = e.Key, FetchedUtc = now, NotFound = true }).ToList();
+        _db.UpsertTmdbMetadataBatch(rows);
+        var found = rows.Count(r => !r.NotFound);
+        return (found, rows.Count - found);
+    }
 
-        var endpoint = $"/tv/{seriesId}/season/{seasonNumber}";
-        using var req = CreateRequest(endpoint);
-
-        using var resp = await _http.SendAsync(req, ct);
-
-        if (resp.StatusCode == (HttpStatusCode)429)
+    // One GET under the shared token bucket. 429 backs off (Retry-After, else exponentially) and retries, up to 4 tries.
+    private async Task<(HttpStatusCode Status, T? Body)> GetJsonAsync<T>(string endpoint, CancellationToken ct) where T : class
+    {
+        for (var attempt = 0; ; attempt++)
         {
-            await HandleRateLimitBackoffAsync(resp, ct);
-            return null;
+            await WaitForRateLimitAsync(ct);
+            using var req = CreateRequest(endpoint);
+            using var resp = await _http.SendAsync(req, ct);
+            if (resp.StatusCode == (HttpStatusCode)429 && attempt < 3)
+            {
+                await HandleRateLimitBackoffAsync(resp, attempt, ct);
+                continue;
+            }
+            if (!resp.IsSuccessStatusCode) return (resp.StatusCode, null);
+            return (resp.StatusCode, await resp.Content.ReadFromJsonAsync<T>(cancellationToken: ct));
         }
-
-        if (resp.IsSuccessStatusCode)
-        {
-            var seasonDto = await resp.Content.ReadFromJsonAsync<TmdbSeasonDto>(cancellationToken: ct);
-            return seasonDto?.Episodes;
-        }
-
-        return null;
     }
 
     private HttpRequestMessage CreateRequest(string endpoint)
@@ -291,7 +233,7 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
             {
                 var now = DateTime.UtcNow;
                 var elapsedSec = (now - _lastTokenRefill).TotalSeconds;
-                _availableTokens = Math.Min(_bucketCapacity, _availableTokens + (elapsedSec * 20.0));
+                _availableTokens = Math.Min(_bucketCapacity, _availableTokens + (elapsedSec * _bucketCapacity)); // capacity = rate per second
                 _lastTokenRefill = now;
 
                 if (_availableTokens >= 1.0)
@@ -310,9 +252,9 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         }
     }
 
-    private async Task HandleRateLimitBackoffAsync(HttpResponseMessage resp, CancellationToken ct)
+    private async Task HandleRateLimitBackoffAsync(HttpResponseMessage resp, int attempt, CancellationToken ct)
     {
-        int waitSeconds = 2;
+        int waitSeconds = 2 << attempt; // 2, 4, 8 s
         if (resp.Headers.RetryAfter != null && resp.Headers.RetryAfter.Delta.HasValue)
         {
             waitSeconds = (int)Math.Ceiling(resp.Headers.RetryAfter.Delta.Value.TotalSeconds);

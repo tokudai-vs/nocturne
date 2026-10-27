@@ -4471,29 +4471,47 @@ public class DatabaseService : IDisposable
                         not_found = excluded.not_found;
                 ");
 
-    public void UpsertTmdbMetadata(TmdbMetadata metadata)
+    public void UpsertTmdbMetadata(TmdbMetadata metadata) => UpsertTmdbMetadataBatch(new[] { metadata });
+
+    // One transaction for the batch: a season's episodes land together (M3).
+    public void UpsertTmdbMetadataBatch(IReadOnlyList<TmdbMetadata> rows)
     {
+        if (rows.Count == 0) return;
         lock (_dbLock)
         {
-            if (QueueDuringRebuildWrite(() => UpsertTmdbMetadata(metadata))) return;
+            if (QueueDuringRebuildWrite(() => UpsertTmdbMetadataBatch(rows))) return;
             if (_connection == null) return;
             try
             {
+                using var tx = _connection.BeginTransaction();
                 using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
                 cmd.CommandText = SqlUpsertTmdbMetadata;
-                cmd.Parameters.AddWithValue("$provider_key", metadata.ProviderKey);
-                cmd.Parameters.AddWithValue("$poster_path", (object?)metadata.PosterPath ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$backdrop_path", (object?)metadata.BackdropPath ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$still_path", (object?)metadata.StillPath ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$overview", (object?)metadata.Overview ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$vote_average", (object?)metadata.VoteAverage ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$fetched_utc", metadata.FetchedUtc);
-                cmd.Parameters.AddWithValue("$not_found", metadata.NotFound ? 1 : 0);
-                cmd.ExecuteNonQuery();
+                var pKey = cmd.Parameters.Add("$provider_key", SqliteType.Text);
+                var pPoster = cmd.Parameters.Add("$poster_path", SqliteType.Text);
+                var pBackdrop = cmd.Parameters.Add("$backdrop_path", SqliteType.Text);
+                var pStill = cmd.Parameters.Add("$still_path", SqliteType.Text);
+                var pOverview = cmd.Parameters.Add("$overview", SqliteType.Text);
+                var pVote = cmd.Parameters.Add("$vote_average", SqliteType.Real);
+                var pFetched = cmd.Parameters.Add("$fetched_utc", SqliteType.Integer);
+                var pNotFound = cmd.Parameters.Add("$not_found", SqliteType.Integer);
+                foreach (var m in rows)
+                {
+                    pKey.Value = m.ProviderKey;
+                    pPoster.Value = (object?)m.PosterPath ?? DBNull.Value;
+                    pBackdrop.Value = (object?)m.BackdropPath ?? DBNull.Value;
+                    pStill.Value = (object?)m.StillPath ?? DBNull.Value;
+                    pOverview.Value = (object?)m.Overview ?? DBNull.Value;
+                    pVote.Value = (object?)m.VoteAverage ?? DBNull.Value;
+                    pFetched.Value = m.FetchedUtc;
+                    pNotFound.Value = m.NotFound ? 1 : 0;
+                    cmd.ExecuteNonQuery();
+                }
+                tx.Commit();
             }
             catch (Exception ex)
             {
-                NocturneLogger.Error("DatabaseService", $"Failed to upsert TMDB metadata for {metadata.ProviderKey}", ex);
+                NocturneLogger.Error("DatabaseService", $"Failed to upsert TMDB metadata ({rows.Count} row(s), first {rows[0].ProviderKey})", ex);
             }
         }
     }
