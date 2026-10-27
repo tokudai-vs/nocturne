@@ -4538,16 +4538,22 @@ public class DatabaseService : IDisposable
         return null;
     }
 
-    private static readonly string SqlGetGroupsNeedingTmdbArt = Checked(@"
-                    SELECT g.group_id, g.item_type, g.tmdb_key, g.name, g.year, g.season_number, g.episode_number
-                    FROM dedup_groups g
-                    WHERE g.image_tag IS NULL
-                      AND g.tmdb_key IS NOT NULL
+    // §10.2 (D11): no version on any server has a poster (A0's election left image_tag empty), the group has a TMDB id
+    // and is not provisional (a fuzzy group's id is not trusted). A title TMDB answered with an image is done; one it
+    // did not know, or knew without an image, is asked again once a month, not on every sync.
+    private const string NeedsTmdbArt = @"
+                    g.image_tag IS NULL AND g.tmdb_key IS NOT NULL AND g.is_provisional = 0
                       AND NOT EXISTS (
                           SELECT 1 FROM tmdb_metadata t
                           WHERE t.provider_key = g.tmdb_key
-                            AND (t.not_found = 1 OR t.fetched_utc > $staleCutoff)
-                      )
+                            AND (t.fetched_utc > $recheckAfter OR (t.not_found = 0 AND COALESCE(t.poster_path, t.still_path) IS NOT NULL)))";
+    public static readonly TimeSpan TmdbRecheckAfter = TimeSpan.FromDays(30);
+    private static long TmdbRecheckCutoff() => DateTimeOffset.UtcNow.Subtract(TmdbRecheckAfter).ToUnixTimeSeconds();
+
+    private static readonly string SqlGetGroupsNeedingTmdbArt = Checked($@"
+                    SELECT g.group_id, g.item_type, g.tmdb_key, g.name, g.year, g.season_number, g.episode_number
+                    FROM dedup_groups g
+                    WHERE {NeedsTmdbArt}
                     LIMIT $limit;
                 ");
 
@@ -4559,10 +4565,9 @@ public class DatabaseService : IDisposable
             if (_connection == null) return list;
             try
             {
-                long staleCutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (30 * 86400); // 30 days
                 using var cmd = _connection.CreateCommand();
                 cmd.CommandText = SqlGetGroupsNeedingTmdbArt;
-                cmd.Parameters.AddWithValue("$staleCutoff", staleCutoff);
+                cmd.Parameters.AddWithValue("$recheckAfter", TmdbRecheckCutoff());
                 cmd.Parameters.AddWithValue("$limit", limit);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
@@ -4588,13 +4593,7 @@ public class DatabaseService : IDisposable
 
     private static readonly string SqlGetTmdbEnrichmentStats = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 0;");
     private static readonly string SqlGetTmdbEnrichmentStats2 = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 1;");
-    private static readonly string SqlGetTmdbEnrichmentStats3 = Checked(@"
-                        SELECT COUNT(*)
-                        FROM dedup_groups g
-                        WHERE g.image_tag IS NULL
-                          AND g.tmdb_key IS NOT NULL
-                          AND NOT EXISTS (SELECT 1 FROM tmdb_metadata t WHERE t.provider_key = g.tmdb_key);
-                    ");
+    private static readonly string SqlGetTmdbEnrichmentStats3 = Checked($"SELECT COUNT(*) FROM dedup_groups g WHERE {NeedsTmdbArt};");
 
     public (int EnrichedCount, int PendingCount, int NotFoundCount) GetTmdbEnrichmentStats()
     {
@@ -4619,6 +4618,7 @@ public class DatabaseService : IDisposable
                 using (var cmd = _connection.CreateCommand())
                 {
                     cmd.CommandText = SqlGetTmdbEnrichmentStats3;
+                    cmd.Parameters.AddWithValue("$recheckAfter", TmdbRecheckCutoff());
                     pending = Convert.ToInt32(cmd.ExecuteScalar());
                 }
                 return (enriched, pending, notFound);
