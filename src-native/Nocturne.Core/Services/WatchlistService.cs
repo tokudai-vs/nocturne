@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Nocturne.Core.Models;
 using Nocturne.Core.Utils;
 
 namespace Nocturne.Core.Services;
@@ -15,10 +15,6 @@ namespace Nocturne.Core.Services;
 // and a pull settles them against what each source then reports (DatabaseService.ReplaceTraktWatchlist, the sync).
 public class WatchlistService : IWatchlistService
 {
-    // A title's provider key as the dedup engine writes it: 'tmdb:movie:550', 'tvdb:series:81189'.
-    private static readonly Regex TitleKey = new(@"^(tmdb|imdb|tvdb):(movie|series):(.+)$", RegexOptions.IgnoreCase);
-    private static readonly string[] ProviderOrder = { "tmdb", "imdb", "tvdb" }; // as TraktSyncService picks a pulled entry's ref
-
     private readonly DatabaseService _db;
     private readonly ITraktAuthService _auth;
 
@@ -51,10 +47,10 @@ public class WatchlistService : IWatchlistService
 
         var keys = TitleKeys(groupId);
         if (op == "remove")
-            foreach (var key in keys) _db.SetWatchlistPendingOp("trakt", key, "remove");
+            foreach (var key in keys) _db.SetWatchlistPendingOp("trakt", key.ToString(), "remove");
         if (_auth.State == TraktConnectionState.Connected && keys.Count > 0)
         {
-            if (op == "add") _db.UpsertWatchlistEntry("trakt", keys[0], group.ItemType, now, group.Name, group.Year, group.TmdbKey, "add");
+            if (op == "add") _db.UpsertWatchlistEntry("trakt", keys[0].ToString(), group.ItemType, now, group.Name, group.Year, group.TmdbKey, "add");
             _db.EnqueueTraktEvent(groupId, $"watchlist_{op}", 0, Payload(group.ItemType, group.Name, group.Year, keys), Origin.Local);
         }
 
@@ -62,12 +58,12 @@ public class WatchlistService : IWatchlistService
         return Task.CompletedTask;
     }
 
-    // A title not in the library lives on Trakt only. titleKey is its ref: 'tmdb:movie:N' | 'tmdb:series:N'.
+    // A title not in the library lives on Trakt only. titleKey is its ref, a movie or series ProviderKey.
     public Task AddUnownedAsync(string titleKey, string title, int? year, string itemType, CancellationToken ct)
     {
-        if (_auth.State != TraktConnectionState.Connected || !TitleKey.IsMatch(titleKey)) return Task.CompletedTask;
-        _db.UpsertWatchlistEntry("trakt", titleKey, itemType, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), title, year, TmdbArtworkKey(titleKey), "add");
-        _db.EnqueueTraktEvent(0, "watchlist_add", 0, Payload(itemType, title, year, new[] { titleKey }), Origin.Local);
+        if (_auth.State != TraktConnectionState.Connected || TitleKey(titleKey) is not { } key) return Task.CompletedTask;
+        _db.UpsertWatchlistEntry("trakt", titleKey, itemType, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), title, year, key.TmdbKey, "add");
+        _db.EnqueueTraktEvent(0, "watchlist_add", 0, Payload(itemType, title, year, new[] { key }), Origin.Local);
         NocturneLogger.Info("WatchlistService", $"Watchlist add: '{title}' ({titleKey}), not in the library.");
         return Task.CompletedTask;
     }
@@ -75,12 +71,8 @@ public class WatchlistService : IWatchlistService
     public Task RemoveUnownedAsync(string titleKey, CancellationToken ct)
     {
         _db.SetWatchlistPendingOp("trakt", titleKey, "remove");
-        var m = TitleKey.Match(titleKey);
-        if (_auth.State == TraktConnectionState.Connected && m.Success)
-        {
-            var itemType = m.Groups[2].Value.Equals("series", StringComparison.OrdinalIgnoreCase) ? "Series" : "Movie";
-            _db.EnqueueTraktEvent(0, "watchlist_remove", 0, Payload(itemType, null, null, new[] { titleKey }), Origin.Local);
-        }
+        if (_auth.State == TraktConnectionState.Connected && TitleKey(titleKey) is { } key)
+            _db.EnqueueTraktEvent(0, "watchlist_remove", 0, Payload(key.Kind == KeyKind.Series ? "Series" : "Movie", null, null, new[] { key }), Origin.Local);
         return Task.CompletedTask;
     }
 
@@ -105,32 +97,18 @@ public class WatchlistService : IWatchlistService
     private static bool IsTitle(string? itemType) =>
         string.Equals(itemType, "Movie", StringComparison.OrdinalIgnoreCase) || string.Equals(itemType, "Series", StringComparison.OrdinalIgnoreCase);
 
-    private List<string> TitleKeys(long groupId) => _db.GetAuthoritativeKeys((int)groupId)
-        .Where(k => TitleKey.IsMatch(k))
-        .OrderBy(k => Array.IndexOf(ProviderOrder, k.Split(':')[0].ToLowerInvariant()))
-        .ToList();
+    // The group's movie/series keys, TMDB first (the order TraktSyncService picks a pulled entry's ref in).
+    private List<ProviderKey> TitleKeys(long groupId) => _db.GetAuthoritativeKeys((int)groupId)
+        .Select(TitleKey).OfType<ProviderKey>().OrderBy(k => k.Provider).ToList();
 
-    // tmdb_metadata keys a show 'tmdb:tv:N' (§4.3).
-    private static string? TmdbArtworkKey(string titleKey)
-    {
-        var m = TitleKey.Match(titleKey);
-        if (!m.Success || !m.Groups[1].Value.Equals("tmdb", StringComparison.OrdinalIgnoreCase)) return null;
-        return m.Groups[2].Value.Equals("series", StringComparison.OrdinalIgnoreCase) ? $"tmdb:tv:{m.Groups[3].Value}" : titleKey;
-    }
+    private static ProviderKey? TitleKey(string key) =>
+        ProviderKey.TryParse(key, out var k) && k.Kind is KeyKind.Movie or KeyKind.Series ? k : null;
 
     // /sync/watchlist[/remove] body with every id the title has (D4/D5); title and year only when known.
-    private static string Payload(string itemType, string? title, int? year, IEnumerable<string> keys)
+    private static string Payload(string itemType, string? title, int? year, IEnumerable<ProviderKey> keys)
     {
         var ids = new Dictionary<string, object>();
-        foreach (var key in keys)
-        {
-            var m = TitleKey.Match(key);
-            if (!m.Success) continue;
-            var provider = m.Groups[1].Value.ToLowerInvariant();
-            if (ids.ContainsKey(provider)) continue;
-            var id = m.Groups[3].Value;
-            ids[provider] = provider != "imdb" && int.TryParse(id, out var n) ? n : id;
-        }
+        foreach (var key in keys) ids.TryAdd(key.IdName, key.TraktId);
         var entry = new Dictionary<string, object> { ["ids"] = ids };
         if (!string.IsNullOrEmpty(title)) entry["title"] = title;
         if (year is { } y) entry["year"] = y;

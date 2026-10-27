@@ -579,7 +579,7 @@ public class DatabaseServiceTests : IDisposable
         _db.ExecuteSql("DELETE FROM migration_state WHERE key = 'repair_child_parent_ids';" +
                        "UPDATE cached_items SET parent_id = season_id WHERE type = 'Episode';" +
                        "UPDATE cached_items SET parent_id = series_id WHERE type = 'Season';"); // as the old refresh left them
-        Assert.Empty(_db.GetLibraryItemIds("srv", "lib").Where(i => i != "show"));
+        Assert.Equal(new[] { "show" }, _db.GetLibraryItemIds("srv", "lib"));
 
         _db.Dispose();
         using var reopened = new DatabaseService(_tempDbPath);

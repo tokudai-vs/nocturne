@@ -8,9 +8,9 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Nocturne.Core.Models;
 using Nocturne.Core.Utils;
 
 namespace Nocturne.Core.Services;
@@ -68,12 +68,9 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
     {
         var cached = _db.GetTmdbMetadata(providerKey);
         if (cached != null) return cached;
-        return TitleKey.IsMatch(providerKey) ? await FetchTitleAsync(providerKey, ct) : null;
+        return ProviderKey.TryParseTmdbKey(providerKey, out var key) && key.Kind is KeyKind.Movie or KeyKind.Series
+            ? await FetchTitleAsync(key, ct) : null;
     }
-
-    // Group keys as ConcurrentDedupIndex writes them: 'tmdb:movie:550', 'tmdb:tv:1396', 'tmdb:tv:1396:s01e01'.
-    private static readonly Regex TitleKey = new(@"^tmdb:(movie|tv):(\d+)$", RegexOptions.IgnoreCase);
-    private static readonly Regex EpisodeKey = new(@"^tmdb:tv:(\d+):s(\d+)e(\d+)$", RegexOptions.IgnoreCase);
     private const int Fetchers = 4;                // enough in flight to use the 20 req/s budget at TMDB's latency
     private const int TransportFailuresToStop = 10; // TMDB unreachable: stop the pass; the next one resumes
     private readonly SemaphoreSlim _pass = new(1, 1);
@@ -97,17 +94,15 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         int processed = 0, enriched = 0, notFound = 0, transportFailures = 0, total = 0;
         try
         {
-            var titles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var seasons = new Dictionary<(int Show, int Season), List<(string Key, int Episode)>>();
+            // dedup_groups.tmdb_key in TMDB's form (ProviderKey.TmdbKey): a title, or an episode by show and position.
+            var titles = new HashSet<ProviderKey>();
+            var seasons = new Dictionary<string, List<ProviderKey>>(); // by TmdbPath: one request per season
             foreach (var g in _db.GetGroupsNeedingTmdbArt(int.MaxValue))
             {
-                if (EpisodeKey.Match(g.TmdbKey) is { Success: true } e)
-                {
-                    var season = (int.Parse(e.Groups[1].Value), int.Parse(e.Groups[2].Value));
-                    if (!seasons.TryGetValue(season, out var eps)) seasons[season] = eps = new();
-                    eps.Add((g.TmdbKey, int.Parse(e.Groups[3].Value)));
-                }
-                else if (TitleKey.IsMatch(g.TmdbKey)) titles.Add(g.TmdbKey);
+                if (!ProviderKey.TryParseTmdbKey(g.TmdbKey, out var key)) continue;
+                if (key.Kind != KeyKind.SeasonEpisode) titles.Add(key);
+                else if (seasons.TryGetValue(key.TmdbPath!, out var eps)) eps.Add(key);
+                else seasons[key.TmdbPath!] = new() { key };
             }
             total = titles.Count + seasons.Count;
             if (total == 0)
@@ -135,9 +130,9 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
 
             var options = new ParallelOptions { MaxDegreeOfParallelism = Fetchers, CancellationToken = stop.Token };
             await Parallel.ForEachAsync(titles, options, (key, token) =>
-                new ValueTask(Unit(key, async t => await FetchTitleAsync(key, t) is { } m ? (m.NotFound ? (0, 1) : (1, 0)) : null, token)));
+                new ValueTask(Unit(key.TmdbKey!, async t => await FetchTitleAsync(key, t) is { } m ? (m.NotFound ? (0, 1) : (1, 0)) : null, token)));
             await Parallel.ForEachAsync(seasons, options, (season, token) =>
-                new ValueTask(Unit($"tmdb:tv:{season.Key.Show} season {season.Key.Season}", t => FetchSeasonAsync(season.Key.Show, season.Key.Season, season.Value, t), token)));
+                new ValueTask(Unit(season.Key, t => FetchSeasonAsync(season.Key, season.Value, t), token)));
         }
         catch (OperationCanceledException)
         {
@@ -154,10 +149,10 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
     }
 
     // One title: 404 records not_found (§10.6: never asked again on every pass); any other failure leaves it for the next.
-    private async Task<TmdbMetadata?> FetchTitleAsync(string providerKey, CancellationToken ct)
+    private async Task<TmdbMetadata?> FetchTitleAsync(ProviderKey key, CancellationToken ct)
     {
-        var m = TitleKey.Match(providerKey);
-        var (status, dto) = await GetJsonAsync<TmdbDetailDto>($"/{m.Groups[1].Value.ToLowerInvariant()}/{m.Groups[2].Value}", ct);
+        var providerKey = key.TmdbKey!;
+        var (status, dto) = await GetJsonAsync<TmdbDetailDto>(key.TmdbPath!, ct);
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         TmdbMetadata? meta = status == HttpStatusCode.NotFound ? new TmdbMetadata { ProviderKey = providerKey, FetchedUtc = now, NotFound = true }
             : dto == null ? null
@@ -172,15 +167,15 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
 
     // M3: one /season call covers every episode of the season. An episode TMDB's season does not list, or a season it
     // does not know, is not_found; all of the season's rows are written in one transaction.
-    private async Task<(int Found, int Missing)?> FetchSeasonAsync(int show, int season, List<(string Key, int Episode)> episodes, CancellationToken ct)
+    private async Task<(int Found, int Missing)?> FetchSeasonAsync(string seasonPath, List<ProviderKey> episodes, CancellationToken ct)
     {
-        var (status, dto) = await GetJsonAsync<TmdbSeasonDto>($"/tv/{show}/season/{season}", ct);
+        var (status, dto) = await GetJsonAsync<TmdbSeasonDto>(seasonPath, ct);
         if (status != HttpStatusCode.NotFound && dto == null) return null;
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var byNumber = (dto?.Episodes ?? new()).GroupBy(e => e.EpisodeNumber).ToDictionary(g => g.Key, g => g.First());
-        var rows = episodes.Select(e => byNumber.TryGetValue(e.Episode, out var ep)
-            ? new TmdbMetadata { ProviderKey = e.Key, StillPath = ep.StillPath, Overview = ep.Overview, VoteAverage = ep.VoteAverage, FetchedUtc = now }
-            : new TmdbMetadata { ProviderKey = e.Key, FetchedUtc = now, NotFound = true }).ToList();
+        var rows = episodes.Select(e => byNumber.TryGetValue(e.EpisodeNumber, out var ep)
+            ? new TmdbMetadata { ProviderKey = e.TmdbKey!, StillPath = ep.StillPath, Overview = ep.Overview, VoteAverage = ep.VoteAverage, FetchedUtc = now }
+            : new TmdbMetadata { ProviderKey = e.TmdbKey!, FetchedUtc = now, NotFound = true }).ToList();
         _db.UpsertTmdbMetadataBatch(rows);
         var found = rows.Count(r => !r.NotFound);
         return (found, rows.Count - found);

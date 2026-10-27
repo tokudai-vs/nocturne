@@ -1454,8 +1454,7 @@ public class MainViewModel : BaseViewModel
     }
 
     // The Trakt entry's ref for a title outside the library, as a pull writes it.
-    public static string? TitleRef(EmbyItem item) => string.IsNullOrEmpty(item.TmdbId) ? null
-        : $"tmdb:{(string.Equals(item.Type, "Series", StringComparison.OrdinalIgnoreCase) ? "series" : "movie")}:{item.TmdbId}";
+    public static string? TitleRef(EmbyItem item) => ProviderKey.Title(item.Type, Provider.Tmdb, item.TmdbId)?.ToString();
 
     public static bool IsWatchlistable(EmbyItem item) =>
         string.Equals(item.Type, "Movie", StringComparison.OrdinalIgnoreCase) || string.Equals(item.Type, "Series", StringComparison.OrdinalIgnoreCase);

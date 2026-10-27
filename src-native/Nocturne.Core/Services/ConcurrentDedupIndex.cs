@@ -199,24 +199,15 @@ public class ConcurrentDedupIndex
                 ? $"s{item.ParentIndexNumber.Value:D2}e{item.IndexNumber.Value:D2}"
                 : null;
 
-            if (sXee != null)
-            {
-                // 1. Authoritative series provider keys (stable forever across series merges - B2)
-                if (IsValidProviderId("Tvdb", item.SeriesTvdbId))
-                    keys.Add(new CandidateKey($"ep:tvdb:{item.SeriesTvdbId}:{sXee}", true));
-                if (IsValidProviderId("Tmdb", item.SeriesTmdbId))
-                    keys.Add(new CandidateKey($"ep:tmdb:{item.SeriesTmdbId}:{sXee}", true));
-                if (IsValidProviderId("Imdb", item.SeriesImdbId))
-                    keys.Add(new CandidateKey($"ep:imdb:{item.SeriesImdbId}:{sXee}", true));
-            }
+            // 1. Authoritative series provider keys (stable forever across series merges - B2)
+            var (season, episode) = (item.ParentIndexNumber, item.IndexNumber);
+            AddKeys(keys, ProviderKey.SeasonEpisode(Provider.Tvdb, item.SeriesTvdbId, season, episode),
+                          ProviderKey.SeasonEpisode(Provider.Tmdb, item.SeriesTmdbId, season, episode),
+                          ProviderKey.SeasonEpisode(Provider.Imdb, item.SeriesImdbId, season, episode));
 
             // 2. Direct episode provider keys
-            if (IsValidProviderId("Tmdb", item.TmdbId))
-                keys.Add(new CandidateKey($"tmdb:ep:{item.TmdbId}", true));
-            if (IsValidProviderId("Imdb", item.ImdbId))
-                keys.Add(new CandidateKey($"imdb:ep:{item.ImdbId}", true));
-            if (IsValidProviderId("Tvdb", item.TvdbId))
-                keys.Add(new CandidateKey($"tvdb:ep:{item.TvdbId}", true));
+            AddKeys(keys, ProviderKey.Episode(Provider.Tmdb, item.TmdbId), ProviderKey.Episode(Provider.Imdb, item.ImdbId),
+                          ProviderKey.Episode(Provider.Tvdb, item.TvdbId));
 
             // 3. Fallback series/name keys (is_authoritative = false)
             if (sXee != null)
@@ -238,13 +229,8 @@ public class ConcurrentDedupIndex
         {
             // Movie or Series
             string normType = string.Equals(type, "Series", StringComparison.OrdinalIgnoreCase) ? "series" : "movie";
-
-            if (IsValidProviderId("Tmdb", item.TmdbId))
-                keys.Add(new CandidateKey($"tmdb:{normType}:{item.TmdbId}", true));
-            if (IsValidProviderId("Imdb", item.ImdbId))
-                keys.Add(new CandidateKey($"imdb:{normType}:{item.ImdbId}", true));
-            if (IsValidProviderId("Tvdb", item.TvdbId))
-                keys.Add(new CandidateKey($"tvdb:{normType}:{item.TvdbId}", true));
+            AddKeys(keys, ProviderKey.Title(type, Provider.Tmdb, item.TmdbId), ProviderKey.Title(type, Provider.Imdb, item.ImdbId),
+                          ProviderKey.Title(type, Provider.Tvdb, item.TvdbId));
 
             // Fuzzy key: ONLY if year is valid (> 0) and title is not generic (S6 Guard)
             if (item.ProductionYear.HasValue && item.ProductionYear.Value > 0 && !DedupEngine.IsGenericTitle(item.Name))
@@ -262,12 +248,13 @@ public class ConcurrentDedupIndex
 
     // Servers hold malformed ids ("../tv/222031", bare digits in the Imdb slot, URL fragments); keying on them
     // groups unrelated items, so only well-formed ids become keys.
-    public static bool IsValidProviderId(string provider, string? value)
+    public static bool IsValidProviderId(string provider, string? value) =>
+        Enum.TryParse<Provider>(provider, out var p) && ProviderKey.IsValidId(p, value);
+
+    private static void AddKeys(List<CandidateKey> keys, params ProviderKey?[] provider)
     {
-        if (string.IsNullOrEmpty(value)) return false;
-        if (provider == "Imdb")
-            return value.Length > 2 && value.StartsWith("tt", StringComparison.Ordinal) && value.Skip(2).All(char.IsAsciiDigit);
-        return value.All(char.IsAsciiDigit);
+        foreach (var k in provider)
+            if (k is { } key) keys.Add(new CandidateKey(key.ToString(), true));
     }
 
     // Stable key for an item with no usable key: it still gets a (singleton) group, and re-ingesting it finds
@@ -317,23 +304,13 @@ public class ConcurrentDedupIndex
         }
     }
 
-    // Authoritative keys split into provider type ("tmdb:movie", "ep:tvdb", "tvdb:ep", ...) and value. A
-    // season/episode key's value is its series id: two servers numbering one episode differently hold the same
-    // series, not different ids. Numbering is judged by the positional rule in ProcessBatch.
-    private static (string Type, string Value)? ProviderTypeOf(string key)
-    {
-        var first = key.IndexOf(':');
-        var second = first < 0 ? -1 : key.IndexOf(':', first + 1);
-        if (second < 0) return null;
-        var value = key[(second + 1)..];
-        if (IsPositionalKey(key) && value.LastIndexOf(':') is var sxe and > 0) value = value[..sxe];
-        return (key[..second], value);
-    }
+    // Authoritative keys split into provider slot ("tmdb:movie", "ep:tvdb", "tvdb:ep", ...) and id. A season/episode
+    // key's id is its series id: two servers numbering one episode differently hold the same series, not different
+    // ids. Numbering is judged by the positional rule in ProcessBatch. Fuzzy name/series keys are not provider keys.
+    private static (string Type, string Value)? ProviderTypeOf(string key) =>
+        ProviderKey.TryParse(key, out var k) ? (k.Slot, k.Id) : null;
 
-    // Keys GenerateCandidateKeys emits as authoritative: provider ids, as opposed to fuzzy name/series keys.
-    private static readonly string[] ProviderKeyPrefixes = { "tmdb:", "imdb:", "tvdb:", "ep:tvdb:", "ep:tmdb:", "ep:imdb:" };
-
-    private static bool IsProviderKey(string key) => ProviderKeyPrefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+    private static bool IsProviderKey(string key) => ProviderKey.TryParse(key, out _);
 
     // The ids a group's items carry: every provider key it owns, demoted ones included (demotion stops a key
     // from linking, not from being evidence), plus its "{key}@{groupId}" evidence keys (RecordEvidence).
@@ -783,27 +760,13 @@ public class ConcurrentDedupIndex
 
     public static string? ExtractTmdbKey(EmbyItem item)
     {
+        // An episode only through its series' TMDB id and position: its own TMDB id is an episode id, and filing it as
+        // 'tmdb:movie:{id}' fetched whatever movie shares the number (#28).
         var type = item.Type ?? string.Empty;
-        if (string.Equals(type, "Movie", StringComparison.OrdinalIgnoreCase))
-        {
-            if (IsValidProviderId("Tmdb", item.TmdbId)) return $"tmdb:movie:{item.TmdbId}";
-        }
-        else if (string.Equals(type, "Series", StringComparison.OrdinalIgnoreCase))
-        {
-            if (IsValidProviderId("Tmdb", item.TmdbId)) return $"tmdb:tv:{item.TmdbId}";
-        }
-        else if (string.Equals(type, "Episode", StringComparison.OrdinalIgnoreCase))
-        {
-            if (IsValidProviderId("Tmdb", item.SeriesTmdbId))
-            {
-                if (!item.ParentIndexNumber.HasValue || !item.IndexNumber.HasValue) return null;
-                return $"tmdb:tv:{item.SeriesTmdbId}:s{item.ParentIndexNumber.Value:D2}e{item.IndexNumber.Value:D2}";
-            }
-            else if (IsValidProviderId("Tmdb", item.TmdbId))
-            {
-                return $"tmdb:movie:{item.TmdbId}";
-            }
-        }
+        if (string.Equals(type, "Episode", StringComparison.OrdinalIgnoreCase))
+            return ProviderKey.SeasonEpisode(Provider.Tmdb, item.SeriesTmdbId, item.ParentIndexNumber, item.IndexNumber)?.TmdbKey;
+        if (string.Equals(type, "Movie", StringComparison.OrdinalIgnoreCase) || string.Equals(type, "Series", StringComparison.OrdinalIgnoreCase))
+            return ProviderKey.Title(type, Provider.Tmdb, item.TmdbId)?.TmdbKey;
         return null;
     }
 

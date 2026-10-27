@@ -230,6 +230,7 @@ public class DatabaseService : IDisposable
 
             EnsureSchema(_connection);
             RepairChildParents();
+            DropEpisodeMovieKeys();
             SelfCheckPreparedStatements();
 
             NocturneLogger.Info("DatabaseService", "Database initialized in WAL mode successfully.");
@@ -259,6 +260,21 @@ public class DatabaseService : IDisposable
         var repaired = cmd.ExecuteNonQuery();
         SetMigrationState(ChildParentRepairKey, repaired.ToString());
         NocturneLogger.Info("DatabaseService", $"Repaired the library of {repaired} cached season/episode row(s) the detail page had re-parented (#27).");
+    }
+
+    // #28: an episode without its series' TMDB id had tmdb_key 'tmdb:movie:{its own episode id}', so TMDB enrichment
+    // would have fetched whatever movie shares the number. ConcurrentDedupIndex no longer writes these; once, clear them.
+    public const string EpisodeMovieKeyRepairKey = "drop_episode_movie_tmdb_keys";
+    private static readonly string SqlDropEpisodeMovieKeys = Checked("UPDATE dedup_groups SET tmdb_key = NULL WHERE item_type = 'Episode' AND tmdb_key GLOB 'tmdb:movie:*';");
+
+    private void DropEpisodeMovieKeys()
+    {
+        if (GetMigrationState(EpisodeMovieKeyRepairKey) != null) return;
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = SqlDropEpisodeMovieKeys;
+        var dropped = cmd.ExecuteNonQuery();
+        SetMigrationState(EpisodeMovieKeyRepairKey, dropped.ToString());
+        NocturneLogger.Info("DatabaseService", $"Cleared {dropped} episode group TMDB key(s) that named the episode's own id as a movie (#28).");
     }
 
     private void EnsureSchema(SqliteConnection conn)
@@ -877,9 +893,7 @@ public class DatabaseService : IDisposable
 
                     if (item.UserData != null && item.UserData.IsFavorite)
                     {
-                        string? tmdbKey = !string.IsNullOrEmpty(item.TmdbId)
-                            ? $"tmdb:{(string.Equals(item.Type, "Series", StringComparison.OrdinalIgnoreCase) ? "tv" : "movie")}:{item.TmdbId}"
-                            : null;
+                        string? tmdbKey = ProviderKey.Title(item.Type, Provider.Tmdb, item.TmdbId)?.TmdbKey;
                         pwSrc.Value = serverId;
                         pwRef.Value = item.Id;
                         pwType.Value = item.Type ?? "Movie";
@@ -3223,11 +3237,11 @@ public class DatabaseService : IDisposable
     // A merge the conflict guard (C4) refused leaves two traces: the key the item shared with the group it conflicted
     // with is demoted there (still owned, no longer authoritative), and the item's own group holds it as evidence,
     // "{key}@{group}". Demotion happens nowhere else; a range seek on the key finds the evidence.
-    private static readonly string SqlConflictSplitPairs = Checked(@"
+    private static readonly string SqlConflictSplitPairs = Checked($@"
                 SELECT DISTINCT k.group_id, e.group_id FROM dedup_keys k
                 JOIN dedup_keys e ON e.key >= k.key || '@' AND e.key < k.key || 'A'
                 WHERE k.is_authoritative = 0 AND instr(k.key, '@') = 0 AND e.group_id != k.group_id
-                  AND (k.key GLOB 'tmdb:*' OR k.key GLOB 'imdb:*' OR k.key GLOB 'tvdb:*' OR k.key GLOB 'ep:tvdb:*' OR k.key GLOB 'ep:tmdb:*' OR k.key GLOB 'ep:imdb:*');
+                  AND {ProviderKey.SqlIsProviderKey("k.key")};
             ");
     private static readonly string SqlConflictSplitKeys = Checked("SELECT key FROM dedup_keys WHERE group_id = $gid;");
     private static readonly string SqlConflictSplitGroup = Checked(@"

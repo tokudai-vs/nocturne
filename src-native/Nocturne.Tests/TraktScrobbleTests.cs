@@ -69,7 +69,7 @@ public class TraktScrobbleTests : IDisposable
             new List<(string, int, bool)>
             {
                 ("tmdb:movie:27205", 101, true),
-                ("imdb:tt1375666", 101, true)
+                ("imdb:movie:tt1375666", 101, true) // the dedup index's form (ProviderKey); this read "imdb:tt1375666", which nothing writes
             },
             new List<(string, string, int)> { ("srv1", "mov1", 101) }
         );

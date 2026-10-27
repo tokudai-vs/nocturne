@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Nocturne.Core.Models;
 using Nocturne.Core.Utils;
 
 namespace Nocturne.Core.Services;
@@ -180,12 +181,7 @@ public class TraktSyncService : ITraktSyncService
                 ? dt.ToUnixTimeSeconds()
                 : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-            int? gid = null;
-            if (m.Movie.Ids.Tmdb.HasValue)
-                gid = _db.GetGroupIdForDedupKey($"tmdb:movie:{m.Movie.Ids.Tmdb.Value}");
-            if (!gid.HasValue && !string.IsNullOrEmpty(m.Movie.Ids.Imdb))
-                gid = _db.GetGroupIdForDedupKey($"imdb:movie:{m.Movie.Ids.Imdb}");
-
+            var gid = GroupOf(TitleKeys(KeyKind.Movie, m.Movie.Ids));
             if (!gid.HasValue) continue; // Not in library (§8.2 step 2)
 
             ApplyWatchedStateToGroup(gid.Value, watchedAtSec);
@@ -210,10 +206,6 @@ public class TraktSyncService : ITraktSyncService
             if (ct.IsCancellationRequested) break;
             if (show.Show?.Ids == null || show.Seasons == null) continue;
 
-            int? tvdbId = show.Show.Ids.Tvdb;
-            int? tmdbId = show.Show.Ids.Tmdb;
-            string? imdbId = show.Show.Ids.Imdb;
-
             foreach (var s in show.Seasons)
             {
                 if (s.Episodes == null) continue;
@@ -225,16 +217,13 @@ public class TraktSyncService : ITraktSyncService
                         ? dt.ToUnixTimeSeconds()
                         : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-                    string sXee = $"s{s.Number:D2}e{ep.Number:D2}";
-                    int? epGid = null;
-
-                    if (tvdbId.HasValue)
-                        epGid = _db.GetGroupIdForDedupKey($"ep:tvdb:{tvdbId.Value}:{sXee}");
-                    if (!epGid.HasValue && tmdbId.HasValue)
-                        epGid = _db.GetGroupIdForDedupKey($"ep:tmdb:{tmdbId.Value}:{sXee}");
-                    if (!epGid.HasValue && !string.IsNullOrEmpty(imdbId))
-                        epGid = _db.GetGroupIdForDedupKey($"ep:imdb:{imdbId}:{sXee}");
-
+                    var ids = show.Show.Ids;
+                    var epGid = GroupOf(new[]
+                    {
+                        ProviderKey.SeasonEpisode(Provider.Tvdb, ids.Tvdb?.ToString(), s.Number, ep.Number),
+                        ProviderKey.SeasonEpisode(Provider.Tmdb, ids.Tmdb?.ToString(), s.Number, ep.Number),
+                        ProviderKey.SeasonEpisode(Provider.Imdb, ids.Imdb, s.Number, ep.Number),
+                    });
                     if (!epGid.HasValue) continue;
 
                     ApplyWatchedStateToGroup(epGid.Value, epWatchedAtSec);
@@ -258,9 +247,8 @@ public class TraktSyncService : ITraktSyncService
             if (movies == null) return false;
             foreach (var m in movies)
             {
-                if (m.Movie?.Ids == null || WatchlistRef("movie", m.Movie.Ids) is not { } key) continue;
-                string? tmdbKey = m.Movie.Ids.Tmdb.HasValue ? $"tmdb:movie:{m.Movie.Ids.Tmdb.Value}" : null;
-                pulled.Add((key, "Movie", ListedAt(m.ListedAt), m.Movie.Title, m.Movie.Year, tmdbKey));
+                if (m.Movie?.Ids == null || WatchlistRef(KeyKind.Movie, m.Movie.Ids) is not { } key) continue;
+                pulled.Add((key, "Movie", ListedAt(m.ListedAt), m.Movie.Title, m.Movie.Year, ProviderKey.Movie(Provider.Tmdb, m.Movie.Ids.Tmdb?.ToString())?.TmdbKey));
             }
         }
 
@@ -274,9 +262,8 @@ public class TraktSyncService : ITraktSyncService
             if (shows == null) return false;
             foreach (var s in shows)
             {
-                if (s.Show?.Ids == null || WatchlistRef("series", s.Show.Ids) is not { } key) continue;
-                string? tmdbKey = s.Show.Ids.Tmdb.HasValue ? $"tmdb:tv:{s.Show.Ids.Tmdb.Value}" : null; // tmdb_metadata's key, for artwork
-                pulled.Add((key, "Series", ListedAt(s.ListedAt), s.Show.Title, s.Show.Year, tmdbKey));
+                if (s.Show?.Ids == null || WatchlistRef(KeyKind.Series, s.Show.Ids) is not { } key) continue;
+                pulled.Add((key, "Series", ListedAt(s.ListedAt), s.Show.Title, s.Show.Year, ProviderKey.Series(Provider.Tmdb, s.Show.Ids.Tmdb?.ToString())?.TmdbKey));
             }
         }
 
@@ -288,15 +275,27 @@ public class TraktSyncService : ITraktSyncService
 
     // A watchlist entry's ref is the dedup key the library knows the title by, whichever of Trakt's ids that is, so
     // the rollup finds its group with one join (§9.2). A title not in the library keeps its first id.
-    private string? WatchlistRef(string type, TraktIdsDto ids)
+    private string? WatchlistRef(KeyKind kind, TraktIdsDto ids)
     {
-        var candidates = new[]
-        {
-            ids.Tmdb is { } tmdb ? $"tmdb:{type}:{tmdb}" : null,
-            !string.IsNullOrEmpty(ids.Imdb) ? $"imdb:{type}:{ids.Imdb}" : null,
-            ids.Tvdb is { } tvdb ? $"tvdb:{type}:{tvdb}" : null,
-        }.OfType<string>().ToList();
-        return candidates.FirstOrDefault(k => _db.GetGroupIdForDedupKey(k).HasValue) ?? candidates.FirstOrDefault();
+        var keys = TitleKeys(kind, ids).OfType<ProviderKey>().ToList();
+        foreach (var k in keys)
+            if (_db.GetGroupIdForDedupKey(k.ToString()).HasValue) return k.ToString();
+        return keys.Count > 0 ? keys[0].ToString() : null;
+    }
+
+    // A movie's or show's keys from Trakt's ids, in the order the watchlist and the watched pull try them.
+    private static ProviderKey?[] TitleKeys(KeyKind kind, TraktIdsDto ids)
+    {
+        ProviderKey? Key(Provider p, string? id) => kind == KeyKind.Series ? ProviderKey.Series(p, id) : ProviderKey.Movie(p, id);
+        return new[] { Key(Provider.Tmdb, ids.Tmdb?.ToString()), Key(Provider.Imdb, ids.Imdb), Key(Provider.Tvdb, ids.Tvdb?.ToString()) };
+    }
+
+    // The group of the first key the library holds.
+    private int? GroupOf(IEnumerable<ProviderKey?> keys)
+    {
+        foreach (var k in keys)
+            if (k is { } key && _db.GetGroupIdForDedupKey(key.ToString()) is { } gid) return gid;
+        return null;
     }
 
     private static long ListedAt(string listedAt) =>
