@@ -29,12 +29,15 @@ public readonly record struct ProviderKey
 
     public static IReadOnlyList<Provider> Providers { get; } = new[] { Provider.Tmdb, Provider.Imdb, Provider.Tvdb };
 
-    // IMDb ids are tt + digits; TMDB and TVDB ids are digits. Anything else (slugs, paths, a tt id filed as TMDB) is
-    // rejected before it can become a key.
-    public static bool IsValidId(Provider provider, string? id) =>
-        !string.IsNullOrEmpty(id) && (provider == Provider.Imdb
-            ? id.Length > 2 && id.StartsWith("tt", StringComparison.Ordinal) && id.Skip(2).All(char.IsAsciiDigit)
-            : id.All(char.IsAsciiDigit));
+    // IMDb ids are tt + digits; TMDB and TVDB ids are digits; at most 18 digits, so every id fits a long (TraktId).
+    // Anything else (slugs, paths, a tt id filed as TMDB, an overlong number) is rejected before it can become a key.
+    private const int MaxDigits = 18;
+
+    public static bool IsValidId(Provider provider, string? id)
+    {
+        var digits = provider == Provider.Imdb ? (id is { Length: > 2 } && id.StartsWith("tt", StringComparison.Ordinal) ? id[2..] : null) : id;
+        return digits is { Length: > 0 and <= MaxDigits } && digits.All(char.IsAsciiDigit);
+    }
 
     // Factories: null when the id is not valid for the provider (or the position is unknown).
     public static ProviderKey? Movie(Provider p, string? id) => Make(p, KeyKind.Movie, id);
@@ -87,8 +90,7 @@ public readonly record struct ProviderKey
         ProviderKey? parsed = parts switch
         {
             [var ep, var p, var id, var pos] when ep.Equals("ep", StringComparison.OrdinalIgnoreCase) && TryProvider(p, out var provider)
-                => PositionForm.Match(pos) is { Success: true } m
-                    ? SeasonEpisode(provider, id, int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)) : null,
+                => TryPosition(pos, out var season, out var episode) ? SeasonEpisode(provider, id, season, episode) : null,
             [var p, var kind, var id] when TryProvider(p, out var provider) => kind.ToLowerInvariant() switch
             {
                 "movie" => Movie(provider, id),
@@ -114,8 +116,7 @@ public readonly record struct ProviderKey
                 _ => null,
             },
             [var t, var tv, var id, var pos] when IsTmdb(t) && tv.Equals("tv", StringComparison.OrdinalIgnoreCase)
-                => PositionForm.Match(pos) is { Success: true } m
-                    ? SeasonEpisode(Provider.Tmdb, id, int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)) : null,
+                => TryPosition(pos, out var season, out var episode) ? SeasonEpisode(Provider.Tmdb, id, season, episode) : null,
             _ => null,
         };
         return Set(parsed, out key);
@@ -126,6 +127,14 @@ public readonly record struct ProviderKey
         "(" + string.Join(" OR ", Providers.SelectMany(p => new[] { $"{column} GLOB '{Name(p)}:*'", $"{column} GLOB 'ep:{Name(p)}:*'" })) + ")";
 
     private static string Name(Provider p) => p switch { Provider.Tmdb => "tmdb", Provider.Imdb => "imdb", _ => "tvdb" };
+
+    // "s01e01"; false (never an exception) for a number that does not fit an int.
+    private static bool TryPosition(string pos, out int season, out int episode)
+    {
+        season = episode = 0;
+        return PositionForm.Match(pos) is { Success: true } m
+               && int.TryParse(m.Groups[1].Value, out season) && int.TryParse(m.Groups[2].Value, out episode);
+    }
 
     private static bool IsTmdb(string s) => s.Equals("tmdb", StringComparison.OrdinalIgnoreCase);
 

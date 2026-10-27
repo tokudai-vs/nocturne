@@ -73,6 +73,10 @@ public class ProviderKeyTests : IDisposable
     [InlineData("name:movie:arrival:2016")]
     [InlineData("item:srv:id")]
     [InlineData("")]
+    [InlineData("tmdb:movie:1234567890123456789")]   // 19 digits: would not fit TraktId's long
+    [InlineData("imdb:movie:tt1234567890123456789")]
+    [InlineData("ep:tvdb:81189:s99999999999e01")]   // a position past int: false, not an exception
+    [InlineData("ep:tvdb:81189:s01e99999999999")]
     public void NonKeys_DoNotParse(string s) => Assert.False(ProviderKey.TryParse(s, out _));
 
     [Theory]
@@ -80,6 +84,7 @@ public class ProviderKeyTests : IDisposable
     [InlineData("ep:tmdb:1396:s01e01")]
     [InlineData("tmdb:ep:62085")]
     [InlineData("tvdb:movie:123")]
+    [InlineData("tmdb:tv:1396:s99999999999e01")]
     public void NonTmdbKeys_DoNotParseAsTmdbKeys(string s) => Assert.False(ProviderKey.TryParseTmdbKey(s, out _));
 
     // The SQL prefilter (DatabaseService's conflict pairs) keeps every provider key and drops the fuzzy ones.
