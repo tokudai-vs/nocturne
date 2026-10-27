@@ -24,7 +24,7 @@ public class TraktQueueDrainWorker : IQueueDrainWorker
     {
         _db = db;
         _auth = auth;
-        _http = httpClient ?? new HttpClient { BaseAddress = new Uri(TraktApiBase), Timeout = TimeSpan.FromSeconds(15) };
+        _http = (httpClient ?? new HttpClient { BaseAddress = new Uri(TraktApiBase), Timeout = TimeSpan.FromSeconds(15) }).Identify();
         _http.DefaultRequestHeaders.Accept.Clear();
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         _http.DefaultRequestHeaders.Add("trakt-api-version", "2");

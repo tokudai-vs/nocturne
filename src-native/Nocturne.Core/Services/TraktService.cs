@@ -110,7 +110,7 @@ public class TraktService
     public TraktService(ITraktAuthService auth, HttpClient? httpClient = null)
     {
         _auth = auth;
-        _http = httpClient ?? new HttpClient { BaseAddress = new Uri(TraktApiUrl), Timeout = TimeSpan.FromSeconds(15) };
+        _http = (httpClient ?? new HttpClient { BaseAddress = new Uri(TraktApiUrl), Timeout = TimeSpan.FromSeconds(15) }).Identify();
     }
 
     // Was "a legacy access token exists in settings", which stayed false once the new auth connected, so the

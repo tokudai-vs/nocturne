@@ -33,7 +33,7 @@ public class TraktAuthService : ITraktAuthService
     public TraktAuthService(DatabaseService db, HttpClient? httpClient = null)
     {
         _db = db;
-        _http = httpClient ?? new HttpClient { BaseAddress = new Uri(TraktApiBase), Timeout = TimeSpan.FromSeconds(15) };
+        _http = (httpClient ?? new HttpClient { BaseAddress = new Uri(TraktApiBase), Timeout = TimeSpan.FromSeconds(15) }).Identify();
         _http.DefaultRequestHeaders.Accept.Clear();
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         _http.DefaultRequestHeaders.Add("trakt-api-version", "2");
@@ -106,6 +106,7 @@ public class TraktAuthService : ITraktAuthService
         {
             Content = JsonContent.Create(payload)
         };
+        request.Headers.Add("trakt-api-key", clientId); // with trakt-api-version (default header) on every call
 
         using var response = await _http.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
@@ -154,6 +155,7 @@ public class TraktAuthService : ITraktAuthService
         {
             Content = JsonContent.Create(payload)
         };
+        request.Headers.Add("trakt-api-key", clientId); // with trakt-api-version (default header) on every call
 
         using var response = await _http.SendAsync(request, ct);
 
@@ -294,6 +296,7 @@ public class TraktAuthService : ITraktAuthService
             {
                 Content = JsonContent.Create(payload)
             };
+            request.Headers.Add("trakt-api-key", clientId); // with trakt-api-version (default header) on every call
 
             using var response = await _http.SendAsync(request, ct);
             status = response.StatusCode;
@@ -350,6 +353,7 @@ public class TraktAuthService : ITraktAuthService
                 {
                     Content = JsonContent.Create(payload)
                 };
+                req.Headers.Add("trakt-api-key", clientId); // with trakt-api-version (default header) on every call
                 await _http.SendAsync(req, ct);
             }
             catch (Exception ex)

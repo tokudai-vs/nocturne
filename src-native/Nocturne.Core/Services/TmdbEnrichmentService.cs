@@ -37,7 +37,7 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
     public TmdbEnrichmentService(DatabaseService db, HttpClient? httpClient = null)
     {
         _db = db;
-        _http = httpClient ?? new HttpClient { BaseAddress = new Uri(TmdbApiBase), Timeout = TimeSpan.FromSeconds(20) };
+        _http = (httpClient ?? new HttpClient { BaseAddress = new Uri(TmdbApiBase), Timeout = TimeSpan.FromSeconds(20) }).Identify();
         _http.DefaultRequestHeaders.Accept.Clear();
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 

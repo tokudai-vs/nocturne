@@ -26,7 +26,7 @@ public class TraktWiringTests : IDisposable
 
     private sealed class Trakt : HttpMessageHandler
     {
-        public readonly List<(string Method, string Path, string? ApiKey, string? Bearer, string Body)> Requests = new();
+        public readonly List<(string Method, string Path, string? ApiKey, string? Bearer, string Body, string Agent, string? Version)> Requests = new();
         public Func<string, HttpResponseMessage?> Route { get; set; } = _ => null;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -35,7 +35,8 @@ public class TraktWiringTests : IDisposable
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add((request.Method.Method, path,
                 request.Headers.TryGetValues("trakt-api-key", out var k) ? k.First() : null,
-                request.Headers.Authorization?.Parameter, body));
+                request.Headers.Authorization?.Parameter, body, request.Headers.UserAgent.ToString(),
+                request.Headers.TryGetValues("trakt-api-version", out var v) ? v.First() : null));
             return Route(path) ?? Json(HttpStatusCode.OK, "[]");
         }
     }
@@ -103,6 +104,39 @@ public class TraktWiringTests : IDisposable
         var reloaded = new TraktAuthService(_db, Client(trakt));
         Assert.Equal(TraktConnectionState.Connected, reloaded.State);
         Assert.Equal("custom-client-123", reloaded.GetActiveClientId());
+    }
+
+    // #33: Cloudflare in front of api.trakt.tv answers a request with no User-Agent with 403; every Trakt call identifies
+    // itself and carries the API version and key, the OAuth calls included.
+    [Fact]
+    public async Task EveryTraktCall_CarriesAUserAgent_TheApiVersion_AndTheKey()
+    {
+        var trakt = new Trakt
+        {
+            Route = path => path switch
+            {
+                "/oauth/device/code" => Json(HttpStatusCode.OK, "{\"device_code\":\"dc\",\"user_code\":\"ABCD1234\",\"verification_url\":\"https://trakt.tv/activate\",\"expires_in\":600,\"interval\":5}"),
+                "/oauth/device/token" => Json(HttpStatusCode.OK, "{\"access_token\":\"tok\",\"refresh_token\":\"ref\",\"expires_in\":3600}"),
+                "/users/me" => Json(HttpStatusCode.OK, "{\"user\":{\"username\":\"viewer\"}}"),
+                _ => null
+            }
+        };
+        var auth = new TraktAuthService(_db, Client(trakt));
+        auth.SetCustomClientId("custom-client-123");
+
+        await auth.PollForTokenAsync(await auth.RequestDeviceCodeAsync(CancellationToken.None), CancellationToken.None);
+        await auth.RefreshIfNeededAsync(CancellationToken.None); // expires inside the refresh window: /oauth/token
+        await new TraktSyncService(_db, auth, Client(trakt)).PullWatchedAsync(CancellationToken.None);
+        await auth.DisconnectAsync(CancellationToken.None);      // /oauth/revoke
+
+        Assert.Contains(trakt.Requests, r => r.Path == "/oauth/token");
+        Assert.Contains(trakt.Requests, r => r.Path == "/oauth/revoke");
+        Assert.All(trakt.Requests, r =>
+        {
+            Assert.StartsWith("Nocturne/", r.Agent);
+            Assert.Equal("2", r.Version);
+            Assert.Equal("custom-client-123", r.ApiKey);
+        });
     }
 
     // I4
