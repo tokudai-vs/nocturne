@@ -141,7 +141,9 @@ public interface IWatchlistService
     Task<IReadOnlyList<WatchlistCard>> GetAsync(CancellationToken ct);
     Task AddAsync(long groupId, CancellationToken ct);
     Task RemoveAsync(long groupId, CancellationToken ct);
-    Task AddUnownedAsync(string tmdbKey, string title, int? year, string itemType, CancellationToken ct);
+    Task AddUnownedAsync(string titleKey, string title, int? year, string itemType, CancellationToken ct);
+    Task RemoveUnownedAsync(string titleKey, CancellationToken ct);
+    Task DrainFavouritesAsync(Func<string, EmbyClient?> clientFor);
 }
 
 public interface ITmdbEnrichmentService

@@ -18,9 +18,9 @@
                     <ui:SymbolIcon Symbol="Checkmark16" />
                 </MenuItem.Icon>
             </MenuItem>
-            <MenuItem Header="Toggle Favorite" Click="OnContextMenuToggleFavoriteClick">
+            <MenuItem x:Name="WatchlistMenuItem" Header="Toggle Watchlist" Click="OnContextMenuToggleWatchlistClick">
                 <MenuItem.Icon>
-                    <ui:SymbolIcon Symbol="Heart16" />
+                    <ui:SymbolIcon Symbol="Bookmark16" />
                 </MenuItem.Icon>
             </MenuItem>
             <Separator />

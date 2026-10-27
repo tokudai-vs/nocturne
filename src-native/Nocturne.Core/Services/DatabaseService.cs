@@ -972,7 +972,11 @@ public class DatabaseService : IDisposable
                     if (string.IsNullOrEmpty(item.ServerId) || string.IsNullOrEmpty(item.Id)) continue;
                     pId.Value = item.Id;
                     pSrv.Value = item.ServerId;
-                    if (lookup.ExecuteScalar() is long found) groupOf[item] = (int)found;
+                    if (lookup.ExecuteScalar() is long found)
+                    {
+                        groupOf[item] = (int)found;
+                        item.DedupGroupId = found.ToString(); // a live-fetched card can then use its group (watchlist toggle)
+                    }
                 }
             }
 
@@ -1000,6 +1004,11 @@ public class DatabaseService : IDisposable
                 (item.ElectedBackdropTag, item.ArtworkBackdropItemId, item.ArtworkBackdropServerId) = (a.BTag, a.BItem, a.BServer);
                 (item.TmdbPosterPath, item.TmdbBackdropPath) = (a.Poster, a.Backdrop);
             }
+
+            // §12.5: every card shows whether its title is on the watchlist, through any source.
+            var listed = WatchlistedGroupsLocked();
+            foreach (var item in items)
+                item.IsInWatchlist = long.TryParse(item.DedupGroupId, out var gid) && listed.Contains(gid);
         }
     }
 
@@ -4357,38 +4366,89 @@ public class DatabaseService : IDisposable
         return list;
     }
 
-    private static readonly string SqlIsInWatchlist = Checked(@"
-                    SELECT 1 FROM watchlist_entries w
+    // The groups on the watchlist, through an Emby favourite or a Trakt entry, less those with a remove in flight (§9.2).
+    private static readonly string SqlWatchlistedGroups = Checked(@"
+                    SELECT c.group_id FROM watchlist_entries w
                     JOIN cached_items c ON c.server_id = w.source AND c.id = w.ref
-                    WHERE c.group_id = $gid AND COALESCE(w.pending_op, '') <> 'remove'
-                    LIMIT 1;
+                    WHERE w.source <> 'trakt' AND COALESCE(w.pending_op, '') <> 'remove' AND c.group_id IS NOT NULL
+                    UNION
+                    SELECT k.group_id FROM watchlist_entries w
+                    JOIN dedup_keys k ON k.key = w.ref
+                    WHERE w.source = 'trakt' AND COALESCE(w.pending_op, '') <> 'remove';
                 ");
-    private static readonly string SqlIsInWatchlist2 = Checked("SELECT 1 FROM watchlist_entries WHERE tmdb_key = $key AND COALESCE(pending_op, '') <> 'remove' LIMIT 1;");
+    private static readonly string SqlIsTraktRefListed = Checked("SELECT 1 FROM watchlist_entries WHERE source = 'trakt' AND ref = $ref AND COALESCE(pending_op, '') <> 'remove' LIMIT 1;");
 
-    public bool IsInWatchlist(long groupId, string? tmdbKey = null)
+    private HashSet<long> WatchlistedGroupsLocked()
+    {
+        var set = new HashSet<long>();
+        if (_connection == null) return set;
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlWatchlistedGroups;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) set.Add(reader.GetInt64(0));
+        }
+        catch (Exception ex) when (QueryFailed(ex, SqlWatchlistedGroups)) { }
+        return set;
+    }
+
+    // titleRef: for a title not in the library, the Trakt entry's ref ('tmdb:movie:N').
+    public bool IsInWatchlist(long groupId, string? titleRef = null)
     {
         lock (_dbLock)
         {
             if (_connection == null) return false;
+            if (groupId > 0 && WatchlistedGroupsLocked().Contains(groupId)) return true;
+            if (string.IsNullOrEmpty(titleRef)) return false;
             try
             {
                 using var cmd = _connection.CreateCommand();
-                cmd.CommandText = SqlIsInWatchlist;
-                cmd.Parameters.AddWithValue("$gid", groupId);
-                var res = cmd.ExecuteScalar();
-                if (res != null) return true;
-
-                if (!string.IsNullOrEmpty(tmdbKey))
-                {
-                    using var cmd2 = _connection.CreateCommand();
-                    cmd2.CommandText = SqlIsInWatchlist2;
-                    cmd2.Parameters.AddWithValue("$key", tmdbKey);
-                    return cmd2.ExecuteScalar() != null;
-                }
+                cmd.CommandText = SqlIsTraktRefListed;
+                cmd.Parameters.AddWithValue("$ref", titleRef);
+                return cmd.ExecuteScalar() != null;
             }
-            catch (Exception ex) when (QueryFailed(ex, SqlIsInWatchlist + " / " + SqlIsInWatchlist2)) { }
+            catch (Exception ex) when (QueryFailed(ex, SqlIsTraktRefListed)) { return false; }
         }
-        return false;
+    }
+
+    // §9.3: Nocturne's favourite writes not yet delivered, one row per hosting server and item.
+    private static readonly string SqlPendingFavouriteWrites = Checked("SELECT source, ref, pending_op FROM watchlist_entries WHERE source <> 'trakt' AND pending_op IS NOT NULL;");
+
+    public List<(string ServerId, string ItemId, string Op)> GetPendingFavouriteWrites()
+    {
+        var list = new List<(string, string, string)>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlPendingFavouriteWrites;
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read()) list.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
+            catch (Exception ex) when (QueryFailed(ex, SqlPendingFavouriteWrites)) { }
+        }
+        return list;
+    }
+
+    // A delivered op settles only if it is still the row's op: a toggle made while it was in flight stays pending.
+    private static readonly string SqlSettleAdd = Checked("UPDATE watchlist_entries SET pending_op = NULL WHERE source = $source AND ref = $ref AND pending_op = 'add';");
+    private static readonly string SqlSettleRemove = Checked("DELETE FROM watchlist_entries WHERE source = $source AND ref = $ref AND pending_op = 'remove';");
+
+    public void SettleWatchlistOp(string source, string @ref, string op)
+    {
+        lock (_dbLock)
+        {
+            if (QueueDuringRebuildWrite(() => SettleWatchlistOp(source, @ref, op))) return;
+            if (_connection == null) return;
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = op == "add" ? SqlSettleAdd : SqlSettleRemove;
+            cmd.Parameters.AddWithValue("$source", source);
+            cmd.Parameters.AddWithValue("$ref", @ref);
+            cmd.ExecuteNonQuery();
+        }
     }
 
     // =========================================================================

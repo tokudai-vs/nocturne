@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -8,8 +9,16 @@ using Nocturne.Core.Utils;
 
 namespace Nocturne.Core.Services;
 
+// Spec §9.3: the watchlist's only writes are the user's own, made in Nocturne, and they go to both peers: a favourite
+// on every server hosting the title and, with Trakt connected, its Trakt watchlist. Optimistic: each entry is written
+// at once with its pending_op, which hides a remove immediately; DrainFavouritesAsync and the Trakt queue deliver them,
+// and a pull settles them against what each source then reports (DatabaseService.ReplaceTraktWatchlist, the sync).
 public class WatchlistService : IWatchlistService
 {
+    // A title's provider key as the dedup engine writes it: 'tmdb:movie:550', 'tvdb:series:81189'.
+    private static readonly Regex TitleKey = new(@"^(tmdb|imdb|tvdb):(movie|series):(.+)$", RegexOptions.IgnoreCase);
+    private static readonly string[] ProviderOrder = { "tmdb", "imdb", "tvdb" }; // as TraktSyncService picks a pulled entry's ref
+
     private readonly DatabaseService _db;
     private readonly ITraktAuthService _auth;
 
@@ -25,201 +34,107 @@ public class WatchlistService : IWatchlistService
         return Task.FromResult<IReadOnlyList<WatchlistCard>>(list);
     }
 
-    public Task AddAsync(long groupId, CancellationToken ct)
+    public Task AddAsync(long groupId, CancellationToken ct) => WriteAsync(groupId, "add");
+
+    // Every hosting server gets a remove, also where the sync has not seen the favourite yet: a server without it
+    // answers a no-op, and one with it cannot bring the title back.
+    public Task RemoveAsync(long groupId, CancellationToken ct) => WriteAsync(groupId, "remove");
+
+    private Task WriteAsync(long groupId, string op)
     {
         var group = _db.GetDedupGroup(groupId);
-        if (group == null) return Task.CompletedTask;
+        if (group == null || !IsTitle(group.ItemType)) return Task.CompletedTask;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-        long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        foreach (var (srv, id) in _db.GetGroupItemIds((int)groupId))
+            _db.UpsertWatchlistEntry(srv, id, group.ItemType, now, group.Name, group.Year, group.TmdbKey, op);
 
-        // 1. Optimistic write for Emby primary server
-        _db.UpsertWatchlistEntry(
-            source: group.PrimaryServerId,
-            @ref: group.PrimaryItemId,
-            itemType: group.ItemType,
-            addedUtc: nowSec,
-            title: group.Name,
-            year: group.Year,
-            tmdbKey: group.TmdbKey,
-            pendingOp: "add"
-        );
-
-        // 2. Trakt write if Trakt connected
-        if (_auth.State == TraktConnectionState.Connected)
+        var keys = TitleKeys(groupId);
+        if (op == "remove")
+            foreach (var key in keys) _db.SetWatchlistPendingOp("trakt", key, "remove");
+        if (_auth.State == TraktConnectionState.Connected && keys.Count > 0)
         {
-            var payload = BuildWatchlistPayload(group);
-            if (!string.IsNullOrEmpty(payload))
-            {
-                if (!string.IsNullOrEmpty(group.TmdbKey))
-                {
-                    _db.UpsertWatchlistEntry(
-                        source: "trakt",
-                        @ref: group.TmdbKey,
-                        itemType: group.ItemType,
-                        addedUtc: nowSec,
-                        title: group.Name,
-                        year: group.Year,
-                        tmdbKey: group.TmdbKey,
-                        pendingOp: "add"
-                    );
-                }
-
-                _db.EnqueueTraktEvent(groupId, "watchlist_add", 0, payload, Origin.Local);
-            }
+            if (op == "add") _db.UpsertWatchlistEntry("trakt", keys[0], group.ItemType, now, group.Name, group.Year, group.TmdbKey, "add");
+            _db.EnqueueTraktEvent(groupId, $"watchlist_{op}", 0, Payload(group.ItemType, group.Name, group.Year, keys), Origin.Local);
         }
 
-        NocturneLogger.Info("WatchlistService", $"Added group {groupId} ('{group.Name}') to watchlist.");
+        NocturneLogger.Info("WatchlistService", $"Watchlist {op}: group {groupId} ('{group.Name}').");
         return Task.CompletedTask;
     }
 
-    public Task RemoveAsync(long groupId, CancellationToken ct)
+    // A title not in the library lives on Trakt only. titleKey is its ref: 'tmdb:movie:N' | 'tmdb:series:N'.
+    public Task AddUnownedAsync(string titleKey, string title, int? year, string itemType, CancellationToken ct)
     {
-        var group = _db.GetDedupGroup(groupId);
-        if (group == null) return Task.CompletedTask;
-
-        // 1. Optimistic mark 'remove' on local entries (§9.3)
-        _db.SetWatchlistPendingOp(group.PrimaryServerId, group.PrimaryItemId, "remove");
-        if (!string.IsNullOrEmpty(group.TmdbKey))
-        {
-            _db.SetWatchlistPendingOp("trakt", group.TmdbKey, "remove");
-        }
-
-        // 2. Trakt queue write
-        if (_auth.State == TraktConnectionState.Connected)
-        {
-            var payload = BuildWatchlistPayload(group);
-            if (!string.IsNullOrEmpty(payload))
-            {
-                _db.EnqueueTraktEvent(groupId, "watchlist_remove", 0, payload, Origin.Local);
-            }
-        }
-
-        NocturneLogger.Info("WatchlistService", $"Marked group {groupId} ('{group.Name}') removed from watchlist.");
+        if (_auth.State != TraktConnectionState.Connected || !TitleKey.IsMatch(titleKey)) return Task.CompletedTask;
+        _db.UpsertWatchlistEntry("trakt", titleKey, itemType, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), title, year, TmdbArtworkKey(titleKey), "add");
+        _db.EnqueueTraktEvent(0, "watchlist_add", 0, Payload(itemType, title, year, new[] { titleKey }), Origin.Local);
+        NocturneLogger.Info("WatchlistService", $"Watchlist add: '{title}' ({titleKey}), not in the library.");
         return Task.CompletedTask;
     }
 
-    public Task AddUnownedAsync(string tmdbKey, string title, int? year, string itemType, CancellationToken ct)
+    public Task RemoveUnownedAsync(string titleKey, CancellationToken ct)
     {
-        long nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-        _db.UpsertWatchlistEntry(
-            source: "trakt",
-            @ref: tmdbKey,
-            itemType: itemType,
-            addedUtc: nowSec,
-            title: title,
-            year: year,
-            tmdbKey: tmdbKey,
-            pendingOp: "add"
-        );
-
-        if (_auth.State == TraktConnectionState.Connected)
+        _db.SetWatchlistPendingOp("trakt", titleKey, "remove");
+        var m = TitleKey.Match(titleKey);
+        if (_auth.State == TraktConnectionState.Connected && m.Success)
         {
-            var payload = BuildUnownedPayload(tmdbKey, title, year, itemType);
-            if (!string.IsNullOrEmpty(payload))
-            {
-                _db.EnqueueTraktEvent(0, "watchlist_add", 0, payload, Origin.Local);
-            }
+            var itemType = m.Groups[2].Value.Equals("series", StringComparison.OrdinalIgnoreCase) ? "Series" : "Movie";
+            _db.EnqueueTraktEvent(0, "watchlist_remove", 0, Payload(itemType, null, null, new[] { titleKey }), Origin.Local);
         }
-
-        NocturneLogger.Info("WatchlistService", $"Added unowned title '{title}' ({tmdbKey}) to watchlist.");
         return Task.CompletedTask;
     }
 
-    private string? BuildWatchlistPayload(DedupGroupRecord group)
+    // Delivers the favourite writes to each server. A server that answers settles its row; one that cannot be reached
+    // keeps it for the next drain, as a transport failure never reverts (§9.3). Drains may overlap: a favourite write
+    // is idempotent, and a settle only clears the op it delivered.
+    // ponytail: no revert on a definitive rejection (ToggleFavoriteAsync reports only success); add one if servers reject.
+    public async Task DrainFavouritesAsync(Func<string, EmbyClient?> clientFor)
     {
-        bool isShow = string.Equals(group.ItemType, "Series", StringComparison.OrdinalIgnoreCase);
+        foreach (var (server, itemId, op) in _db.GetPendingFavouriteWrites())
+        {
+            var client = clientFor(server);
+            if (client == null)
+            {
+                _db.RemoveWatchlistEntry(server, itemId); // the server is no longer configured
+                continue;
+            }
+            if (await client.ToggleFavoriteAsync(itemId, op == "add")) _db.SettleWatchlistOp(server, itemId, op);
+        }
+    }
+
+    private static bool IsTitle(string? itemType) =>
+        string.Equals(itemType, "Movie", StringComparison.OrdinalIgnoreCase) || string.Equals(itemType, "Series", StringComparison.OrdinalIgnoreCase);
+
+    private List<string> TitleKeys(long groupId) => _db.GetAuthoritativeKeys((int)groupId)
+        .Where(k => TitleKey.IsMatch(k))
+        .OrderBy(k => Array.IndexOf(ProviderOrder, k.Split(':')[0].ToLowerInvariant()))
+        .ToList();
+
+    // tmdb_metadata keys a show 'tmdb:tv:N' (§4.3).
+    private static string? TmdbArtworkKey(string titleKey)
+    {
+        var m = TitleKey.Match(titleKey);
+        if (!m.Success || !m.Groups[1].Value.Equals("tmdb", StringComparison.OrdinalIgnoreCase)) return null;
+        return m.Groups[2].Value.Equals("series", StringComparison.OrdinalIgnoreCase) ? $"tmdb:tv:{m.Groups[3].Value}" : titleKey;
+    }
+
+    // /sync/watchlist[/remove] body with every id the title has (D4/D5); title and year only when known.
+    private static string Payload(string itemType, string? title, int? year, IEnumerable<string> keys)
+    {
         var ids = new Dictionary<string, object>();
-
-        if (!string.IsNullOrEmpty(group.TmdbKey))
+        foreach (var key in keys)
         {
-            var m = Regex.Match(group.TmdbKey, @"^tmdb:(?:movie|tv):(\d+)$", RegexOptions.IgnoreCase);
-            if (m.Success && int.TryParse(m.Groups[1].Value, out int tmdbId))
-            {
-                ids["tmdb"] = tmdbId;
-            }
+            var m = TitleKey.Match(key);
+            if (!m.Success) continue;
+            var provider = m.Groups[1].Value.ToLowerInvariant();
+            if (ids.ContainsKey(provider)) continue;
+            var id = m.Groups[3].Value;
+            ids[provider] = provider != "imdb" && int.TryParse(id, out var n) ? n : id;
         }
-
-        if (ids.Count == 0) return null;
-
-        if (isShow)
-        {
-            var showObj = new Dictionary<string, object>
-            {
-                ["shows"] = new[]
-                {
-                    new Dictionary<string, object>
-                    {
-                        ["title"] = group.Name,
-                        ["year"] = (object?)group.Year ?? DBNull.Value,
-                        ["ids"] = ids
-                    }
-                }
-            };
-            return JsonSerializer.Serialize(showObj);
-        }
-        else
-        {
-            var movieObj = new Dictionary<string, object>
-            {
-                ["movies"] = new[]
-                {
-                    new Dictionary<string, object>
-                    {
-                        ["title"] = group.Name,
-                        ["year"] = (object?)group.Year ?? DBNull.Value,
-                        ["ids"] = ids
-                    }
-                }
-            };
-            return JsonSerializer.Serialize(movieObj);
-        }
-    }
-
-    private string? BuildUnownedPayload(string tmdbKey, string title, int? year, string itemType)
-    {
-        bool isShow = string.Equals(itemType, "Series", StringComparison.OrdinalIgnoreCase);
-        var ids = new Dictionary<string, object>();
-
-        var m = Regex.Match(tmdbKey, @"^tmdb:(?:movie|tv):(\d+)$", RegexOptions.IgnoreCase);
-        if (m.Success && int.TryParse(m.Groups[1].Value, out int tmdbId))
-        {
-            ids["tmdb"] = tmdbId;
-        }
-
-        if (ids.Count == 0) return null;
-
-        if (isShow)
-        {
-            var showObj = new Dictionary<string, object>
-            {
-                ["shows"] = new[]
-                {
-                    new Dictionary<string, object>
-                    {
-                        ["title"] = title,
-                        ["year"] = (object?)year ?? DBNull.Value,
-                        ["ids"] = ids
-                    }
-                }
-            };
-            return JsonSerializer.Serialize(showObj);
-        }
-        else
-        {
-            var movieObj = new Dictionary<string, object>
-            {
-                ["movies"] = new[]
-                {
-                    new Dictionary<string, object>
-                    {
-                        ["title"] = title,
-                        ["year"] = (object?)year ?? DBNull.Value,
-                        ["ids"] = ids
-                    }
-                }
-            };
-            return JsonSerializer.Serialize(movieObj);
-        }
+        var entry = new Dictionary<string, object> { ["ids"] = ids };
+        if (!string.IsNullOrEmpty(title)) entry["title"] = title;
+        if (year is { } y) entry["year"] = y;
+        var list = string.Equals(itemType, "Series", StringComparison.OrdinalIgnoreCase) ? "shows" : "movies";
+        return JsonSerializer.Serialize(new Dictionary<string, object> { [list] = new[] { entry } });
     }
 }

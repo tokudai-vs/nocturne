@@ -466,23 +466,15 @@
                                     </Button.Style>
                                 </Button>
 
-                                <!-- Favorite Toggle Button -->
-                                <Button Click="OnFavoriteToggleClick" Margin="0,0,8,0" Padding="14,10"
-                                        Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="Heart24" FontSize="16" Margin="0,0,6,0"
-                                                       Foreground="{Binding IsFavorite, Converter={StaticResource HeroBoolToBrushConverter}}" />
-                                        <TextBlock Text="Favorite" FontWeight="Medium" />
-                                    </StackPanel>
-                                </Button>
-
-                                <!-- Trakt Watchlist Bookmark Toggle -->
+                                <!-- Watchlist toggle (§12.5): Emby favourite on every hosting server + Trakt watchlist (D10) -->
                                 <Button Click="OnWatchlistToggleClick" Margin="0,0,8,0" Padding="14,10"
+                                        Visibility="{Binding CanWatchlist, Converter={StaticResource BoolToVisibility}}"
+                                        AutomationProperties.Name="{Binding WatchlistButtonText}"
                                         Background="#30FFFFFF" Foreground="#FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="Bookmark24" FontSize="16" Margin="0,0,6,0"
+                                        <ui:SymbolIcon Symbol="Bookmark24" FontSize="16" Margin="0,0,6,0" Filled="{Binding IsInWatchlist}"
                                                        Foreground="{Binding IsInWatchlist, Converter={StaticResource HeroBoolToBrushConverter}}" />
-                                        <TextBlock Text="Watchlist" FontWeight="Medium" />
+                                        <TextBlock Text="{Binding WatchlistButtonText}" FontWeight="Medium" />
                                     </StackPanel>
                                 </Button>
 

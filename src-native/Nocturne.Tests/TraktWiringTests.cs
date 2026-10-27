@@ -185,11 +185,31 @@ public class TraktWiringTests : IDisposable
     private sealed class Emby : HttpMessageHandler
     {
         public readonly List<string> Posts = new(); // host + path and query
+        public readonly List<string> Deletes = new();
+        public bool Offline;
+        public Action? OnSend;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
-            lock (Posts) if (request.Method == HttpMethod.Post) Posts.Add(request.RequestUri!.Host + request.RequestUri.PathAndQuery);
+            if (Offline) throw new HttpRequestException("No such host is known.");
+            OnSend?.Invoke();
+            var at = request.RequestUri!.Host + request.RequestUri.PathAndQuery;
+            lock (Posts)
+            {
+                if (request.Method == HttpMethod.Post) Posts.Add(at);
+                else if (request.Method == HttpMethod.Delete) Deletes.Add(at);
+            }
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
         }
+    }
+
+    // The app's cycle, every queue real: Emby favourites and the Trakt queue out, the Trakt pull, the sibling queue.
+    private PeerSyncScheduler Cycle(TraktAuthService auth, Trakt trakt, Func<string, EmbyClient?> clientFor, Func<bool>? playing = null)
+    {
+        var watchlist = new WatchlistService(_db, auth);
+        var traktQueue = new TraktQueueDrainWorker(_db, auth, Client(trakt));
+        return new PeerSyncScheduler(new TraktSyncService(_db, auth, Client(trakt)), auth, playing ?? (() => false),
+            async () => { await watchlist.DrainFavouritesAsync(clientFor); await traktQueue.DrainAsync(CancellationToken.None); },
+            () => new PlaybackSession(_db).DrainSiblingWritesAsync(clientFor, freshOnly: true));
     }
 
     // T6 gate (the loop test): a watch marked on trakt.tv lands in Nocturne and on both servers within one cycle,
@@ -212,10 +232,9 @@ public class TraktWiringTests : IDisposable
         var emby = new Emby();
         EmbyClient ClientFor(string sid) { var c = new EmbyClient(emby); c.Configure($"http://{sid}.test", "tok", "u"); return c; }
         var playing = false;
-        using var cycle = new TraktPullScheduler(new TraktSyncService(_db, auth, Client(trakt)), auth, () => playing,
-            () => new PlaybackSession(_db).DrainSiblingWritesAsync(ClientFor, freshOnly: true));
+        using var cycle = Cycle(auth, trakt, ClientFor, () => playing);
 
-        Assert.True(await cycle.PullAsync());
+        Assert.True(await cycle.CycleAsync());
 
         var watchedAt = new DateTime(2026, 10, 21, 5, 0, 0, DateTimeKind.Utc);
         foreach (var (srv, id) in new[] { ("s1", "arr_a"), ("s2", "arr_b") })
@@ -231,13 +250,13 @@ public class TraktWiringTests : IDisposable
         Assert.DoesNotContain(trakt.Requests, r => r.Method != "GET");
 
         trakt.Requests.Clear();
-        Assert.True(await cycle.PullAsync());
+        Assert.True(await cycle.CycleAsync());
         Assert.Equal("/sync/last_activities", Assert.Single(trakt.Requests).Path);
         Assert.Equal(2, emby.Posts.Count);
 
         playing = true; // §8.3: paused during playback
         trakt.Requests.Clear();
-        Assert.False(await cycle.PullAsync());
+        Assert.False(await cycle.CycleAsync());
         Assert.Empty(trakt.Requests);
     }
 
@@ -316,6 +335,151 @@ public class TraktWiringTests : IDisposable
         arrival.UserData.IsFavorite = false; // unfavourited on Valkyrie: gone
         _db.UpsertItems(new List<EmbyItem> { arrival }, "valkyrie");
         Assert.Equal("Dark", Assert.Single(_db.GetMergedWatchlist()).Title);
+    }
+
+    private EmbyClient EmbyFor(Emby emby, string sid) { var c = new EmbyClient(emby); c.Configure($"http://{sid}.test", "tok", "u"); return c; }
+
+    // T9 gate, add: from a poster while offline, the title is on the watchlist at once; both peers get it on reconnect.
+    [Fact]
+    public async Task AnAddMadeOffline_ShowsAtOnce_AndReachesBothPeersOnReconnect()
+    {
+        ArrivalOnTwoServers(cascadeOn: true);
+        var gid = _db.GetGroupIdForDedupKey("tmdb:movie:329865")!.Value;
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var offline = true;
+        var listed = false;
+        HttpResponseMessage? Route(string path)
+        {
+            if (offline) throw new HttpRequestException("No such host is known.");
+            if (path == "/sync/watchlist") listed = true;
+            return path switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, $"{{\"watchlist\":{{\"updated_at\":\"{(listed ? "2026-10-22" : "2026-10-21")}T00:00:00.000Z\"}}}}"),
+                "/sync/watchlist/movies" => Json(HttpStatusCode.OK, listed ? "[{\"listed_at\":\"2026-10-22T00:00:00.000Z\",\"movie\":{\"title\":\"Arrival\",\"ids\":{\"tmdb\":329865}}}]" : "[]"),
+                "/sync/watchlist" => Json(HttpStatusCode.Created, "{}"),
+                _ => null
+            };
+        }
+        var trakt = new Trakt { Route = Route };
+        var auth = new TraktAuthService(_db, Client(trakt));
+        var emby = new Emby { Offline = true };
+        using var cycle = Cycle(auth, trakt, sid => EmbyFor(emby, sid));
+
+        await new WatchlistService(_db, auth).AddAsync(gid, CancellationToken.None);
+
+        var card = new List<EmbyItem> { new() { Id = "arr_a", ServerId = "s1", Name = "Arrival", Type = "Movie" } };
+        _db.AttachGroupArtwork(card);
+        Assert.True(card[0].IsInWatchlist);                                   // every poster of it, at once
+        Assert.Equal("Arrival", Assert.Single(_db.GetMergedWatchlist()).Title);
+
+        Assert.True(await cycle.CycleAsync());                                // offline: nothing delivered, nothing lost
+        Assert.Equal(2, _db.GetPendingFavouriteWrites().Count);
+        Assert.Equal(1, _db.GetTraktQueueCount());
+        Assert.Single(_db.GetMergedWatchlist());
+
+        (offline, emby.Offline) = (false, false);                             // reconnect
+        Assert.True(await cycle.CycleAsync());
+        Assert.Equal(new[] { "s1.test/emby/Users/u/FavoriteItems/arr_a", "s2.test/emby/Users/u/FavoriteItems/arr_b" }, emby.Posts.OrderBy(p => p));
+        var sent = JsonDocument.Parse(trakt.Requests.Last(r => r.Path == "/sync/watchlist").Body).RootElement.GetProperty("movies")[0];
+        Assert.Equal(329865, sent.GetProperty("ids").GetProperty("tmdb").GetInt32());
+        Assert.False(sent.TryGetProperty("year", out _));                     // no year known: none sent (it was serialized as {})
+        Assert.Empty(_db.GetPendingFavouriteWrites());
+        Assert.Equal(0, _db.GetTraktQueueCount());
+        Assert.True(_db.IsInWatchlist(gid));                                  // the pull settled Trakt's entry, still listed
+    }
+
+    // T9 gate, remove: gone at once, and neither a Trakt pull nor a server sync landing before the remove is delivered
+    // brings it back; once delivered, both peers have dropped it and nothing is left pending.
+    [Fact]
+    public async Task ARemove_NeverFlickersBack_WhenAPullLandsMidFlight()
+    {
+        ArrivalOnTwoServers(cascadeOn: true);
+        var gid = _db.GetGroupIdForDedupKey("tmdb:movie:329865")!.Value;
+        var onValkyrie = new EmbyItem { Id = "arr_a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } }, UserData = new() { IsFavorite = true } };
+        _db.UpsertItems(new List<EmbyItem> { onValkyrie }, "s1");                // a favourite on s1
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var (removed, version) = (false, 1);
+        HttpResponseMessage? Route(string path)
+        {
+            if (path == "/sync/watchlist/remove") (removed, version) = (true, version + 1);
+            return path switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, $"{{\"watchlist\":{{\"updated_at\":\"2026-10-2{version}T00:00:00.000Z\"}}}}"),
+                "/sync/watchlist/movies" => Json(HttpStatusCode.OK, removed ? "[]" : "[{\"listed_at\":\"2026-10-20T00:00:00.000Z\",\"movie\":{\"title\":\"Arrival\",\"ids\":{\"tmdb\":329865}}}]"),
+                "/sync/watchlist/remove" => Json(HttpStatusCode.OK, "{}"),
+                _ => null
+            };
+        }
+        var trakt = new Trakt { Route = Route };
+        var auth = new TraktAuthService(_db, Client(trakt));
+        var sync = new TraktSyncService(_db, auth, Client(trakt));
+        await sync.PullWatchedAsync(CancellationToken.None);                  // and on the Trakt watchlist
+        Assert.Single(_db.GetMergedWatchlist());
+
+        await new WatchlistService(_db, auth).RemoveAsync(gid, CancellationToken.None);
+        Assert.Empty(_db.GetMergedWatchlist());
+
+        version++;                                                            // a pull lands mid-flight: Trakt still lists it
+        await sync.PullWatchedAsync(CancellationToken.None);
+        _db.UpsertItems(new List<EmbyItem> { onValkyrie }, "s1");                // and so does s1's sync
+        Assert.Empty(_db.GetMergedWatchlist());
+        Assert.False(_db.IsInWatchlist(gid));
+
+        var emby = new Emby();
+        using var cycle = Cycle(auth, trakt, sid => EmbyFor(emby, sid));
+        Assert.True(await cycle.CycleAsync());                                // delivered, then pulled
+        Assert.Equal(new[] { "s1.test/emby/Users/u/FavoriteItems/arr_a", "s2.test/emby/Users/u/FavoriteItems/arr_b" }, emby.Deletes.OrderBy(p => p));
+        Assert.Contains(trakt.Requests, r => r.Path == "/sync/watchlist/remove");
+        onValkyrie.UserData.IsFavorite = false;
+        _db.UpsertItems(new List<EmbyItem> { onValkyrie }, "s1");
+        Assert.Empty(_db.GetMergedWatchlist());
+        Assert.Empty(_db.GetPendingFavouriteWrites());
+        Assert.Equal(0, _db.GetTraktQueueCount());
+    }
+
+    // A toggle made while its favourite write is on the wire stays pending: the delivered add does not settle a remove.
+    [Fact]
+    public async Task AToggleMadeWhileAFavouriteIsInFlight_IsNotLost()
+    {
+        ArrivalOnTwoServers(cascadeOn: true);
+        var gid = _db.GetGroupIdForDedupKey("tmdb:movie:329865")!.Value;
+        var watchlist = new WatchlistService(_db, new TraktAuthService(_db));
+        await watchlist.AddAsync(gid, CancellationToken.None);
+        var emby = new Emby();
+        emby.OnSend = () => { emby.OnSend = null; watchlist.RemoveAsync(gid, CancellationToken.None).Wait(); };
+
+        await watchlist.DrainFavouritesAsync(sid => EmbyFor(emby, sid));
+
+        Assert.False(_db.IsInWatchlist(gid));
+        Assert.Contains(_db.GetPendingFavouriteWrites(), w => w.Op == "remove");
+    }
+
+    // A title outside the library is removed through Trakt too; deleting it locally only, the next pull brought it back.
+    [Fact]
+    public async Task RemovingATitleOutsideTheLibrary_GoesToTrakt_AndStaysGone()
+    {
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var trakt = new Trakt
+        {
+            Route = path => path switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, "{\"watchlist\":{\"updated_at\":\"2026-10-21T00:00:00.000Z\"}}"),
+                "/sync/watchlist/shows" => Json(HttpStatusCode.OK, "[{\"listed_at\":\"2026-10-20T00:00:00.000Z\",\"show\":{\"title\":\"Severance\",\"year\":2022,\"ids\":{\"tmdb\":95396}}}]"),
+                _ => null
+            }
+        };
+        var auth = new TraktAuthService(_db, Client(trakt));
+        await new TraktSyncService(_db, auth, Client(trakt)).PullWatchedAsync(CancellationToken.None);
+        var card = Assert.Single(_db.GetMergedWatchlist());
+        Assert.Equal(("Severance", false, "tmdb:series:95396"), (card.Title, card.IsInLibrary, card.Ref));
+
+        await new WatchlistService(_db, auth).RemoveUnownedAsync(card.Ref, CancellationToken.None);
+        _db.ReplaceTraktWatchlist(new List<(string, string, long, string?, int?, string?)> { (card.Ref, "Series", 1, "Severance", 2022, null) }); // a pull mid-flight
+
+        Assert.Empty(_db.GetMergedWatchlist());
+        var queued = Assert.Single(_db.GetPendingTraktEvents(10));
+        Assert.Equal("watchlist_remove", queued.Action);
+        Assert.Equal(95396, JsonDocument.Parse(queued.Payload!).RootElement.GetProperty("shows")[0].GetProperty("ids").GetProperty("tmdb").GetInt32());
     }
 
     // §8.2 step 3: a later local play, finished or not, is newer than Trakt's watch and is kept.

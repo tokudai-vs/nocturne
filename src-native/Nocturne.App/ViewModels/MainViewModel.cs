@@ -24,7 +24,8 @@ public class MainViewModel : BaseViewModel
     private readonly ITmdbEnrichmentService _tmdbEnrichment;
     private readonly TraktQueueDrainWorker _traktDrain;
     private readonly ITraktAuthService _traktAuth;
-    private TraktPullScheduler? _traktPull;
+    private readonly IWatchlistService _watchlist;
+    private PeerSyncScheduler? _peerSync;
     private readonly PlaybackSession _session;
 
     private BaseViewModel _currentViewModel;
@@ -90,7 +91,8 @@ public class MainViewModel : BaseViewModel
         ITraktSyncService traktSync,
         ITmdbEnrichmentService tmdbEnrichment,
         TraktQueueDrainWorker traktDrain,
-        ITraktAuthService traktAuth)
+        ITraktAuthService traktAuth,
+        IWatchlistService watchlist)
     {
         _settings = settings;
         _embyClient = embyClient;
@@ -107,6 +109,7 @@ public class MainViewModel : BaseViewModel
         _tmdbEnrichment = tmdbEnrichment;
         _traktDrain = traktDrain;
         _traktAuth = traktAuth;
+        _watchlist = watchlist;
         _session = new PlaybackSession(db);
 
         HomeVM = homeVM;
@@ -912,7 +915,7 @@ public class MainViewModel : BaseViewModel
             // Kick off background loading immediately (cache renders in 0ms, network fetches in background)
             _ = HomeVM.LoadAsync();
             _ = LibraryVM.LoadViewsAsync();
-            _ = StartTraktAsync();
+            _ = StartPeerSyncAsync();
 
             // Very brief 80ms yield to allow the initial window frame and controls to lay out, then dismiss splash
             await Task.Delay(80);
@@ -944,8 +947,8 @@ public class MainViewModel : BaseViewModel
     }
 
     // I5: refresh the Trakt token at startup (it was only refreshed before a queue drain, so an expired token
-    // stayed "connected" until the first scrobble), then start the watched pull: now, after Connect, every 15 minutes.
-    private async Task StartTraktAsync()
+    // stayed "connected" until the first scrobble), then start the peer cycle: now, after Connect, every 15 minutes.
+    private async Task StartPeerSyncAsync()
     {
         try
         {
@@ -958,9 +961,9 @@ public class MainViewModel : BaseViewModel
                 NocturneLogger.Info("MainViewModel", "Moved the Trakt Client ID from the legacy settings field to the Trakt auth service.");
             }
             await _traktAuth.RefreshIfNeededAsync(System.Threading.CancellationToken.None);
-            _traktPull = new TraktPullScheduler(_traktSync, _traktAuth, () => IsPlayerActive,
+            _peerSync = new PeerSyncScheduler(_traktSync, _traktAuth, () => IsPlayerActive, DrainOutboundAsync,
                 () => _session.DrainSiblingWritesAsync(SiblingClient, freshOnly: true));
-            _traktPull.Start();
+            _peerSync.Start();
         }
         catch (Exception ex)
         {
@@ -1376,6 +1379,48 @@ public class MainViewModel : BaseViewModel
         }
         catch { }
     }
+
+    // Nocturne's own writes to its peers: favourites to each server, then the Trakt queue.
+    private async Task DrainOutboundAsync()
+    {
+        try
+        {
+            await _watchlist.DrainFavouritesAsync(SiblingClient);
+            await _traktDrain.DrainAsync(System.Threading.CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Error("MainViewModel", "Error draining watchlist writes", ex);
+        }
+    }
+
+    // §9.3/§12.5: the one watchlist toggle behind every poster, context menu and detail page. Optimistic: the entries
+    // and their pending ops are written at once, then both peers are drained; a peer that is offline gets it on the
+    // next cycle. A title outside the library (no group) can be on the Trakt watchlist only.
+    public async Task SetWatchlistedAsync(EmbyItem item, bool listed)
+    {
+        item.IsInWatchlist = listed;
+        var none = System.Threading.CancellationToken.None;
+        if (long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
+            await (listed ? _watchlist.AddAsync(gid, none) : _watchlist.RemoveAsync(gid, none));
+        else if (TitleRef(item) is { } titleRef)
+            await (listed ? _watchlist.AddUnownedAsync(titleRef, item.Name, item.ProductionYear, item.Type ?? "Movie", none) : _watchlist.RemoveUnownedAsync(titleRef, none));
+        _ = DrainOutboundAsync();
+    }
+
+    public async Task RemoveWatchlistCardAsync(WatchlistCard card)
+    {
+        var none = System.Threading.CancellationToken.None;
+        await (card.GroupId > 0 ? _watchlist.RemoveAsync(card.GroupId, none) : _watchlist.RemoveUnownedAsync(card.Ref, none));
+        _ = DrainOutboundAsync();
+    }
+
+    // The Trakt entry's ref for a title outside the library, as a pull writes it.
+    public static string? TitleRef(EmbyItem item) => string.IsNullOrEmpty(item.TmdbId) ? null
+        : $"tmdb:{(string.Equals(item.Type, "Series", StringComparison.OrdinalIgnoreCase) ? "series" : "movie")}:{item.TmdbId}";
+
+    public static bool IsWatchlistable(EmbyItem item) =>
+        string.Equals(item.Type, "Movie", StringComparison.OrdinalIgnoreCase) || string.Equals(item.Type, "Series", StringComparison.OrdinalIgnoreCase);
 
     private EmbyClient? SiblingClient(string serverId)
     {

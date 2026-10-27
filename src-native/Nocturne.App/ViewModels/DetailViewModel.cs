@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Windows;
+using Microsoft.Extensions.DependencyInjection;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
 using Nocturne.Core.Utils;
@@ -17,7 +18,6 @@ public class DetailViewModel : BaseViewModel
     private readonly SettingsService _settings;
     private readonly WatchPartyService _watchParty;
     private readonly TrailerService _trailerService;
-    private readonly IWatchlistService _watchlistService;
 
     private ServerConfig? _currentServer;
     private EmbyClient _currentClient;
@@ -30,7 +30,6 @@ public class DetailViewModel : BaseViewModel
     private EmbyItem? _selectedVersion;
     private bool _isLoading;
     private bool _isPlayed;
-    private bool _isFavorite;
     private bool _isInWatchlist;
     private float? _traktRating;
     private SkipPromptEvent? _activeSkipPrompt;
@@ -61,8 +60,7 @@ public class DetailViewModel : BaseViewModel
         IntroDbService introDb,
         SettingsService settings,
         WatchPartyService watchParty,
-        TrailerService trailerService,
-        IWatchlistService watchlistService)
+        TrailerService trailerService)
     {
         _embyClient = embyClient;
         _mpv = mpv;
@@ -72,7 +70,6 @@ public class DetailViewModel : BaseViewModel
         _settings = settings;
         _watchParty = watchParty;
         _trailerService = trailerService;
-        _watchlistService = watchlistService;
         _currentClient = embyClient;
 
         _introDb.PromptChanged += prompt => ActiveSkipPrompt = prompt;
@@ -209,17 +206,18 @@ public class DetailViewModel : BaseViewModel
         set => SetProperty(ref _isPlayed, value);
     }
 
-    public bool IsFavorite
-    {
-        get => _isFavorite;
-        set => SetProperty(ref _isFavorite, value);
-    }
-
     public bool IsInWatchlist
     {
         get => _isInWatchlist;
-        set => SetProperty(ref _isInWatchlist, value);
+        set
+        {
+            if (SetProperty(ref _isInWatchlist, value)) OnPropertyChanged(nameof(WatchlistButtonText));
+        }
     }
+
+    // §12.5: the toggle beside Play, labelled by state; movies and series only. It is also the favourite (D10).
+    public string WatchlistButtonText => IsInWatchlist ? "In Watchlist" : "Add to Watchlist";
+    public bool CanWatchlist => Item != null && MainViewModel.IsWatchlistable(Item);
 
     public float? TraktRating
     {
@@ -351,7 +349,7 @@ public class DetailViewModel : BaseViewModel
     {
         Item = item;
         IsPlayed = item.UserData?.Played ?? false;
-        IsFavorite = item.UserData?.IsFavorite ?? false;
+        OnPropertyChanged(nameof(CanWatchlist));
         OnPropertyChanged(nameof(PlayButtonText));
         OnPropertyChanged(nameof(PlayedButtonText));
 
@@ -469,10 +467,7 @@ public class DetailViewModel : BaseViewModel
 
         // Watchlist status check (§9.2, §12.5)
         long.TryParse(item.DedupGroupId, out var gid);
-        string? tmdbKey = !string.IsNullOrEmpty(item.TmdbId)
-            ? $"tmdb:{(string.Equals(item.Type, "Series", StringComparison.OrdinalIgnoreCase) ? "tv" : "movie")}:{item.TmdbId}"
-            : null;
-        IsInWatchlist = _db.IsInWatchlist(gid, tmdbKey);
+        IsInWatchlist = _db.IsInWatchlist(gid, MainViewModel.TitleRef(item));
 
         // Non-blocking background trailer detection
         StartBackgroundTrailerResolve(item, parentSeries, client);
@@ -736,40 +731,14 @@ public class DetailViewModel : BaseViewModel
         }
     }
 
-    public async Task ToggleFavoriteAsync()
-    {
-        if (Item == null) return;
-        var newFav = !IsFavorite;
-        var client = ResolveClient(Item.ServerId);
-
-        var success = await client.ToggleFavoriteAsync(Item.Id, newFav);
-        if (success)
-        {
-            IsFavorite = newFav;
-            if (Item.UserData != null) Item.UserData.IsFavorite = newFav;
-        }
-    }
-
     public async Task ToggleWatchlistAsync()
     {
-        if (Item == null) return;
-        var newWatchlist = !IsInWatchlist;
-        IsInWatchlist = newWatchlist; // Optimistic toggle (§9.3, §12.5)
-
-        long.TryParse(Item.DedupGroupId, out var gid);
-        if (gid > 0)
-        {
-            if (newWatchlist)
-                await _watchlistService.AddAsync(gid, CancellationToken.None);
-            else
-                await _watchlistService.RemoveAsync(gid, CancellationToken.None);
-        }
-        else if (!string.IsNullOrEmpty(Item.TmdbId))
-        {
-            string tmdbKey = $"tmdb:{(string.Equals(Item.Type, "Series", StringComparison.OrdinalIgnoreCase) ? "tv" : "movie")}:{Item.TmdbId}";
-            if (newWatchlist)
-                await _watchlistService.AddUnownedAsync(tmdbKey, Item.Name, Item.ProductionYear, Item.Type ?? "Movie", CancellationToken.None);
-        }
+        if (Item == null || !CanWatchlist) return;
+        var main = (Application.Current as App)?.Services.GetService<MainViewModel>();
+        if (main == null) return;
+        var toggle = main.SetWatchlistedAsync(Item, !IsInWatchlist); // optimistic: flips the item before its first await
+        IsInWatchlist = Item.IsInWatchlist;
+        await toggle;
     }
 
     public void PlayTrailer()

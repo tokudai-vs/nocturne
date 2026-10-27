@@ -50,6 +50,7 @@ public partial class ContinueWatchingCard : UserControl
     {
         if (e.NewValue is EmbyItem item)
         {
+            WatchlistMenuItem.Visibility = MainViewModel.IsWatchlistable(item) ? Visibility.Visible : Visibility.Collapsed;
             // Line 1: Show / Series Name in Bold
             var isEpisode = string.Equals(item.Type, "Episode", StringComparison.OrdinalIgnoreCase);
             if (isEpisode && !string.IsNullOrWhiteSpace(item.SeriesName))
@@ -251,21 +252,12 @@ public partial class ContinueWatchingCard : UserControl
         }
     }
 
-    private async void OnContextMenuToggleFavoriteClick(object sender, RoutedEventArgs e)
+    private async void OnContextMenuToggleWatchlistClick(object sender, RoutedEventArgs e)
     {
-        if (DataContext is EmbyItem item)
+        if (DataContext is EmbyItem item && MainViewModel.IsWatchlistable(item))
         {
-            var emby = (Application.Current as App)?.Services.GetService<EmbyClient>();
-            if (emby != null)
-            {
-                var newFav = !(item.UserData?.IsFavorite ?? false);
-                var success = await emby.ToggleFavoriteAsync(item.Id, newFav);
-                if (success)
-                {
-                    item.UserData ??= new UserItemData();
-                    item.UserData.IsFavorite = newFav;
-                }
-            }
+            var main = (Application.Current as App)?.Services.GetService<MainViewModel>();
+            if (main != null) await main.SetWatchlistedAsync(item, !item.IsInWatchlist);
         }
     }
 

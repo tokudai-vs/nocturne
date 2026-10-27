@@ -36,6 +36,7 @@ public partial class MediaCard : UserControl
     {
         if (e.NewValue is EmbyItem item)
         {
+            WatchlistMenuItem.Visibility = MainViewModel.IsWatchlistable(item) ? Visibility.Visible : Visibility.Collapsed;
             TitleText.Text = item.DisplayTitle;
             SubtitleText.Text = item.SubtitleText;
 
@@ -110,43 +111,46 @@ public partial class MediaCard : UserControl
         }
     }
 
+    // §12.5: "+" / filled bookmark, revealed on hover and on keyboard focus (the button stays a tab stop at opacity 0),
+    // always shown while the title is on the watchlist. Movies and series only.
     private void UpdateWatchlistUi(EmbyItem item)
     {
-        if (item.IsInWatchlist)
-        {
-            WatchlistButton.Visibility = Visibility.Visible;
-            WatchlistIcon.Foreground = Application.Current?.Resources["NocturneAmberBrush"] as Brush
-                ?? new SolidColorBrush(Color.FromRgb(229, 160, 13));
-        }
-        else
-        {
-            WatchlistButton.Visibility = Visibility.Collapsed;
-            WatchlistIcon.Foreground = Application.Current?.TryFindResource("TextFillColorSecondaryBrush") as Brush
-                ?? new SolidColorBrush(Color.FromArgb(180, 255, 255, 255));
-        }
+        WatchlistButton.Visibility = MainViewModel.IsWatchlistable(item) ? Visibility.Visible : Visibility.Collapsed;
+        WatchlistButton.Opacity = item.IsInWatchlist || CardBox.IsMouseOver || WatchlistButton.IsKeyboardFocused ? 1 : 0;
+        WatchlistIcon.Symbol = item.IsInWatchlist ? Wpf.Ui.Controls.SymbolRegular.Bookmark16 : Wpf.Ui.Controls.SymbolRegular.Add16;
+        WatchlistIcon.Filled = item.IsInWatchlist;
+        WatchlistIcon.Foreground = item.IsInWatchlist
+            ? Application.Current?.Resources["NocturneAmberBrush"] as Brush ?? new SolidColorBrush(Color.FromRgb(229, 160, 13))
+            : Application.Current?.TryFindResource("TextFillColorSecondaryBrush") as Brush ?? new SolidColorBrush(Color.FromArgb(180, 255, 255, 255));
+        var label = item.IsInWatchlist ? "Remove from Watchlist" : "Add to Watchlist";
+        WatchlistButton.ToolTip = label;
+        System.Windows.Automation.AutomationProperties.SetName(WatchlistButton, label);
+    }
+
+    private void OnWatchlistFocusChanged(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (DataContext is EmbyItem item) UpdateWatchlistUi(item);
     }
 
     private async void OnWatchlistButtonClick(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
-        if (DataContext is EmbyItem item)
-        {
-            var watchlist = (Application.Current as App)?.Services.GetService<IWatchlistService>();
-            if (watchlist != null && long.TryParse(item.DedupGroupId, out var gid) && gid > 0)
-            {
-                item.IsInWatchlist = !item.IsInWatchlist;
-                UpdateWatchlistUi(item);
-                if (item.IsInWatchlist)
-                    await watchlist.AddAsync(gid, System.Threading.CancellationToken.None);
-                else
-                    await watchlist.RemoveAsync(gid, System.Threading.CancellationToken.None);
-            }
-        }
+        await ToggleWatchlistAsync();
+    }
+
+    private async Task ToggleWatchlistAsync()
+    {
+        if (DataContext is not EmbyItem item || !MainViewModel.IsWatchlistable(item)) return;
+        var main = (Application.Current as App)?.Services.GetService<MainViewModel>();
+        if (main == null) return;
+        var toggle = main.SetWatchlistedAsync(item, !item.IsInWatchlist); // flips the item before its first await
+        UpdateWatchlistUi(item);
+        await toggle;
     }
 
     private void OnCardMouseEnter(object sender, MouseEventArgs e)
     {
-        WatchlistButton.Visibility = Visibility.Visible;
+        if (DataContext is EmbyItem hovered) UpdateWatchlistUi(hovered);
         CardBorder.BorderThickness = new Thickness(2);
         CardBorder.BorderBrush = Application.Current?.Resources["NocturneAmberBrush"] as Brush
             ?? new SolidColorBrush(Color.FromRgb(229, 160, 13));
@@ -161,10 +165,7 @@ public partial class MediaCard : UserControl
 
     private void OnCardMouseLeave(object sender, MouseEventArgs e)
     {
-        if (DataContext is EmbyItem item && !item.IsInWatchlist)
-        {
-            WatchlistButton.Visibility = Visibility.Collapsed;
-        }
+        if (DataContext is EmbyItem item) UpdateWatchlistUi(item);
 
         CardBorder.BorderThickness = new Thickness(1);
         CardBorder.BorderBrush = Application.Current?.TryFindResource("CardStrokeColorDefaultBrush") as Brush
@@ -213,23 +214,7 @@ public partial class MediaCard : UserControl
         }
     }
 
-    private async void OnContextMenuToggleFavoriteClick(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is EmbyItem item)
-        {
-            var emby = (Application.Current as App)?.Services.GetService<EmbyClient>();
-            if (emby != null)
-            {
-                var newFav = !(item.UserData?.IsFavorite ?? false);
-                var success = await emby.ToggleFavoriteAsync(item.Id, newFav);
-                if (success)
-                {
-                    item.UserData ??= new UserItemData();
-                    item.UserData.IsFavorite = newFav;
-                }
-            }
-        }
-    }
+    private async void OnContextMenuToggleWatchlistClick(object sender, RoutedEventArgs e) => await ToggleWatchlistAsync();
 
     private async void OnContextMenuRemoveFromContinueClick(object sender, RoutedEventArgs e)
     {

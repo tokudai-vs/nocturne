@@ -99,14 +99,6 @@ public partial class DetailPage : UserControl
         }
     }
 
-    private void OnFavoriteToggleClick(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is DetailViewModel vm)
-        {
-            _ = vm.ToggleFavoriteAsync();
-        }
-    }
-
     private void OnWatchlistToggleClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is DetailViewModel vm)

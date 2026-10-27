@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using Microsoft.Extensions.DependencyInjection;
 using Nocturne.Core.Models;
 using Nocturne.Core.Services;
 using Nocturne.Core.Utils;
@@ -175,16 +176,12 @@ public class WatchlistViewModel : BaseViewModel
         }
     }
 
+    // Through both peers (§9.3); the pending remove hides the card at once. A title outside the library used to be
+    // deleted locally only, so the next Trakt pull brought it back.
     public async Task RemoveFromWatchlistAsync(WatchlistCard card)
     {
-        if (card.GroupId > 0)
-        {
-            await _watchlist.RemoveAsync(card.GroupId, CancellationToken.None);
-        }
-        else
-        {
-            _db.RemoveWatchlistEntry(card.Source, card.Ref);
-        }
+        var main = (Application.Current as App)?.Services.GetService<MainViewModel>();
+        if (main != null) await main.RemoveWatchlistCardAsync(card);
         await RefreshAsync();
     }
 }
