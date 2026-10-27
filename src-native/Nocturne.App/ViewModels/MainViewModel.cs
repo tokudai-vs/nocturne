@@ -25,6 +25,7 @@ public class MainViewModel : BaseViewModel
     private readonly TraktQueueDrainWorker _traktDrain;
     private readonly ITraktAuthService _traktAuth;
     private readonly IWatchlistService _watchlist;
+    private readonly EnrichmentGate _enrichment;
     private PeerSyncScheduler? _peerSync;
     private readonly PlaybackSession _session;
 
@@ -92,7 +93,8 @@ public class MainViewModel : BaseViewModel
         ITmdbEnrichmentService tmdbEnrichment,
         TraktQueueDrainWorker traktDrain,
         ITraktAuthService traktAuth,
-        IWatchlistService watchlist)
+        IWatchlistService watchlist,
+        EnrichmentGate enrichment)
     {
         _settings = settings;
         _embyClient = embyClient;
@@ -110,6 +112,7 @@ public class MainViewModel : BaseViewModel
         _traktDrain = traktDrain;
         _traktAuth = traktAuth;
         _watchlist = watchlist;
+        _enrichment = enrichment;
         _session = new PlaybackSession(db);
 
         HomeVM = homeVM;
@@ -130,7 +133,7 @@ public class MainViewModel : BaseViewModel
         DetailVM.NavigateBack += () => CurrentViewModel = HomeVM;
 
         // TMDB fallback enrichment runs when a sync completes (D12)
-        _sync.SyncCompleted += StartEnrichment;
+        _sync.SyncCompleted += () => _enrichment.RunAsync();
 
         // Wire playback requests to embedded player
         HomeVM.PlayRequested += item => _ = StartPlaybackAsync(item, item.UserData?.PlaybackPositionTicks ?? 0);
@@ -608,9 +611,7 @@ public class MainViewModel : BaseViewModel
         get => _isSyncing;
         set
         {
-            if (!SetProperty(ref _isSyncing, value)) return;
-            if (value) PauseEnrichment();
-            else if (_enrichmentDeferred) StartEnrichment();
+            if (SetProperty(ref _isSyncing, value)) _enrichment.SetSyncing(value); // D12
         }
     }
 
@@ -671,40 +672,7 @@ public class MainViewModel : BaseViewModel
         get => _isPlayerActive;
         set
         {
-            if (!SetProperty(ref _isPlayerActive, value)) return;
-            if (value) PauseEnrichment();
-            else if (_enrichmentDeferred) StartEnrichment();
-        }
-    }
-
-    // D12: TMDB enrichment runs after a sync completes, never alongside a sync or during playback. A pass stopped by
-    // playback resumes when playback ends; one stopped by a sync waits for that sync to complete. A pass picks up
-    // whatever is still missing, so stopping one loses nothing done.
-    private readonly object _enrichmentLock = new();
-    private System.Threading.CancellationTokenSource? _enrichmentStop;
-    private Task _enrichmentPass = Task.CompletedTask;
-    private bool _enrichmentDeferred;
-
-    private void StartEnrichment()
-    {
-        lock (_enrichmentLock)
-        {
-            _enrichmentDeferred = _isPlayerActive || _isSyncing;
-            if (_enrichmentDeferred) return;
-            _enrichmentStop?.Cancel();
-            _enrichmentStop = new System.Threading.CancellationTokenSource();
-            var token = _enrichmentStop.Token; // off the caller: SyncCompleted fires inside the dedup writer gate
-            _enrichmentPass = Task.Run(() => _tmdbEnrichment.RunAsync(new Progress<EnrichProgress>(), token));
-        }
-    }
-
-    private void PauseEnrichment()
-    {
-        lock (_enrichmentLock)
-        {
-            if (_enrichmentPass.IsCompleted) return;
-            _enrichmentStop?.Cancel();
-            _enrichmentDeferred = true;
+            if (SetProperty(ref _isPlayerActive, value)) _enrichment.SetPlaying(value); // D12
         }
     }
 

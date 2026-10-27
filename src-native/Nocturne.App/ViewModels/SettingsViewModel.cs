@@ -242,6 +242,7 @@ public class SettingsViewModel : BaseViewModel
     private readonly ITraktAuthService _traktAuth;
     private readonly ITraktSyncService _traktSync;
     private readonly ITmdbEnrichmentService _tmdbEnrichment;
+    private readonly EnrichmentGate _enrichmentGate;
     private readonly TraktQueueDrainWorker _traktDrain;
     private DateTime _lastDatabaseStatsRefreshUtc = DateTime.MinValue;
 
@@ -362,6 +363,7 @@ public class SettingsViewModel : BaseViewModel
         ITraktAuthService traktAuth,
         ITraktSyncService traktSync,
         ITmdbEnrichmentService tmdbEnrichment,
+        EnrichmentGate enrichmentGate,
         TraktQueueDrainWorker traktDrain)
     {
         _settings = settings;
@@ -375,6 +377,7 @@ public class SettingsViewModel : BaseViewModel
         _traktAuth = traktAuth;
         _traktSync = traktSync;
         _tmdbEnrichment = tmdbEnrichment;
+        _enrichmentGate = enrichmentGate;
         _traktDrain = traktDrain;
 
         _traktAuth.StateChanged += (s, e) =>
@@ -1802,8 +1805,10 @@ public class SettingsViewModel : BaseViewModel
                 OnPropertyChanged(nameof(TmdbPendingCount));
                 OnPropertyChanged(nameof(TmdbNotFoundCount));
             });
-            await _tmdbEnrichment.RunAsync(p, CancellationToken.None);
-            TmdbEnrichStatus = "TMDB enrichment finished.";
+            await _enrichmentGate.RunAsync(p); // the same gate as the automatic pass: paused by playback or a sync (#30)
+            TmdbEnrichStatus = _enrichmentGate.IsDeferred
+                ? "TMDB enrichment paused for playback or a sync; it resumes when that ends."
+                : "TMDB enrichment finished.";
         }
         catch (Exception ex)
         {

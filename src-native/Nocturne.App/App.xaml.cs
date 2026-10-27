@@ -165,6 +165,7 @@ public partial class App : Application
         services.AddSingleton<ITraktSyncService, TraktSyncService>();
         services.AddSingleton<IWatchlistService, WatchlistService>();
         services.AddSingleton<ITmdbEnrichmentService, TmdbEnrichmentService>();
+        services.AddSingleton<EnrichmentGate>();
         services.AddSingleton<TraktQueueDrainWorker>();
         services.AddSingleton<IntroDbService>();
         services.AddSingleton<ThemeColorService>();
