@@ -697,8 +697,11 @@ public class DatabaseService : IDisposable
                         item_type = excluded.item_type,
                         title = COALESCE(excluded.title, watchlist_entries.title),
                         year = COALESCE(excluded.year, watchlist_entries.year),
-                        tmdb_key = COALESCE(excluded.tmdb_key, watchlist_entries.tmdb_key);
+                        tmdb_key = COALESCE(excluded.tmdb_key, watchlist_entries.tmdb_key),
+                        pending_op = CASE WHEN watchlist_entries.pending_op = 'add' THEN NULL ELSE watchlist_entries.pending_op END;
                 ");
+    // T7: a title unfavourited on the server leaves the watchlist, unless Nocturne's own add has not reached it yet.
+    private static readonly string SqlUnfavourite = Checked("DELETE FROM watchlist_entries WHERE source = $w_src AND ref = $w_ref AND COALESCE(pending_op, '') <> 'add';");
     private static readonly string SqlUpsertItems4 = Checked(@"
                         INSERT INTO sync_checkpoints (server_id, library_id, start_index, total_items, is_completed, last_synced)
                         VALUES ($cs_server_id, $cs_library_id, $cs_start_index, $cs_total_items, $cs_is_completed, $cs_last_synced)
@@ -791,6 +794,12 @@ public class DatabaseService : IDisposable
                 var pwYear = wlCmd.Parameters.Add("$w_year", SqliteType.Integer);
                 var pwTmdb = wlCmd.Parameters.Add("$w_tmdb", SqliteType.Text);
 
+                using var unfavCmd = _connection.CreateCommand();
+                unfavCmd.Transaction = tx;
+                unfavCmd.CommandText = SqlUnfavourite;
+                var puwSrc = unfavCmd.Parameters.Add("$w_src", SqliteType.Text);
+                var puwRef = unfavCmd.Parameters.Add("$w_ref", SqliteType.Text);
+
                 var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
                 foreach (var item in chunk)
@@ -858,6 +867,12 @@ public class DatabaseService : IDisposable
                         pwYear.Value = (object?)item.ProductionYear ?? DBNull.Value;
                         pwTmdb.Value = (object?)tmdbKey ?? DBNull.Value;
                         wlCmd.ExecuteNonQuery();
+                    }
+                    else if (item.UserData != null)
+                    {
+                        puwSrc.Value = serverId;
+                        puwRef.Value = item.Id;
+                        unfavCmd.ExecuteNonQuery();
                     }
                 }
 
@@ -4127,6 +4142,75 @@ public class DatabaseService : IDisposable
             {
                 NocturneLogger.Error("DatabaseService", $"Failed to upsert watchlist entry ({source}:{@ref})", ex);
             }
+        }
+    }
+
+    private static readonly string SqlPulledTraktEntry = Checked(@"
+                    INSERT INTO watchlist_entries (source, ref, item_type, added_utc, title, year, tmdb_key)
+                    VALUES ('trakt', $ref, $item_type, $added_utc, $title, $year, $tmdb_key)
+                    ON CONFLICT(source, ref) DO UPDATE SET
+                        item_type = excluded.item_type,
+                        added_utc = excluded.added_utc,
+                        title = excluded.title,
+                        year = excluded.year,
+                        tmdb_key = COALESCE(excluded.tmdb_key, watchlist_entries.tmdb_key),
+                        pending_op = CASE WHEN watchlist_entries.pending_op = 'add' THEN NULL ELSE watchlist_entries.pending_op END;
+                ");
+    private static readonly string SqlTraktEntryRefs = Checked("SELECT ref, pending_op FROM watchlist_entries WHERE source = 'trakt';");
+
+    // T7: the Trakt watchlist as pulled replaces the 'trakt' rows (D10: it is a read source, nothing is written back).
+    // Pending ops settle against it: an add Trakt now lists is done; a remove Trakt no longer lists is done. An add
+    // Trakt does not list yet is kept (not delivered), and a remove it still lists stays hidden, so a pull landing
+    // mid-flight neither drops a new add nor brings a removed title back.
+    public void ReplaceTraktWatchlist(IReadOnlyList<(string Ref, string ItemType, long AddedUtc, string? Title, int? Year, string? TmdbKey)> pulled)
+    {
+        lock (_dbLock)
+        {
+            if (QueueDuringRebuildWrite(() => ReplaceTraktWatchlist(pulled))) return;
+            if (_connection == null) return;
+            using var tx = _connection.BeginTransaction();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = SqlPulledTraktEntry;
+                var pRef = cmd.Parameters.Add("$ref", SqliteType.Text);
+                var pType = cmd.Parameters.Add("$item_type", SqliteType.Text);
+                var pAdded = cmd.Parameters.Add("$added_utc", SqliteType.Integer);
+                var pTitle = cmd.Parameters.Add("$title", SqliteType.Text);
+                var pYear = cmd.Parameters.Add("$year", SqliteType.Integer);
+                var pTmdb = cmd.Parameters.Add("$tmdb_key", SqliteType.Text);
+                foreach (var e in pulled)
+                {
+                    pRef.Value = e.Ref;
+                    pType.Value = e.ItemType;
+                    pAdded.Value = e.AddedUtc;
+                    pTitle.Value = (object?)e.Title ?? DBNull.Value;
+                    pYear.Value = (object?)e.Year ?? DBNull.Value;
+                    pTmdb.Value = (object?)e.TmdbKey ?? DBNull.Value;
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            var listed = pulled.Select(e => e.Ref).ToHashSet();
+            var gone = new List<string>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = SqlTraktEntryRefs;
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                    if (!listed.Contains(reader.GetString(0)) && (reader.IsDBNull(1) || reader.GetString(1) != "add"))
+                        gone.Add(reader.GetString(0));
+            }
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = SqlRemoveWatchlistEntry;
+                cmd.Parameters.AddWithValue("$source", "trakt");
+                var pRef = cmd.Parameters.Add("$ref", SqliteType.Text);
+                foreach (var r in gone) { pRef.Value = r; cmd.ExecuteNonQuery(); }
+            }
+            tx.Commit();
         }
     }
 

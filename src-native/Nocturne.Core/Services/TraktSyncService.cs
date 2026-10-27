@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -245,62 +246,61 @@ public class TraktSyncService : ITraktSyncService
 
     private async Task<bool> PullWatchlistInternalAsync(string token, string clientId, CancellationToken ct)
     {
-        var ok = true;
-        // 1. Movies watchlist
+        var pulled = new List<(string Ref, string ItemType, long AddedUtc, string? Title, int? Year, string? TmdbKey)>();
+
         using (var reqM = new HttpRequestMessage(HttpMethod.Get, "/sync/watchlist/movies"))
         {
             reqM.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             reqM.Headers.Add("trakt-api-key", clientId);
-
             using var respM = await _http.SendAsync(reqM, ct);
-            if (respM.IsSuccessStatusCode)
+            if (!respM.IsSuccessStatusCode) return Fail("watchlist movies", respM);
+            var movies = await respM.Content.ReadFromJsonAsync<List<TraktWatchlistMovieDto>>(cancellationToken: ct);
+            if (movies == null) return false;
+            foreach (var m in movies)
             {
-                var movies = await respM.Content.ReadFromJsonAsync<List<TraktWatchlistMovieDto>>(cancellationToken: ct);
-                if (movies != null)
-                {
-                    foreach (var m in movies)
-                    {
-                        if (m.Movie?.Ids == null) continue;
-                        long addedUtc = DateTimeOffset.TryParse(m.ListedAt, out var d) ? d.ToUnixTimeSeconds() : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                        string? tmdbKey = m.Movie.Ids.Tmdb.HasValue ? $"tmdb:movie:{m.Movie.Ids.Tmdb.Value}" : null;
-                        string key = tmdbKey ?? (!string.IsNullOrEmpty(m.Movie.Ids.Imdb) ? $"imdb:movie:{m.Movie.Ids.Imdb}" : "");
-                        if (string.IsNullOrEmpty(key)) continue;
-
-                        _db.UpsertWatchlistEntry("trakt", key, "Movie", addedUtc, m.Movie.Title, m.Movie.Year, tmdbKey);
-                    }
-                }
+                if (m.Movie?.Ids == null || WatchlistRef("movie", m.Movie.Ids) is not { } key) continue;
+                string? tmdbKey = m.Movie.Ids.Tmdb.HasValue ? $"tmdb:movie:{m.Movie.Ids.Tmdb.Value}" : null;
+                pulled.Add((key, "Movie", ListedAt(m.ListedAt), m.Movie.Title, m.Movie.Year, tmdbKey));
             }
-            else ok = Fail("watchlist movies", respM);
         }
 
-        // 2. Shows watchlist
         using (var reqS = new HttpRequestMessage(HttpMethod.Get, "/sync/watchlist/shows"))
         {
             reqS.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             reqS.Headers.Add("trakt-api-key", clientId);
-
             using var respS = await _http.SendAsync(reqS, ct);
-            if (respS.IsSuccessStatusCode)
+            if (!respS.IsSuccessStatusCode) return Fail("watchlist shows", respS);
+            var shows = await respS.Content.ReadFromJsonAsync<List<TraktWatchlistShowDto>>(cancellationToken: ct);
+            if (shows == null) return false;
+            foreach (var s in shows)
             {
-                var shows = await respS.Content.ReadFromJsonAsync<List<TraktWatchlistShowDto>>(cancellationToken: ct);
-                if (shows != null)
-                {
-                    foreach (var s in shows)
-                    {
-                        if (s.Show?.Ids == null) continue;
-                        long addedUtc = DateTimeOffset.TryParse(s.ListedAt, out var d) ? d.ToUnixTimeSeconds() : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                        string? tmdbKey = s.Show.Ids.Tmdb.HasValue ? $"tmdb:tv:{s.Show.Ids.Tmdb.Value}" : null;
-                        string key = s.Show.Ids.Tvdb.HasValue ? $"tvdb:series:{s.Show.Ids.Tvdb.Value}" : (tmdbKey ?? "");
-                        if (string.IsNullOrEmpty(key)) continue;
-
-                        _db.UpsertWatchlistEntry("trakt", key, "Series", addedUtc, s.Show.Title, s.Show.Year, tmdbKey);
-                    }
-                }
+                if (s.Show?.Ids == null || WatchlistRef("series", s.Show.Ids) is not { } key) continue;
+                string? tmdbKey = s.Show.Ids.Tmdb.HasValue ? $"tmdb:tv:{s.Show.Ids.Tmdb.Value}" : null; // tmdb_metadata's key, for artwork
+                pulled.Add((key, "Series", ListedAt(s.ListedAt), s.Show.Title, s.Show.Year, tmdbKey));
             }
-            else ok = Fail("watchlist shows", respS);
         }
-        return ok;
+
+        // Both lists or neither: replacing from half a snapshot would drop the other half.
+        if (ct.IsCancellationRequested) return false;
+        _db.ReplaceTraktWatchlist(pulled);
+        return true;
     }
+
+    // A watchlist entry's ref is the dedup key the library knows the title by, whichever of Trakt's ids that is, so
+    // the rollup finds its group with one join (§9.2). A title not in the library keeps its first id.
+    private string? WatchlistRef(string type, TraktIdsDto ids)
+    {
+        var candidates = new[]
+        {
+            ids.Tmdb is { } tmdb ? $"tmdb:{type}:{tmdb}" : null,
+            !string.IsNullOrEmpty(ids.Imdb) ? $"imdb:{type}:{ids.Imdb}" : null,
+            ids.Tvdb is { } tvdb ? $"tvdb:{type}:{tvdb}" : null,
+        }.OfType<string>().ToList();
+        return candidates.FirstOrDefault(k => _db.GetGroupIdForDedupKey(k).HasValue) ?? candidates.FirstOrDefault();
+    }
+
+    private static long ListedAt(string listedAt) =>
+        DateTimeOffset.TryParse(listedAt, out var d) ? d.ToUnixTimeSeconds() : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
     private static bool Fail(string what, HttpResponseMessage resp)
     {

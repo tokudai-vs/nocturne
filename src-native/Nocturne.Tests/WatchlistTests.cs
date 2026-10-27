@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Nocturne.Core.Models;
@@ -95,5 +96,33 @@ public class WatchlistTests : IDisposable
         Assert.Equal("Unreleased Sci-Fi", cards[0].Title);
         Assert.False(cards[0].IsInLibrary);
         Assert.Equal(0, cards[0].GroupId);
+    }
+
+    // T7/T9: a pull settles Nocturne's pending ops against what Trakt lists, without undoing one still in flight.
+    [Fact]
+    public void ATraktPull_SettlesPendingOps_AndNeverUndoesOneInFlight()
+    {
+        _db.UpsertWatchlistEntry("trakt", "tmdb:movie:1", "Movie", 1, "Added, delivered", pendingOp: "add");
+        _db.UpsertWatchlistEntry("trakt", "tmdb:movie:2", "Movie", 1, "Added, not yet delivered", pendingOp: "add");
+        _db.UpsertWatchlistEntry("trakt", "tmdb:movie:3", "Movie", 1, "Removed, not yet delivered", pendingOp: "remove");
+        _db.UpsertWatchlistEntry("trakt", "tmdb:movie:4", "Movie", 1, "Removed, delivered", pendingOp: "remove");
+        _db.UpsertWatchlistEntry("trakt", "tmdb:movie:5", "Movie", 1, "Removed on trakt.tv");
+
+        _db.ReplaceTraktWatchlist(new List<(string, string, long, string?, int?, string?)>
+        {
+            ("tmdb:movie:1", "Movie", 1, "Added, delivered", null, null),
+            ("tmdb:movie:3", "Movie", 1, "Removed, not yet delivered", null, null), // Trakt still lists it
+        });
+
+        Assert.Equal(new[] { "Added, delivered", "Added, not yet delivered" }, _db.GetMergedWatchlist().Select(c => c.Title).OrderBy(t => t));
+        _db.ReplaceTraktWatchlist(new List<(string, string, long, string?, int?, string?)>
+        {
+            ("tmdb:movie:1", "Movie", 1, "Added, delivered", null, null),
+            ("tmdb:movie:2", "Movie", 1, "Added, not yet delivered", null, null),
+        });
+        // Trakt now reflects both: the add of 2 and the remove of 3 landed. Dropping 1 next is a removal on trakt.tv.
+        Assert.Equal(new[] { "Added, delivered", "Added, not yet delivered" }, _db.GetMergedWatchlist().Select(c => c.Title).OrderBy(t => t));
+        _db.ReplaceTraktWatchlist(new List<(string, string, long, string?, int?, string?)> { ("tmdb:movie:2", "Movie", 1, "Added, not yet delivered", null, null) });
+        Assert.Equal("Added, not yet delivered", Assert.Single(_db.GetMergedWatchlist()).Title);
     }
 }

@@ -271,6 +271,53 @@ public class TraktWiringTests : IDisposable
         Assert.True(_db.GetUserData("s2", "arr_b")!.Played);
     }
 
+    // T7 gate: a title favourited on Valkyrie and on the Trakt watchlist is one row, and neither pull writes to any peer.
+    // Each source removes only its own entry. The library knows Dark by its TVDB id only; Trakt lists TMDB's first.
+    [Fact]
+    public async Task AFavouriteAndATraktWatchlistEntry_AreOneRow_AndNeitherPeerIsWritten()
+    {
+        var arrival = new EmbyItem { Id = "arr", ServerId = "valkyrie", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } }, UserData = new() { IsFavorite = true } };
+        var dark = new EmbyItem { Id = "dark", ServerId = "valkyrie", Name = "Dark", Type = "Series", ProviderIds = new() { { "Tvdb", "334824" } }, UserData = new() };
+        _db.UpsertItems(new List<EmbyItem> { arrival, dark }, "valkyrie");
+        new ConcurrentDedupIndex().ProcessBatch(new List<EmbyItem> { arrival, dark }, _db);
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var updated = "2026-10-21T05:00:00.000Z";
+        var showsDown = false;
+        var movies = "[{\"listed_at\":\"2026-10-20T00:00:00.000Z\",\"movie\":{\"title\":\"Arrival\",\"year\":2016,\"ids\":{\"trakt\":1,\"tmdb\":329865}}}]";
+        var trakt = new Trakt
+        {
+            Route = path => path switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, $"{{\"watchlist\":{{\"updated_at\":\"{updated}\"}}}}"),
+                "/sync/watchlist/movies" => Json(HttpStatusCode.OK, movies),
+                "/sync/watchlist/shows" => showsDown ? Json(HttpStatusCode.BadGateway, "{}") : Json(HttpStatusCode.OK, "[{\"listed_at\":\"2026-10-19T00:00:00.000Z\",\"show\":{\"title\":\"Dark\",\"year\":2017,\"ids\":{\"trakt\":2,\"tvdb\":334824,\"tmdb\":70523}}}]"),
+                _ => null
+            }
+        };
+        var auth = new TraktAuthService(_db, Client(trakt));
+        var sync = new TraktSyncService(_db, auth, Client(trakt));
+
+        await sync.PullWatchedAsync(CancellationToken.None);
+
+        var cards = _db.GetMergedWatchlist();
+        Assert.Equal(new[] { "Arrival", "Dark" }, cards.Select(c => c.Title).OrderBy(t => t));
+        Assert.All(cards, c => Assert.True(c.IsInLibrary));
+        Assert.Empty(_db.GetPendingSiblingWrites(10));
+        Assert.Equal(0, _db.GetTraktQueueCount());
+        Assert.DoesNotContain(trakt.Requests, r => r.Method != "GET");
+
+        (updated, movies, showsDown) = ("2026-10-22T05:00:00.000Z", "[]", true); // removed on trakt.tv
+        await sync.PullWatchedAsync(CancellationToken.None); // half a snapshot replaces nothing
+        Assert.Contains(_db.GetMergedWatchlist(), c => c.Title == "Dark");
+        showsDown = false;
+        await sync.PullWatchedAsync(CancellationToken.None); // still Valkyrie's favourite
+        Assert.Equal(new[] { "Arrival", "Dark" }, _db.GetMergedWatchlist().Select(c => c.Title).OrderBy(t => t));
+
+        arrival.UserData.IsFavorite = false; // unfavourited on Valkyrie: gone
+        _db.UpsertItems(new List<EmbyItem> { arrival }, "valkyrie");
+        Assert.Equal("Dark", Assert.Single(_db.GetMergedWatchlist()).Title);
+    }
+
     // §8.2 step 3: a later local play, finished or not, is newer than Trakt's watch and is kept.
     [Fact]
     public async Task ALaterPartialPlay_IsNotOverwrittenByAnOlderTraktWatch()
