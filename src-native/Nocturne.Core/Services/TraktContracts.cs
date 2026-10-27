@@ -151,6 +151,8 @@ public interface ITmdbEnrichmentService
     Task RunAsync(IProgress<EnrichProgress> p, CancellationToken ct);
     Task<TmdbMetadata?> GetAsync(string providerKey, CancellationToken ct);
     string GetActiveApiKey();
+    string? CustomApiKey { get; }   // the user's own key only; the bundled one is never shown
+    bool HasBundledKey { get; }
     void SetCustomApiKey(string? apiKey);
     int EnrichedCount { get; }
     int PendingCount { get; }

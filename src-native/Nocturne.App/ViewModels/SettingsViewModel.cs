@@ -1756,15 +1756,23 @@ public class SettingsViewModel : BaseViewModel
     public int TmdbPendingCount => _tmdbEnrichment.PendingCount;
     public int TmdbNotFoundCount => _tmdbEnrichment.NotFoundCount;
 
+    // The user's own key only: the box used to show the active key, which would put a bundled key on screen.
     public string TmdbApiKey
     {
-        get => _tmdbEnrichment.GetActiveApiKey();
+        get => _tmdbEnrichment.CustomApiKey ?? string.Empty;
         set
         {
             _tmdbEnrichment.SetCustomApiKey(value);
             OnPropertyChanged(nameof(TmdbApiKey));
+            OnPropertyChanged(nameof(TmdbKeyHelp));
         }
     }
+
+    public string TmdbKeyHelp => _tmdbEnrichment.HasBundledKey
+        ? "Nocturne includes a TMDB key. You may supply your own API Read Access Token or v3 API key for an independent quota."
+        : string.IsNullOrWhiteSpace(_tmdbEnrichment.CustomApiKey)
+            ? "Artwork enrichment is off until a key is set: paste your TMDB API Read Access Token or v3 API key."
+            : "Enrichment uses your TMDB key.";
 
     private bool _isTmdbEnriching;
     public bool IsTmdbEnriching

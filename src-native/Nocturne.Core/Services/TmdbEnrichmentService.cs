@@ -43,6 +43,9 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         _authState = LoadState();
     }
 
+    public string? CustomApiKey => _authState.CustomApiKey;
+    public bool HasBundledKey => !string.IsNullOrEmpty(BundledApiKey);
+
     public string GetActiveApiKey()
     {
         if (_authState.Mode == CredentialMode.Custom && !string.IsNullOrWhiteSpace(_authState.CustomApiKey))
