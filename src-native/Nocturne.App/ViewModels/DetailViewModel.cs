@@ -289,7 +289,7 @@ public class DetailViewModel : BaseViewModel
                     var freshSeasons = await client.GetSeasonsAsync(itemId);
                     if (freshSeasons != null && freshSeasons.Count > 0)
                     {
-                        _db.UpsertItems(freshSeasons, _currentServer?.Id ?? serverId ?? "server", itemId);
+                        _db.UpsertItems(freshSeasons, _currentServer?.Id ?? serverId ?? "server"); // no parent: parent_id is the library (#27)
                         Application.Current.Dispatcher.Invoke(() =>
                         {
                             if (Item?.Id == itemId)
@@ -437,7 +437,7 @@ public class DetailViewModel : BaseViewModel
         // TV Series Seasons
         if (item.Type == "Series")
         {
-            var cachedSeasons = _db.GetCachedChildren(item.Id, "Season");
+            var cachedSeasons = _db.GetCachedSeasons(item.Id);
             if (cachedSeasons.Count > 0)
             {
                 Seasons.Clear();
@@ -510,7 +510,7 @@ public class DetailViewModel : BaseViewModel
         var client = _currentClient ?? _embyClient;
 
         // 1. Instant Cached Episodes (0ms!)
-        var cachedEps = _db.GetCachedChildren(seasonId, "Episode");
+        var cachedEps = _db.GetCachedEpisodes(seriesId, seasonId);
         if (cachedEps.Count > 0)
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -536,7 +536,7 @@ public class DetailViewModel : BaseViewModel
                 var eps = await client.GetEpisodesAsync(seriesId, seasonId);
                 if (eps != null && eps.Count > 0)
                 {
-                    _db.UpsertItems(eps, _currentServer?.Id ?? "server", seasonId);
+                    _db.UpsertItems(eps, _currentServer?.Id ?? "server"); // no parent: parent_id is the library (#27)
                     foreach (var ep in eps) ep.ServerId = _currentServer?.Id;
                     Artwork.Apply(eps, _db, _settings.Current.Servers, 400);
 

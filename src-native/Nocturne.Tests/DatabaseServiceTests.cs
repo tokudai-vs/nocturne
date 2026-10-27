@@ -548,4 +548,43 @@ public class DatabaseServiceTests : IDisposable
         var cwAfterPlayed = _db.GetContinueWatchingItems();
         Assert.Empty(cwAfterPlayed);
     }
+
+    // #27: parent_id is the library. The detail page's refresh of a series' seasons and a season's episodes used to
+    // write the series / season there, dropping those rows out of library queries and the deletion sweep for good.
+    private static List<EmbyItem> SeasonAndEpisodes() => new()
+    {
+        new() { Id = "s1", Name = "Season 1", Type = "Season", SeriesId = "show", IndexNumber = 1 },
+        new() { Id = "e1", Name = "Pilot", Type = "Episode", SeriesId = "show", SeasonId = "s1", IndexNumber = 1, ParentIndexNumber = 1 },
+        new() { Id = "e2", Name = "Second", Type = "Episode", SeriesId = "show", SeasonId = "s1", IndexNumber = 2, ParentIndexNumber = 1 },
+    };
+
+    [Fact]
+    public void TheDetailPagesRefresh_KeepsSeasonsAndEpisodesInTheirLibrary()
+    {
+        _db.UpsertItems(SeasonAndEpisodes(), "srv", "lib");                    // the sync
+        _db.UpsertItems(SeasonAndEpisodes().Take(1), "srv");                   // the detail page: seasons, then a season's episodes
+        _db.UpsertItems(SeasonAndEpisodes().Skip(1), "srv");
+        _db.UpsertItems(new List<EmbyItem> { new() { Id = "e3", Name = "New", Type = "Episode", SeriesId = "show", SeasonId = "s1", IndexNumber = 3 } }, "srv");
+
+        Assert.Equal(new[] { "e1", "e2", "s1" }, _db.GetLibraryItemIds("srv", "lib").OrderBy(i => i)); // e3 waits for the sync
+        Assert.Equal(new[] { "s1" }, _db.GetCachedSeasons("show").Select(i => i.Id));
+        Assert.Equal(new[] { "e1", "e2", "e3" }, _db.GetCachedEpisodes("show", "s1").Select(i => i.Id));
+    }
+
+    [Fact]
+    public void RowsTheOldRefreshReparented_AreRepairedOnce_OnOpen()
+    {
+        _db.UpsertItems(new List<EmbyItem> { new() { Id = "show", Name = "Show", Type = "Series" } }, "srv", "lib");
+        _db.UpsertItems(SeasonAndEpisodes(), "srv", "lib");
+        _db.ExecuteSql("DELETE FROM migration_state WHERE key = 'repair_child_parent_ids';" +
+                       "UPDATE cached_items SET parent_id = season_id WHERE type = 'Episode';" +
+                       "UPDATE cached_items SET parent_id = series_id WHERE type = 'Season';"); // as the old refresh left them
+        Assert.Empty(_db.GetLibraryItemIds("srv", "lib").Where(i => i != "show"));
+
+        _db.Dispose();
+        using var reopened = new DatabaseService(_tempDbPath);
+
+        Assert.Equal(new[] { "e1", "e2", "s1", "show" }, reopened.GetLibraryItemIds("srv", "lib").OrderBy(i => i));
+        Assert.Equal("3", reopened.GetMigrationState(DatabaseService.ChildParentRepairKey));
+    }
 }

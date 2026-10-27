@@ -229,6 +229,7 @@ public class DatabaseService : IDisposable
             cmd.ExecuteNonQuery();
 
             EnsureSchema(_connection);
+            RepairChildParents();
             SelfCheckPreparedStatements();
 
             NocturneLogger.Info("DatabaseService", "Database initialized in WAL mode successfully.");
@@ -238,6 +239,26 @@ public class DatabaseService : IDisposable
             NocturneLogger.Error("DatabaseService", "Database initialization error", ex);
             throw; // Fail fast per architecture review V5
         }
+    }
+
+    // #27: the detail page cached a season's episodes with parent_id = the season, and a series' seasons with parent_id =
+    // the series, so those rows left library queries and the deletion sweep for good. Once: give each back its series'
+    // library. A row whose series row is not cached (or has no library) is left for the next full sync to rewrite.
+    public const string ChildParentRepairKey = "repair_child_parent_ids";
+    private static readonly string SqlRepairChildParents = Checked(@"
+                    UPDATE cached_items
+                       SET parent_id = (SELECT s.parent_id FROM cached_items s WHERE s.id = cached_items.series_id AND s.server_id = cached_items.server_id)
+                     WHERE ((type = 'Episode' AND parent_id = season_id) OR (type = 'Season' AND parent_id = series_id))
+                       AND EXISTS (SELECT 1 FROM cached_items s WHERE s.id = cached_items.series_id AND s.server_id = cached_items.server_id AND s.parent_id IS NOT NULL);");
+
+    private void RepairChildParents()
+    {
+        if (GetMigrationState(ChildParentRepairKey) != null) return;
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = SqlRepairChildParents;
+        var repaired = cmd.ExecuteNonQuery();
+        SetMigrationState(ChildParentRepairKey, repaired.ToString());
+        NocturneLogger.Info("DatabaseService", $"Repaired the library of {repaired} cached season/episode row(s) the detail page had re-parented (#27).");
     }
 
     private void EnsureSchema(SqliteConnection conn)
@@ -589,7 +610,7 @@ public class DatabaseService : IDisposable
 
             cmd.Parameters.AddWithValue("$id", item.Id);
             cmd.Parameters.AddWithValue("$server_id", serverId);
-            cmd.Parameters.AddWithValue("$parent_id", (object?)parentId ?? (object?)item.SeasonId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$parent_id", (object?)parentId ?? DBNull.Value); // the library; null keeps the row's own
             cmd.Parameters.AddWithValue("$group_id", (object?)gid ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$name", item.Name);
             cmd.Parameters.AddWithValue("$type", item.Type);
@@ -809,7 +830,7 @@ public class DatabaseService : IDisposable
 
                     pId.Value = item.Id;
                     pServerId.Value = serverId;
-                    pParentId.Value = (object?)parentId ?? (object?)item.SeasonId ?? DBNull.Value;
+                    pParentId.Value = (object?)parentId ?? DBNull.Value; // the library; null keeps the row's own
                     pGroupId.Value = (object?)itemGid ?? DBNull.Value;
                     pName.Value = item.Name;
                     pType.Value = item.Type;
@@ -1147,41 +1168,35 @@ public class DatabaseService : IDisposable
         }
     }
 
-    public List<EmbyItem> GetCachedChildren(string parentId, string? type = null)
+    // A series' seasons and a season's episodes, by their own columns. parent_id is the library (the sync writes it;
+    // library queries and the deletion sweep read it), so it is not a way to find children (#27).
+    public List<EmbyItem> GetCachedSeasons(string seriesId) =>
+        ReadCachedChildren("c.series_id = $series AND c.type = 'Season'", seriesId, null);
+
+    public List<EmbyItem> GetCachedEpisodes(string seriesId, string seasonId) =>
+        ReadCachedChildren("c.series_id = $series AND c.season_id = $season AND c.type = 'Episode'", seriesId, seasonId);
+
+    private List<EmbyItem> ReadCachedChildren(string where, string seriesId, string? seasonId)
     {
         var items = new List<EmbyItem>();
+        var sql = $"SELECT c.json_data, c.server_id, c.dedup_group_id FROM cached_items c WHERE {where} ORDER BY c.index_number ASC, c.name ASC;";
         lock (_dbLock)
         {
+            if (_connection == null) return items;
             using var cmd = _connection.CreateCommand();
-            var sql = @"
-                SELECT c.json_data, c.server_id, c.dedup_group_id
-                FROM cached_items c
-                WHERE c.parent_id = $parent_id ";
-            if (!string.IsNullOrEmpty(type))
-            {
-                sql += "AND c.type = $type ";
-                cmd.Parameters.AddWithValue("$type", type);
-            }
-            sql += "ORDER BY c.index_number ASC, c.name ASC;";
             cmd.CommandText = sql;
-            cmd.Parameters.AddWithValue("$parent_id", parentId);
-
+            cmd.Parameters.AddWithValue("$series", seriesId);
+            if (seasonId != null) cmd.Parameters.AddWithValue("$season", seasonId);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                var json = reader.GetString(0);
-                var sid = reader.GetString(1);
-                var dedupId = reader.IsDBNull(2) ? null : reader.GetString(2);
-
                 try
                 {
-                    var item = JsonSerializer.Deserialize<EmbyItem>(json);
-                    if (item != null)
-                    {
-                        item.ServerId = sid;
-                        item.DedupGroupId = dedupId;
-                        items.Add(item);
-                    }
+                    var item = JsonSerializer.Deserialize<EmbyItem>(reader.GetString(0));
+                    if (item == null) continue;
+                    item.ServerId = reader.GetString(1);
+                    item.DedupGroupId = reader.IsDBNull(2) ? null : reader.GetString(2);
+                    items.Add(item);
                 }
                 catch (Exception ex) when (QueryFailed(ex, sql)) { }
             }
