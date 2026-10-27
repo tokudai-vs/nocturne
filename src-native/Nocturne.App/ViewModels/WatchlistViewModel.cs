@@ -154,7 +154,7 @@ public class WatchlistViewModel : BaseViewModel
                     YearText = c.Year.HasValue ? c.Year.Value.ToString() : string.Empty,
                     PosterUrl = posterUrl,
                     IsInLibrary = c.IsInLibrary,
-                    StatusText = c.IsInLibrary ? (c.ItemType == "Series" ? "Series in library" : "Movie in library") : "Not in your library"
+                    StatusText = c.IsInLibrary ? string.Empty : "Not in your library" // §9.4; owned cards carry no marker, like a library shelf
                 };
             }).ToList();
 

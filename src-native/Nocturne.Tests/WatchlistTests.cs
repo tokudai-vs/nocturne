@@ -85,16 +85,18 @@ public class WatchlistTests : IDisposable
         Assert.Empty(filteredCards);
     }
 
+    // T8 gate: owned and unowned titles come back as one list, newest first, whatever their source.
     [Fact]
-    public void MergedWatchlist_IncludesUnownedItems()
+    public void MergedWatchlist_HasOwnedAndUnownedTogether()
     {
-        // Unowned Trakt watchlist entry (group_id = NULL)
-        _db.UpsertWatchlistEntry("trakt", "tmdb:12345", "Movie", 5000, "Unreleased Sci-Fi", 2026, "tmdb:movie:12345");
+        var owned = new EmbyItem { Id = "glad", ServerId = "srv1", Name = "Gladiator", Type = "Movie", ProviderIds = new() { ["Tmdb"] = "98" } };
+        _db.UpsertItems(new List<EmbyItem> { owned }, "srv1");
+        new ConcurrentDedupIndex().ProcessBatch(new List<EmbyItem> { owned }, _db);
+        _db.UpsertWatchlistEntry("srv1", "glad", "Movie", 1000, "Gladiator", 2000);
+        _db.UpsertWatchlistEntry("trakt", "tmdb:movie:12345", "Movie", 5000, "Unreleased Sci-Fi", 2026, "tmdb:movie:12345");
 
         var cards = _db.GetMergedWatchlist();
-        Assert.Single(cards);
-        Assert.Equal("Unreleased Sci-Fi", cards[0].Title);
-        Assert.False(cards[0].IsInLibrary);
+        Assert.Equal(new[] { ("Unreleased Sci-Fi", false), ("Gladiator", true) }, cards.Select(c => (c.Title, c.IsInLibrary)));
         Assert.Equal(0, cards[0].GroupId);
     }
 

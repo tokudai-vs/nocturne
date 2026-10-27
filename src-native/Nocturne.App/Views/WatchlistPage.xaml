@@ -120,13 +120,6 @@
                                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Button>
 
-                                        <!-- Library indicator badge -->
-                                        <Border CornerRadius="4" Padding="5,2" HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                                                Margin="6" Background="#D9141414"
-                                                Visibility="{Binding IsInLibrary, Converter={StaticResource BoolToVisibility}}">
-                                            <TextBlock Text="In Library" FontSize="9" FontWeight="SemiBold"
-                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                        </Border>
                                     </Grid>
                                 </Border>
 
