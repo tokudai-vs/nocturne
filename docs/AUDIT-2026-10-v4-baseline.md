@@ -373,7 +373,7 @@ looks wrong. Flagged, not judged.
 | Is `MediaRow` virtualization effective? | Count realized containers in a live visual tree (Snoop / VS Live Visual Tree) on a 20-item row. |
 | Why was the DB recreated at 14:20 IST today (hash index `0 existing groups`, `nocturne.log:1280`), and were `watch_events` lost (0 rows)? `ClearAllCache` preserves them only on its file-delete path. | User recollection of a reset, or log lines just before 1280. |
 | Where did the 2 pending `sibling_write_queue` rows (Valkyrie `7333698`, `7326203`, `mark_played = 1`, 14:59:53 IST) come from? Trakt isn't connected. | Log around 14:59 IST; add a source tag to the queue row. |
-| Is the installed binary built from `cc33e05`? The log's stack traces cite line numbers from earlier builds. | Embed the commit hash in the assembly version and log it at startup. |
+| Is the installed binary built from `cc33e05`? The log's stack traces cite line numbers from earlier builds. | Embed the commit hash in the assembly version and log it at startup. **Resolved 2026-10-28 (#35):** the SDK stamps `4.2.0+<commit>` (Source Link reads `.git`); the first log line of every run is `Nocturne 4.2.0 (commit <sha>, built <time> UTC)`, and About shows the same. It mattered: a 10-22 build run on 10-27 caused the 5,645-item dedup drift (#32) and took a day to identify. |
 | Does Emby serve the correct image when `Tag` belongs to a different item (MediaCard passes the item's tag with `ImageItemId`)? | One request with a mismatched tag. |
 | How does Trakt respond to a device-code request with `client_id: ""` (8.2), and what does the Settings page show? | Click Connect in Settings on a clean profile. |
 

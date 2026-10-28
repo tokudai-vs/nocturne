@@ -68,6 +68,7 @@ public partial class App : Application
         {
             // Startup timing: one log line per step, so a slow launch can be attributed from nocturne.log.
             var processStart = System.Diagnostics.Process.GetCurrentProcess().StartTime;
+            NocturneLogger.Info("Startup", BuildInfo.Describe); // which build wrote what follows (audit open question 12)
             NocturneLogger.Info("Startup", $"runtime + WPF ready: {(DateTime.Now - processStart).TotalMilliseconds:F0} ms after process start");
             var step = System.Diagnostics.Stopwatch.StartNew();
             void Timed(string name) { NocturneLogger.Info("Startup", $"{name}: {step.ElapsedMilliseconds} ms"); step.Restart(); }

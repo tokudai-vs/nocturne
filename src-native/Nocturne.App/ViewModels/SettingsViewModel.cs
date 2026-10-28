@@ -2042,7 +2042,8 @@ public class SettingsViewModel : BaseViewModel
     }
 
     // ── About & Logging ──────────────────────────────────────────────────
-    public string AppVersion => "v4.0.0 (Native Windows Edition)";
+    public string AppVersion => $"v{BuildInfo.Version} (Native Windows Edition)";
+    public string BuildText => $"Commit {BuildInfo.ShortCommit ?? "unknown"}{(BuildInfo.BuiltUtc is { } built ? $" · built {built} UTC" : "")}";
     public string RuntimeInfo => $".NET {Environment.Version} ({System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture})";
     public string LogsDirectoryPath => Nocturne.Core.Utils.AppPaths.DataDirectory;
 

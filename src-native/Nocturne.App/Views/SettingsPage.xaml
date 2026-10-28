@@ -1228,6 +1228,7 @@
                                 <TextBlock Text="{Binding RuntimeInfo}" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             </Border>
                         </DockPanel>
+                        <TextBlock Text="{Binding BuildText}" FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,4" />
                         <TextBlock Text="Pure .NET 8 WPF-UI native desktop client with zero Chromium or web engine overhead, hardware-accelerated libmpv direct rendering, multi-server library support, smart version grouping, TheIntroDB skip segments, and Trakt.tv scrobbling."
                                    FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="18" />
 
