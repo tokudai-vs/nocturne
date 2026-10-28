@@ -4840,6 +4840,30 @@ public class DatabaseService : IDisposable
         return list;
     }
 
+    // #37: a group the sibling cascade holds back. Its versions disagree on (season, episode), whatever ids they
+    // carry, or it has more versions than the size cap allows for the servers it spans. One seek on ix_items_group.
+    private static readonly string SqlCascadeHeld = Checked(@"
+        SELECT COUNT(DISTINCT CASE WHEN type = 'Episode' THEN COALESCE(parent_index_number, -1) || ':' || COALESCE(index_number, -1) END) > 1
+            OR COUNT(*) > 4 * MAX(2, COUNT(DISTINCT server_id))
+        FROM cached_items WHERE group_id = $gid;");
+
+    // Held when the query fails: a group that cannot be checked does not cascade.
+    public bool CascadeHeld(long groupId)
+    {
+        lock (_dbLock)
+        {
+            if (_connection == null) return true;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlCascadeHeld;
+                cmd.Parameters.AddWithValue("$gid", groupId);
+                return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
+            }
+            catch (Exception ex) when (QueryFailed(ex, SqlCascadeHeld)) { return true; }
+        }
+    }
+
     private static readonly string SqlGetGroupIdForDedupKey = Checked("SELECT group_id FROM dedup_keys WHERE key = $key;");
 
     public int? GetGroupIdForDedupKey(string key)

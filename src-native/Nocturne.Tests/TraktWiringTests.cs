@@ -214,6 +214,51 @@ public class TraktWiringTests : IDisposable
         Assert.Equal(cascadeOn, _db.GetUserData("s2", "arr_b")?.Played == true);
     }
 
+    // #37: the cascade is decided per group. A pull marks every version of a group whose versions agree on the
+    // episode, and only the primary of one whose servers number it differently (a shared id may be a shifted one).
+    [Fact]
+    public async Task PulledWatchedState_CascadesPerGroup()
+    {
+        EmbyItem Episode(string srv, string name, int number, string tvdb) => new()
+        {
+            Id = $"{name}_{srv}", ServerId = srv, Name = name, Type = "Episode", SeriesId = $"bb_{srv}", SeriesName = "Breaking Bad",
+            ParentIndexNumber = 1, IndexNumber = number, ProviderIds = new() { ["Tvdb"] = tvdb }
+        };
+        var items = new List<EmbyItem>();
+        foreach (var srv in new[] { "s1", "s2" })
+        {
+            items.Add(new EmbyItem { Id = $"bb_{srv}", ServerId = srv, Name = "Breaking Bad", Type = "Series", ProviderIds = new() { ["Tvdb"] = "81189" } });
+            items.Add(Episode(srv, "pilot", 1, "349232"));
+        }
+        items.Add(Episode("s1", "cat", 2, "349235"));
+        items.Add(Episode("s2", "cat", 3, "349235")); // s2 numbers the same id one later
+        foreach (var item in items) _db.UpsertItem(item, item.ServerId!);
+        var index = new ConcurrentDedupIndex();
+        index.SetServerPriority(new List<string> { "s1", "s2" });
+        index.ProcessBatch(items, _db);
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var trakt = new Trakt
+        {
+            Route = path => path switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, "{\"movies\":{\"watched_at\":\"2026-10-21T05:00:00.000Z\"},\"episodes\":{\"watched_at\":\"2026-10-21T05:00:00.000Z\"}}"),
+                "/sync/watched/shows" => Json(HttpStatusCode.OK, "[{\"show\":{\"title\":\"Breaking Bad\",\"ids\":{\"tvdb\":81189}},\"seasons\":[{\"number\":1,\"episodes\":[" +
+                    "{\"number\":1,\"last_watched_at\":\"2026-10-20T00:00:00.000Z\"},{\"number\":2,\"last_watched_at\":\"2026-10-20T00:00:00.000Z\"}]}]}]"),
+                _ => null
+            }
+        };
+        var auth = new TraktAuthService(_db, Client(trakt));
+
+        await new TraktSyncService(_db, auth, Client(trakt)).PullWatchedAsync(CancellationToken.None);
+
+        Assert.True(_db.GetUserData("s1", "pilot_s1")?.Played);
+        Assert.True(_db.GetUserData("s2", "pilot_s2")?.Played);
+        Assert.True(_db.GetUserData("s1", "cat_s1")?.Played);
+        Assert.NotEqual(true, _db.GetUserData("s2", "cat_s2")?.Played);
+    }
+
     private void ArrivalOnTwoServers(bool cascadeOn)
     {
         var a = new EmbyItem { Id = "arr_a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };

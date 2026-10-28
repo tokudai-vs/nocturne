@@ -5,8 +5,8 @@ using Xunit;
 
 namespace Nocturne.Tests;
 
-// Item 2 (#19): the sibling cascade also needs the last measurement of episode groups that span more than one
-// (season, episode) without sharing an episode id to be 0. Every sync and rebuild measures it.
+// Item 2 (#19) measured episode groups that span more than one (season, episode) without sharing an episode id, and
+// gated the whole cascade on it. #37: the cascade is decided per group; the measurement stays as a report.
 public class CascadeGateTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}");
@@ -36,25 +36,63 @@ public class CascadeGateTests : IDisposable
     }
 
     [Fact]
-    public void WrongSeasonEpisodeMerge_KeepsTheCascadeOff_SharedIdRenumberingDoesNot()
+    public void WrongSeasonEpisodeMerge_IsMeasured()
     {
-        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
         Plant("rx", "raptor", 2, 10, "1", "91051"); // one episode, numbered differently per server
         Plant("vx", "valkyrie", 2, 4, "1", "91051");
         FeatureFlags.MeasureCascadeGate(_db);
-        Assert.True(FeatureFlags.SiblingCascade(_db));
+        Assert.Equal("0", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
 
         Plant("vz", "valkyrie", 2, 10, "1", null); // an untagged different episode, joined by number
         FeatureFlags.MeasureCascadeGate(_db);
 
         Assert.Equal("1", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
-        Assert.False(FeatureFlags.SiblingCascade(_db));
+    }
+
+    // #37: one held group (OCC S02 on Valkyrie: E07 carries E08's id) no longer stops the others.
+    [Fact]
+    public void AHeldGroup_DoesNotStopTheCascadeElsewhere()
+    {
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        Plant("v7", "valkyrie", 2, 7, "1", "4726371");
+        Plant("v8", "valkyrie", 2, 8, "1", "4726371");
+        Plant("r1", "raptor", 2, 1, "2", "4726364");
+        Plant("v1", "valkyrie", 2, 1, "2", "4726364");
+
+        Assert.False(FeatureFlags.SiblingCascade(_db, 1));
+        Assert.True(FeatureFlags.SiblingCascade(_db, 2));
+    }
+
+    // A shared id under two numberings is aired-vs-DVD order or a shifted season; nothing local tells them apart.
+    [Fact]
+    public void SharedIdUnderTwoNumberings_IsHeld()
+    {
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        Plant("rx", "raptor", 2, 10, "1", "91051");
+        Plant("vx", "valkyrie", 2, 4, "1", "91051");
+
+        Assert.False(FeatureFlags.SiblingCascade(_db, 1));
+    }
+
+    [Theory]
+    [InlineData(8, true)]
+    [InlineData(9, false)]
+    public void AGroupOverTheSizeCap_IsHeld(int versions, bool cascades)
+    {
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        for (var i = 0; i < versions; i++)
+        {
+            var server = i % 2 == 0 ? "raptor" : "valkyrie";
+            _db.UpsertItem(new EmbyItem { Id = $"m{i}", ServerId = server, Name = "Arrival", Type = "Movie", DedupGroupId = "1" }, server);
+        }
+
+        Assert.Equal(cascades, FeatureFlags.SiblingCascade(_db, 1));
     }
 
     // Ben Fogle S20E09 after item 1c: Valkyrie keeps one episode as 19x8, 19x9 and 20x9, and Raptor's untagged 20x9
-    // of it joined. No server contradicts its own numbering, so the gate stays open.
+    // of it joined. No server contradicts its own numbering, so the measurement stays 0.
     [Fact]
-    public void UntaggedCopy_OfAnEpisodeAnotherServerKeepsUnderSeveralNumberings_PassesTheGate()
+    public void UntaggedCopy_OfAnEpisodeAnotherServerKeepsUnderSeveralNumberings_IsNotMeasured_ButIsHeld()
     {
         _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
         Plant("v1", "valkyrie", 19, 8, "1", "11035496");
@@ -65,8 +103,8 @@ public class CascadeGateTests : IDisposable
         FeatureFlags.MeasureCascadeGate(_db);
 
         Assert.Equal("0", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
-        Assert.True(FeatureFlags.SiblingCascade(_db));
         Assert.Null(FeatureFlags.DedupAlert(_db)); // the known level: one such group
+        Assert.False(FeatureFlags.SiblingCascade(_db, 1)); // #37: it spans numberings, so it does not cascade
     }
 
     private void PlantBenFogleShape(string group, string tvdb)
@@ -78,7 +116,7 @@ public class CascadeGateTests : IDisposable
 
     // #20 item 6: the broader count is not a gate, but a rise above its known level is reported.
     [Fact]
-    public void BroaderCountAboveItsBaseline_RaisesAnAlert_WhileTheHardGateStillDecides()
+    public void BroaderCountAboveItsBaseline_RaisesAnAlert()
     {
         _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
         PlantBenFogleShape("1", "11035496");
@@ -88,7 +126,6 @@ public class CascadeGateTests : IDisposable
 
         Assert.Equal("2", _db.GetMigrationState(FeatureFlags.SpanningUnsharedGroupsKey));
         Assert.Contains("2 episode groups", FeatureFlags.DedupAlert(_db));
-        Assert.True(FeatureFlags.SiblingCascade(_db)); // per-server gate: 0
     }
 
     [Fact]
@@ -125,11 +162,16 @@ public class CascadeGateTests : IDisposable
         Assert.Equal("0", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
     }
 
+    // Groups left by an earlier engine are over-merged: none cascades, however uniform.
     [Fact]
-    public void Unmeasured_KeepsTheCascadeOff()
+    public void GroupsFromAnEarlierEngine_DoNotCascade()
     {
+        Plant("r1", "raptor", 2, 1, "1", "4726364");
+        Plant("v1", "valkyrie", 2, 1, "1", "4726364");
+        Assert.False(FeatureFlags.SiblingCascade(_db, 1));
+
         _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
-        Assert.False(FeatureFlags.SiblingCascade(_db));
+        Assert.True(FeatureFlags.SiblingCascade(_db, 1));
     }
 
     [Fact]
@@ -143,7 +185,7 @@ public class CascadeGateTests : IDisposable
         new DedupEngine().RebuildIndex(_db);
 
         Assert.Equal("0", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
-        Assert.True(FeatureFlags.SiblingCascade(_db));
+        Assert.True(FeatureFlags.SiblingCascade(_db, _db.GetGroupIdForDedupKey("tmdb:movie:329865")!.Value)); // the rebuild set the engine marker
     }
 
     [Fact]
@@ -159,6 +201,5 @@ public class CascadeGateTests : IDisposable
         await sync.RunFullSyncAsync().WaitAsync(TimeSpan.FromSeconds(60));
 
         Assert.Equal("1", _db.GetMigrationState(FeatureFlags.UnsharedRenumberedGroupsKey));
-        Assert.False(FeatureFlags.SiblingCascade(_db));
     }
 }

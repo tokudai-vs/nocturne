@@ -18,12 +18,13 @@ public static class FeatureFlags
     // Sibling cascade: a completion / resume / Remove-from-CW on one version is also written to every other
     // version in its dedup group (locally and, via sibling_write_queue, on the other servers). Engaged only once
     // the groups were built by the conflict-guarded engine (a rebuild, or a cache populated from empty): groups
-    // left by the earlier engine are over-merged, and one completion would rewrite unrelated titles. It also stays
-    // off while the last measurement found an episode group in which one server holds two items under different
-    // (season, episode) sharing no episode id: a season/episode over-merge the conflict guard cannot see.
-    public static bool SiblingCascade(DatabaseService db) =>
+    // left by the earlier engine are over-merged, and one completion would rewrite unrelated titles. Then per group
+    // (#37): a group whose versions disagree on (season, episode), or that is over the size cap, is held back
+    // (DatabaseService.CascadeHeld). A wrong shared id (a shifted season) looks like one episode numbered two ways,
+    // so neither can cascade on the id alone. One suspect group used to keep the cascade off for every group.
+    public static bool SiblingCascade(DatabaseService db, long groupId) =>
         db.GetMigrationState(ConcurrentDedupIndex.EngineMarkerKey) == ConcurrentDedupIndex.EngineVersion
-        && db.GetMigrationState(UnsharedRenumberedGroupsKey) == "0";
+        && groupId > 0 && !db.CascadeHeld(groupId);
 
     // Run after every sync and rebuild, inside DedupEngine.WriterGate.
     public static void MeasureCascadeGate(DatabaseService db)
@@ -32,7 +33,7 @@ public static class FeatureFlags
         var counts = db.CountUnsharedRenumberedGroups();
         db.SetMigrationState(UnsharedRenumberedGroupsKey, counts?.Gate.ToString() ?? "unmeasured");
         db.SetMigrationState(SpanningUnsharedGroupsKey, counts?.Spanning.ToString() ?? "unmeasured");
-        NocturneLogger.Info("FeatureFlags", $"Cascade gate: {(counts is { } c ? $"{c.Gate} renumbered episode group(s) without a shared episode id; {c.Spanning} spanning without one (known {SpanningUnsharedBaseline})" : "measurement failed")} ({clock.ElapsedMilliseconds} ms); sibling cascade {(SiblingCascade(db) ? "on" : "off")}.");
+        NocturneLogger.Info("FeatureFlags", $"Cascade gate: {(counts is { } c ? $"{c.Gate} renumbered episode group(s) without a shared episode id; {c.Spanning} spanning without one (known {SpanningUnsharedBaseline})" : "measurement failed")} ({clock.ElapsedMilliseconds} ms); sibling cascade {(db.GetMigrationState(ConcurrentDedupIndex.EngineMarkerKey) == ConcurrentDedupIndex.EngineVersion ? "per group" : "off (groups from an earlier engine)")}.");
         if (DedupAlert(db) is { } alert) NocturneLogger.Warn("FeatureFlags", alert);
     }
 
@@ -42,7 +43,7 @@ public static class FeatureFlags
     {
         var alerts = new List<string>();
         if (int.TryParse(db.GetMigrationState(SpanningUnsharedGroupsKey), out var n) && n > SpanningUnsharedBaseline)
-            alerts.Add($"Dedup check: {n} episode groups mix numberings without a shared episode id (known: {SpanningUnsharedBaseline}). The sibling cascade's gate still decides; this may be a new kind of over-merge.");
+            alerts.Add($"Dedup check: {n} episode groups mix numberings without a shared episode id (known: {SpanningUnsharedBaseline}). Those groups do not cascade; this may be a new kind of over-merge.");
         if (int.TryParse(db.GetMigrationState(DedupEngine.DriftItemsKey), out var drift) && drift > 0)
             alerts.Add($"Dedup drift: {drift:N0} item(s) are grouped otherwise than a rebuild would group them. Rebuild Dedup Index in Settings to correct it.");
         return alerts.Count > 0 ? string.Join(" ", alerts) : null;
@@ -68,7 +69,7 @@ public sealed class PlaybackSession
     private static readonly TimeSpan ProgressReportInterval = TimeSpan.FromSeconds(10);
 
     private readonly DatabaseService _db;
-    private readonly Func<bool> _siblingCascade;
+    private readonly Func<long, bool> _siblingCascade;
     private readonly Func<DateTime> _utcNow;
     private readonly object _gate = new();
 
@@ -79,11 +80,11 @@ public sealed class PlaybackSession
     private double _durationSeconds;
     private DateTime _lastProgressReportUtc;
 
-    public PlaybackSession(DatabaseService db) : this(db, () => FeatureFlags.SiblingCascade(db), null) { }
+    public PlaybackSession(DatabaseService db) : this(db, gid => FeatureFlags.SiblingCascade(db, gid), null) { }
 
-    public PlaybackSession(DatabaseService db, bool siblingCascade, Func<DateTime>? utcNow) : this(db, () => siblingCascade, utcNow) { }
+    public PlaybackSession(DatabaseService db, bool siblingCascade, Func<DateTime>? utcNow) : this(db, _ => siblingCascade, utcNow) { }
 
-    private PlaybackSession(DatabaseService db, Func<bool> siblingCascade, Func<DateTime>? utcNow)
+    private PlaybackSession(DatabaseService db, Func<long, bool> siblingCascade, Func<DateTime>? utcNow)
     {
         _db = db;
         _siblingCascade = siblingCascade;
@@ -166,7 +167,7 @@ public sealed class PlaybackSession
             NocturneLogger.Warn("PlaybackSession", $"Stop report for {item.Id} was not accepted by '{serverId}'");
 
         var groupId = long.TryParse(item.DedupGroupId, out var gid) && gid > 0 ? gid : 0;
-        var cascade = groupId > 0 && _siblingCascade();
+        var cascade = groupId > 0 && _siblingCascade(groupId);
 
         if (completed)
         {

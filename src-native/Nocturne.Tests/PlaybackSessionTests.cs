@@ -243,6 +243,24 @@ public class PlaybackSessionTests : IDisposable
         Assert.Single(_db.GetPendingSiblingWrites(10));
     }
 
+    // #37: the default session asks about the played version's own group; one the cascade holds back stays put.
+    [Fact]
+    public async Task DefaultSession_DoesNotCascadeAHeldGroup()
+    {
+        var (a, _) = GroupedAcrossServers();
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+        for (var i = 0; i < 7; i++) // nine versions on two servers: over the size cap
+            _db.UpsertItem(new EmbyItem { Id = $"dune_{i}", ServerId = "raptor", Name = "Dune", Type = "Movie", DedupGroupId = a.DedupGroupId }, "raptor");
+
+        var session = new PlaybackSession(_db);
+        session.Begin(a, _client, "ms1", 0);
+        session.OnPosition(3590);
+        await session.FinalizeAsync(PlaybackStopReason.EndOfFile);
+
+        Assert.False(_db.GetUserData("raptor", "dune_b")!.Played);
+        Assert.Empty(_db.GetPendingSiblingWrites(10));
+    }
+
     [Fact]
     public async Task SiblingDrain_KeepsFailedWrites_AndRemovesAcceptedOnes()
     {

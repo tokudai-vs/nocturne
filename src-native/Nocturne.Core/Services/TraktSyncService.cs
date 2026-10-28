@@ -322,10 +322,9 @@ public class TraktSyncService : ITraktSyncService
 
     private int ApplyWatchedStateToGroup(int groupId, long watchedAtSec)
     {
-        // Group-wide marking is the sibling cascade: until the groups were built by the conflict-guarded engine
-        // (FeatureFlags.SiblingCascade) only the primary version is marked, as an over-merged group would mark
-        // unrelated titles watched.
-        var cascade = FeatureFlags.SiblingCascade(_db);
+        // Group-wide marking is the sibling cascade: in a group it holds back (FeatureFlags.SiblingCascade) only the
+        // primary version is marked, as an over-merged group would mark unrelated titles watched.
+        var cascade = FeatureFlags.SiblingCascade(_db, groupId);
         IEnumerable<(string ServerId, string ItemId)> items = _db.GetGroupItemIds(groupId);
         if (!cascade)
         {
