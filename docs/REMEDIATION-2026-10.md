@@ -912,3 +912,25 @@ keeps the freed pages for reuse. A `VACUUM` would return them to the disk; it wa
 | conflict-split pairs | 9,220 → 951 rows (695 series, 256 movies); 1,206 are Raptor's truncated ids (68 rows) |
 | sync ↔ rebuild identity | holds for members and primaries (oracle) |
 | background cost | sweep weekly (about 4–5 min); drift only after an anomaly, or monthly |
+
+## 11. TMDB enrichment on the live library (2026-10-27/28): corrected figures
+
+The first live passes reported figures that overstated what TMDB filled. Settings' ENRICHED counted every row
+TMDB answered, including the episodes it knows without a still, and the pass's progress counted found episodes
+the same way; PENDING showed items next to an estimate made in requests (one season request fills all its
+episodes). Both are fixed (#34, #36). The figures below are measured on the live database, read-only.
+
+| | Figure |
+|---|---|
+| Groups with no poster on any version (spec §16) | episodes 388,491 / 1,005,176; movies 181 / 98,426; series 567 / 30,556 |
+| First pass's work | 532 titles + 31,784 seasons = **32,316 requests** (for about 369,700 episode groups) |
+| Pass 1 (old build, UI lock contention, #34) | 19,780 requests in 78 min, **4.2 req/s**, 0 × 429; stopped by a network drop |
+| Pass 2 (after #34) | 12,566 requests in 20 min, **10.5 req/s**, 0 × 429; fetchers then raised 4 → 8 (2771a29) |
+| Titles (532) | 373 got a poster; 143 known to TMDB without one; 16 not on TMDB |
+| Episodes (369,519) | **118,664 got a still**; 194,933 known to TMDB without one; 55,922 not on TMDB |
+| Rows with art | **119,037** (shown as 2,66,667 before the counters were corrected) |
+| Pending after both passes | 0 |
+| Re-checks (#36) | "not on TMDB" monthly: 4,838 season requests; "no image" every 180 days: 16,909; about 7,700 a month on average (one 30-day rule for both would be 20,372) |
+
+Corrections to earlier reports: "125,434 enriched" (pass 2's progress) counted found episodes with or without a
+still; with art it is the 118,664 above. "370,080 pending" counted items; the requests behind them were 32,316.
