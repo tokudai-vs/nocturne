@@ -77,7 +77,7 @@ public class TraktWiringTests : IDisposable
             {
                 "/oauth/device/code" => Json(HttpStatusCode.OK, "{\"device_code\":\"dc\",\"user_code\":\"ABCD1234\",\"verification_url\":\"https://trakt.tv/activate\",\"expires_in\":600,\"interval\":5}"),
                 "/oauth/device/token" => Json(HttpStatusCode.OK, "{\"access_token\":\"tok_new\",\"refresh_token\":\"ref_new\",\"expires_in\":7776000}"),
-                "/users/me" => Json(HttpStatusCode.OK, "{\"user\":{\"username\":\"viewer\"}}"),
+                "/users/me" => Json(HttpStatusCode.OK, "{\"username\":\"viewer\",\"private\":false,\"ids\":{\"slug\":\"viewer\"}}"), // /users/me's real shape
                 _ => null
             }
         };
@@ -117,7 +117,7 @@ public class TraktWiringTests : IDisposable
             {
                 "/oauth/device/code" => Json(HttpStatusCode.OK, "{\"device_code\":\"dc\",\"user_code\":\"ABCD1234\",\"verification_url\":\"https://trakt.tv/activate\",\"expires_in\":600,\"interval\":5}"),
                 "/oauth/device/token" => Json(HttpStatusCode.OK, "{\"access_token\":\"tok\",\"refresh_token\":\"ref\",\"expires_in\":3600}"),
-                "/users/me" => Json(HttpStatusCode.OK, "{\"user\":{\"username\":\"viewer\"}}"),
+                "/users/me" => Json(HttpStatusCode.OK, "{\"username\":\"viewer\",\"private\":false,\"ids\":{\"slug\":\"viewer\"}}"), // /users/me's real shape
                 _ => null
             }
         };
@@ -137,6 +137,23 @@ public class TraktWiringTests : IDisposable
             Assert.Equal("2", r.Version);
             Assert.Equal("custom-client-123", r.ApiKey);
         });
+    }
+
+    // #29: a connection made while /users/me was misread has no name; the startup refresh check fills it in once.
+    [Fact]
+    public async Task AConnectionWithNoName_GetsItAtTheNextStart()
+    {
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var trakt = new Trakt { Route = path => path == "/users/me" ? Json(HttpStatusCode.OK, "{\"username\":\"viewer\"}") : null };
+        var auth = new TraktAuthService(_db, Client(trakt));
+        Assert.True(string.IsNullOrEmpty(auth.Username));
+
+        Assert.True(await auth.RefreshIfNeededAsync(CancellationToken.None));
+
+        Assert.Equal("viewer", auth.Username);
+        Assert.Equal("viewer", new TraktAuthService(_db, Client(trakt)).Username); // saved
+        await auth.RefreshIfNeededAsync(CancellationToken.None);
+        Assert.Single(trakt.Requests, r => r.Path == "/users/me");                // once
     }
 
     // I4

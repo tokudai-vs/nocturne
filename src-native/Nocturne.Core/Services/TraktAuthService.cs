@@ -211,32 +211,36 @@ public class TraktAuthService : ITraktAuthService
         _state.ExpiresUtc = DateTime.UtcNow.AddSeconds(auth.ExpiresIn > 0 ? auth.ExpiresIn : 7776000); // 90 days default
         _state.ClientIdUsedForToken = clientId;
 
-        // Fetch Trakt username (/users/me)
-        try
-        {
-            using var userReq = new HttpRequestMessage(HttpMethod.Get, "/users/me");
-            userReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth.AccessToken);
-            userReq.Headers.Add("trakt-api-key", clientId);
-
-            using var userResp = await _http.SendAsync(userReq, ct);
-            if (userResp.IsSuccessStatusCode)
-            {
-                var userDto = await userResp.Content.ReadFromJsonAsync<TraktUserMeDto>(cancellationToken: ct);
-                if (userDto?.User != null)
-                {
-                    _state.Username = userDto.User.Username;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            NocturneLogger.Warn("TraktAuthService", $"Failed to fetch Trakt profile name: {ex.Message}");
-        }
+        await FetchUsernameAsync(auth.AccessToken, clientId, ct);
 
         SaveState();
         SetConnectionState(TraktConnectionState.Connected);
         NocturneLogger.Info("TraktAuthService", $"Successfully authorized Trakt for user: {_state.Username ?? "Unknown"}");
     }
+
+    // /users/me returns the profile itself ({"username": ...}); /users/settings nests it ({"user": {"username": ...}}).
+    // Reading only the nested shape left every live connection nameless (#29).
+    private async Task FetchUsernameAsync(string accessToken, string clientId, CancellationToken ct)
+    {
+        try
+        {
+            using var userReq = new HttpRequestMessage(HttpMethod.Get, "/users/me");
+            userReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            userReq.Headers.Add("trakt-api-key", clientId);
+
+            using var userResp = await _http.SendAsync(userReq, ct);
+            if (!userResp.IsSuccessStatusCode) return;
+            var userDto = await userResp.Content.ReadFromJsonAsync<TraktUserMeDto>(cancellationToken: ct);
+            var name = !string.IsNullOrEmpty(userDto?.Username) ? userDto.Username : userDto?.User?.Username;
+            if (!string.IsNullOrEmpty(name)) _state.Username = name;
+        }
+        catch (Exception ex)
+        {
+            NocturneLogger.Warn("TraktAuthService", $"Failed to fetch Trakt profile name: {ex.Message}");
+        }
+    }
+
+    private bool _usernameBackfillTried;
 
     public async Task<bool> RefreshIfNeededAsync(CancellationToken ct)
     {
@@ -256,6 +260,13 @@ public class TraktAuthService : ITraktAuthService
         // Proactive refresh when < 24h before expiry (§6.3)
         if (DateTime.UtcNow.AddHours(24) < _state.ExpiresUtc)
         {
+            // A connection made while the profile name was misread has none; fill it in, one attempt per run (#29).
+            if (string.IsNullOrEmpty(_state.Username) && !_usernameBackfillTried && GetAccessToken() is { Length: > 0 } token)
+            {
+                _usernameBackfillTried = true;
+                await FetchUsernameAsync(token, clientId, ct);
+                if (!string.IsNullOrEmpty(_state.Username)) SaveState();
+            }
             return true; // Token still comfortably valid
         }
 
@@ -479,6 +490,7 @@ public class TraktAuthService : ITraktAuthService
 
     private class TraktUserMeDto
     {
+        [JsonPropertyName("username")] public string? Username { get; set; }
         [JsonPropertyName("user")] public TraktUserProfileDto? User { get; set; }
     }
 
