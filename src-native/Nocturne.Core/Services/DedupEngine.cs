@@ -238,6 +238,7 @@ public class DedupEngine
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var dedupIndex = new ConcurrentDedupIndex();
         int groups = 0, multiVersion = 0;
+        var pendingCorrections = db.OverridesPending(); // #38: what this rebuild applies; later ones keep waiting
 
         db.SwapInRebuild(() =>
         {
@@ -310,6 +311,7 @@ public class DedupEngine
         db.SetMigrationState(DriftItemsKey, "0");
         db.SetMigrationState(DriftGroupsKey, "0");
         db.SetMigrationState(DriftMeasuredKey, DateTime.UtcNow.ToString("o"));
+        db.SetMigrationState(DatabaseService.OverridesPendingKey, Math.Max(0, db.OverridesPending() - pendingCorrections).ToString());
         FeatureFlags.MeasureCascadeGate(db);
         NocturneLogger.Info("DedupEngine", $"Rebuild complete in {clock.ElapsedMilliseconds} ms: {groups} groups, {multiVersion} multi-version, {dedupIndex.ConflictsRefused} merges refused on conflicting ids.");
         return multiVersion;

@@ -38,6 +38,10 @@ public class EmbyItem : INotifyPropertyChanged
     public DateTime? PremiereDate { get; set; }
 
     public Dictionary<string, string>? ProviderIds { get; set; }
+    // #38: the server's own ids, kept beside ProviderIds when a local override (item_overrides) changed them; null
+    // otherwise, and on every item fresh from a server.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? ServerProviderIds { get; set; }
     public Dictionary<string, string>? SeriesProviderIds { get; set; }
     public Dictionary<string, string>? ImageTags { get; set; }
     public List<string>? BackdropImageTags { get; set; }

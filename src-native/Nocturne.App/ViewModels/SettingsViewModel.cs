@@ -349,7 +349,9 @@ public class SettingsViewModel : BaseViewModel
 
     public ObservableCollection<ServerPriorityItem> Servers { get; } = new();
     public ObservableCollection<CombinedMapping> CombinedGroups { get; } = new();
-    public ObservableCollection<string> ConflictSplits { get; } = new();
+    public ObservableCollection<ActionRow> ConflictSplits { get; } = new();
+    public ObservableCollection<ActionRow> HeldGroups { get; } = new();
+    public ObservableCollection<ActionRow> Corrections { get; } = new();
 
     public SettingsViewModel(
         SettingsService settings,
@@ -1283,6 +1285,7 @@ public class SettingsViewModel : BaseViewModel
             _dedup.RebuildIndex(_db, _settings.Current.PreferredServerPriority); // as a sync elects: the cards' primaries follow it
         });
         RefreshDatabaseStats();
+        RefreshDriftText();
         IsSyncing = false;
         SyncStatusText = FeatureFlags.DedupAlert(_db) ?? "Deduplication index rebuild complete.";
     }
@@ -1303,6 +1306,7 @@ public class SettingsViewModel : BaseViewModel
         var over = _db.GetMigrationState(DedupEngine.OverCapKey);
         DriftText = $"Drift: {measured}" + (over == null ? "" :
                     $"\nGroups over the size cap of {ConcurrentDedupIndex.GroupSizeCap(_settings.Current.Servers.Count)}: {(over == "0" ? "none" : $"{over}: {_db.GetMigrationState(DedupEngine.OverCapNamesKey)}")}.");
+        RefreshCorrectionsText();
     }
 
     public async Task MeasureDriftAsync()
@@ -1320,7 +1324,7 @@ public class SettingsViewModel : BaseViewModel
     {
         SyncStatusText = "Looking for titles with conflicting provider ids...";
         ConflictSplits.Clear();
-        ConflictSplits.Add("Looking for titles with conflicting provider ids (15-60 s on a large library)..."); // the status line is on another tab
+        ConflictSplits.Add(ActionRow.Of("Looking for titles with conflicting provider ids (15-60 s on a large library)...")); // the status line is on another tab
         var pairs = await Task.Run(() => _db.GetConflictPairs());
         ConflictSplits.Clear();
         if (pairs == null)
@@ -1343,12 +1347,140 @@ public class SettingsViewModel : BaseViewModel
                       $"{roots.Count - series.Count:N0} movies ({pairs.Count:N0} split pairs)." +
                       (truncated.Count == 0 ? "" : $" {truncated.Count:N0} look like truncated ids, listed first: " +
                           string.Join(", ", truncated.GroupBy(r => Servers(r.TruncatedOn!)).Select(g => $"{g.Count():N0} on {g.Key}")) + ".");
-        ConflictSplits.Add(summary);
+        ConflictSplits.Add(ActionRow.Of(summary + " Correct the wrong side below (it takes effect at the next Rebuild Dedup Index); titles that really are different need nothing."));
         foreach (var r in roots)
-            ConflictSplits.Add($"{r.Title}{(r.Year is { } y ? $" ({y})" : "")} [{r.ItemType}{(r.Episodes > 0 ? $", {r.Episodes:N0} episode(s)" : "")}]: " +
+        {
+            var row = ActionRow.Of($"{r.Title}{(r.Year is { } y ? $" ({y})" : "")} [{r.ItemType}{(r.Episodes > 0 ? $", {r.Episodes:N0} episode(s)" : "")}]: " +
                                $"{(r.ItemType == "Series" && !r.SeriesIds ? "episode ids differ, e.g. " : "")}{ProviderName(r.Provider)} {r.IdsA} on {Servers(r.ServersA)}, {r.IdsB} on {Servers(r.ServersB)}" +
                                (r.TruncatedOn is { } t ? $" (likely truncated id on {Servers(t)})" : ""));
-        SyncStatusText = summary + " Fix the wrong id on the server, then rebuild.";
+            AddConflictActions(row, r, Servers);
+            ConflictSplits.Add(row);
+        }
+        SyncStatusText = summary + " Correct the wrong side in Settings, then rebuild.";
+    }
+
+    // #38: what a conflict row offers. Series or movie ids: one side's id on the other side's servers (a truncated id
+    // is the shorter side). Episode ids differ episode by episode: remove them on one server, and those episodes group
+    // by their series and number.
+    private void AddConflictActions(ActionRow row, DatabaseService.ConflictRoot r, Func<string, string> servers)
+    {
+        static HashSet<string> Set(string s) => s.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+        var (field, type) = DatabaseService.SlotTarget(r.Provider);
+        if (type == "Episode")
+        {
+            foreach (var srv in Set(r.ServersA).Union(Set(r.ServersB)))
+                row.Actions.Add(new RowAction($"Remove episode ids on {servers(srv)}",
+                    () => CorrectAsync(row, () => _db.GetConflictTargets(r, new HashSet<string> { srv }, null), ProviderFields, null, $"{r.Title}: episode ids removed on {servers(srv)}")));
+            return;
+        }
+        foreach (var (from, to, toIds) in new[] { (r.IdsA, r.ServersB, r.IdsB), (r.IdsB, r.ServersA, r.IdsA) })
+            if (!from.Contains(','))
+                row.Actions.Add(new RowAction($"Use {FieldName(field)} {from} on {servers(to)}",
+                    () => CorrectAsync(row, () => _db.GetConflictTargets(r, Set(to), Set(toIds)), new[] { field }, from, $"{r.Title}: {FieldName(field)} {from} on {servers(to)}")));
+    }
+
+    private static readonly string[] ProviderFields = { "Tvdb", "Tmdb", "Imdb" };
+    private static string FieldName(string field) => field switch { "Tvdb" => "TVDB", "Tmdb" => "TMDb", "Imdb" => "IMDb", _ => field };
+    private string ServerName(string id) => _settings.Current.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
+    private static string Numbering(int? season, int? episode) => $"S{season ?? 0:D2}E{episode ?? 0:D2}";
+
+    private async Task CorrectAsync(ActionRow row, Func<List<(string ServerId, string ItemId)>> targets, IEnumerable<string> fields, string? value, string what)
+    {
+        row.Actions.Clear(); // one correction per click
+        var items = await Task.Run(targets);
+        var now = DateTime.UtcNow.ToString("O");
+        await Task.Run(() => _db.SetItemOverrides(items.SelectMany(t => fields.Select(f => new ItemOverride(t.ServerId, t.ItemId, f, value, now)))));
+        _correctionsStatus = items.Count == 0 ? $"{what}: nothing on that server carries those ids now." : $"{what}: {items.Count:N0} item(s) corrected.";
+        RefreshCorrectionsText();
+    }
+
+    // #38: corrections waiting for a rebuild, and what the last one did.
+    private string _correctionsStatus = string.Empty;
+    private string _correctionsText = string.Empty;
+    public string CorrectionsText
+    {
+        get => _correctionsText;
+        set => SetProperty(ref _correctionsText, value);
+    }
+
+    public void RefreshCorrectionsText()
+    {
+        var pending = _db.OverridesPending();
+        var count = _db.GetItemOverrides().Select(o => (o.ServerId, o.ItemId)).Distinct().Count();
+        CorrectionsText = (_correctionsStatus.Length > 0 ? _correctionsStatus + "\n" : "") +
+            $"Local corrections: {count:N0} item(s)" + (pending > 0 ? $"; {pending:N0} wait for Rebuild Dedup Index." : ".");
+    }
+
+    // #37/#38: the groups the sibling cascade holds back, each version with its numbering and ids.
+    public async Task LoadHeldGroupsAsync()
+    {
+        HeldGroups.Clear();
+        HeldGroups.Add(ActionRow.Of("Looking for groups the cascade holds back (about 20 s on a large library)..."));
+        var versions = await Task.Run(() => _db.GetHeldGroups());
+        HeldGroups.Clear();
+        if (versions == null)
+        {
+            HeldGroups.Add(ActionRow.Of("Could not read the held groups (see the log)."));
+            return;
+        }
+        var groups = versions.GroupBy(v => v.GroupId).ToList();
+        HeldGroups.Add(ActionRow.Of($"{groups.Count:N0} group(s) do not cascade: their versions disagree on season/episode, or there are more than the size cap. " +
+                                    "If they are the same, release the group; if one carries a wrong id, remove it and the episode groups by its number at the next rebuild."));
+        foreach (var g in groups)
+        {
+            var first = g.First();
+            var title = first.Type == "Episode" ? $"{first.Series}: {string.Join(" / ", g.Select(v => Numbering(v.Season, v.Episode)).Distinct())}" : first.Name;
+            var row = new ActionRow($"{title} ({g.Count()} versions)", new(), g.Select(HeldVersionRow).ToList());
+            row.Actions.Add(new RowAction("Same episode: cascade anyway", async () =>
+            {
+                await Task.Run(() => _db.ReleaseCascade(g.Key));
+                HeldGroups.Remove(row);
+                _correctionsStatus = $"{title}: released; it cascades now.";
+                RefreshCorrectionsText();
+            }));
+            HeldGroups.Add(row);
+        }
+    }
+
+    private ActionRow HeldVersionRow(DatabaseService.HeldVersion v)
+    {
+        var ids = v.Ids == null ? null : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(v.Ids);
+        var shown = string.Join(", ", ProviderFields.Select(f => (f, id: ItemOverrides.Read(ids, f))).Where(x => x.id != null).Select(x => $"{FieldName(x.f)} {x.id}"));
+        var where = v.Type == "Episode" ? $"{Numbering(v.Season, v.Episode)} " : "";
+        var row = ActionRow.Of($"{ServerName(v.ServerId)} {where}'{v.Name}': {(shown.Length > 0 ? shown : "no ids")}");
+        if (v.Type == "Episode" && shown.Length > 0)
+            row.Actions.Add(new RowAction("Remove ids", () => CorrectAsync(row, () => new() { (v.ServerId, v.ItemId) }, ProviderFields, null,
+                $"{v.Series} {where}on {ServerName(v.ServerId)}: ids removed")));
+        return row;
+    }
+
+    // #38: every correction, each deletable. A deleted id correction restores the server's ids from the stored row.
+    public void LoadCorrections()
+    {
+        Corrections.Clear();
+        foreach (var item in _db.GetOverrideRows().GroupBy(r => r.Override.Field == ItemOverrides.Cascade ? "release " + r.Override.Value : $"{r.Override.ServerId}/{r.Override.ItemId}"))
+        {
+            var rows = item.ToList();
+            var o = rows[0];
+            var what = o.Name == null ? $"item {o.Override.ItemId} (no longer in the library)"
+                : o.Season != null || o.Episode != null ? $"{o.Series} {Numbering(o.Season, o.Episode)} '{o.Name}'" : $"'{o.Name}'";
+            var serverIds = o.ServerIds == null ? null : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(o.ServerIds);
+            var text = o.Override.Field == ItemOverrides.Cascade
+                ? $"Released: {what} and {rows.Count - 1} other version(s) cascade although their numbering differs."
+                : $"{ServerName(o.Override.ServerId)} {what}: " + string.Join(", ", rows.Select(r =>
+                    $"{FieldName(r.Override.Field)} {ItemOverrides.Read(serverIds, r.Override.Field) ?? "none"} -> {r.Override.Value ?? "removed"}"));
+            var row = ActionRow.Of(text);
+            row.Actions.Add(new RowAction("Delete", async () =>
+            {
+                await Task.Run(() => _db.RemoveItemOverrides(rows.Select(r => r.Override)));
+                Corrections.Remove(row);
+                _correctionsStatus = o.Override.Field == ItemOverrides.Cascade ? "Release deleted; that group is held again." : "Correction deleted; the server's ids are back in the cache.";
+                RefreshCorrectionsText();
+            }));
+            Corrections.Add(row);
+        }
+        if (Corrections.Count == 0) Corrections.Add(ActionRow.Of("No local corrections."));
+        RefreshCorrectionsText();
     }
 
     // "imdb:movie" -> "IMDb"; a season/episode key's id is its series' ("ep:tvdb" -> "series TVDB"); "tvdb:ep" -> "episode TVDB".
@@ -2103,4 +2235,12 @@ public class SettingsViewModel : BaseViewModel
         }
         catch { }
     }
+}
+
+// A diagnostic line in Settings with the corrections it offers (#38). Actions empty once one has run.
+public sealed record RowAction(string Label, Func<Task> Run);
+
+public sealed record ActionRow(string Text, ObservableCollection<RowAction> Actions, IReadOnlyList<ActionRow>? Children = null)
+{
+    public static ActionRow Of(string text) => new(text, new());
 }

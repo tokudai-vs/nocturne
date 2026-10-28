@@ -3,6 +3,37 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
 
+    <UserControl.Resources>
+        <!-- #38: a diagnostic line and the corrections it offers (ActionRow); a group's versions are leaf rows. -->
+        <DataTemplate x:Key="RowActionsTemplate">
+            <ItemsControl ItemsSource="{Binding Actions}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button Content="{Binding Label}" Click="OnRowActionClick" Margin="0,4,8,0" Padding="8,2" FontSize="11" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </DataTemplate>
+        <DataTemplate x:Key="LeafRowTemplate">
+            <StackPanel Margin="0,2,0,2">
+                <TextBlock Text="{Binding Text}" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource RowActionsTemplate}" />
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="ActionRowTemplate">
+            <StackPanel Margin="0,2,0,4">
+                <TextBlock Text="{Binding Text}" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource RowActionsTemplate}" />
+                <ItemsControl ItemsSource="{Binding Children}" ItemTemplate="{StaticResource LeafRowTemplate}" Margin="16,2,0,0" />
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+
     <ScrollViewer VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Margin="28,54,28,48" MaxWidth="880" HorizontalAlignment="Center">
 
@@ -759,14 +790,20 @@
                                 ToolTip="Titles kept apart because the servers give them different ids of the same provider" />
                         <!-- Virtualizing: the live library lists about 3,500 rows. -->
                         <ListBox ItemsSource="{Binding ConflictSplits}" MaxHeight="240" Margin="0,8,0,0"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" ItemTemplate="{StaticResource ActionRowTemplate}" />
+
+                        <!-- #37/#38: groups the sibling cascade holds back, with a way out. -->
+                        <Button Content="Show Held Groups" Click="OnHeldGroupsClick" Margin="0,12,0,0" HorizontalAlignment="Left"
+                                ToolTip="Groups whose versions disagree on season/episode (or exceed the size cap): watched state is not copied between their versions" />
+                        <ListBox ItemsSource="{Binding HeldGroups}" MaxHeight="320" Margin="0,8,0,0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" ItemTemplate="{StaticResource ActionRowTemplate}" />
+
+                        <TextBlock Text="{Binding CorrectionsText}" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        <Button Content="Show Corrections" Click="OnCorrectionsClick" Margin="0,8,0,0" HorizontalAlignment="Left"
+                                ToolTip="Ids corrected and groups released in Nocturne, for servers you cannot edit; deleting one restores the server's ids" />
+                        <ListBox ItemsSource="{Binding Corrections}" MaxHeight="240" Margin="0,8,0,0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" ItemTemplate="{StaticResource ActionRowTemplate}" />
 
                         <TextBlock Text="{Binding DriftText}" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />

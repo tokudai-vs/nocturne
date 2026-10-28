@@ -222,6 +222,25 @@ public partial class SettingsPage : UserControl
         }
     }
 
+    private async void OnHeldGroupsClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.LoadHeldGroupsAsync();
+        }
+    }
+
+    private void OnCorrectionsClick(object sender, RoutedEventArgs e) => ViewModel?.LoadCorrections();
+
+    // #38: a correction offered on a diagnostic row (conflicting ids, held groups, corrections).
+    private async void OnRowActionClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is RowAction action)
+        {
+            await action.Run();
+        }
+    }
+
     private async void OnDeletionSweepClick(object sender, RoutedEventArgs e)
     {
         if (ViewModel != null)

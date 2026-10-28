@@ -278,11 +278,14 @@ public class ConcurrentDedupIndex
 
     /// <summary>
     /// Episodes carry only the server-local SeriesId. Their series' provider ids (for the ep:tvdb/tmdb/imdb keys)
-    /// are taken from the Series row, from this batch or the local cache; no server round-trip.
+    /// are taken from the Series row, from this batch or the local cache; no server round-trip. First, every item's
+    /// own ids under its local overrides (#38), so a corrected Series reaches its episodes. Sync and rebuild both
+    /// come through here before any key is built.
     /// </summary>
     public void ResolveSeriesProviderIds(IEnumerable<EmbyItem> items, DatabaseService db)
     {
         var list = items as IList<EmbyItem> ?? items.ToList();
+        db.ApplyItemOverrides(list);
         foreach (var s in list)
         {
             if (s.Type == "Series" && s.ProviderIds is { Count: > 0 } && !string.IsNullOrEmpty(s.Id))

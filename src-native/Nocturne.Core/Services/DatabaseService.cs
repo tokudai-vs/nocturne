@@ -364,6 +364,16 @@ public class DatabaseService : IDisposable
                 ON user_data(last_played_utc DESC)
                 WHERE position_ticks > 0 AND played = 0;
 
+            -- #38: Nocturne-side corrections per server item (ItemOverrides). value NULL removes the server's id.
+            CREATE TABLE IF NOT EXISTS item_overrides (
+                server_id   TEXT NOT NULL,
+                item_id     TEXT NOT NULL,
+                field       TEXT NOT NULL,
+                value       TEXT,
+                created_utc TEXT NOT NULL,
+                PRIMARY KEY (server_id, item_id, field)
+            ) WITHOUT ROWID;
+
             -- 4. Persistent Sibling Write Queue with Unique Upsert
             CREATE TABLE IF NOT EXISTS sibling_write_queue (
                 queue_id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -618,6 +628,7 @@ public class DatabaseService : IDisposable
         lock (_dbLock)
         {
             if (QueueDuringRebuildWrite(() => UpsertItem(item, serverId, parentId))) return;
+            ApplyItemOverrides(new[] { item }, serverId);
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = SqlUpsertItem;
 
@@ -763,6 +774,7 @@ public class DatabaseService : IDisposable
         lock (_dbLock)
         {
             if (_connection == null) return;
+            ApplyItemOverrides(list, serverId);
 
             const int chunkSize = 2000;
             int totalChunks = list.Count > 0 ? (int)Math.Ceiling((double)list.Count / chunkSize) : 1;
@@ -1997,6 +2009,7 @@ public class DatabaseService : IDisposable
         {
             var preservedEvents = ReadAllWatchEvents();
             var preservedHistory = ReadAllTraktHistory();
+            var preservedOverrides = GetItemOverrides(); // corrections of server items, by the server's ids: still valid (#38)
 
             bool fileDeleteSucceeded = false;
             try
@@ -2026,10 +2039,12 @@ public class DatabaseService : IDisposable
 
             Initialize();
 
+            _overrides = null;
             if (fileDeleteSucceeded)
             {
                 RestoreWatchEvents(preservedEvents);
                 RestoreTraktHistory(preservedHistory);
+                InsertItemOverrides(preservedOverrides); // a sync from empty applies them as it stores; no rebuild waits
             }
             else
             {
@@ -3319,6 +3334,7 @@ public class DatabaseService : IDisposable
     public sealed record ConflictRoot(string ItemType, string Title, int? Year, string Provider, string IdsA, string ServersA, string IdsB, string ServersB, int Episodes, bool SeriesIds)
     {
         public string? TruncatedOn { get; init; } // the servers holding the shorter id, when one is a strict prefix of the other
+        public IReadOnlyList<ConflictPair> Pairs { get; init; } = Array.Empty<ConflictPair>(); // what an override targets (#38)
     }
 
     // #23: one id a strict prefix of the other (TMDb 43 vs 43982; doubled, 568012 vs 568012568012) reads as a damaged id
@@ -3339,7 +3355,7 @@ public class DatabaseService : IDisposable
         var roots = new List<ConflictRoot>();
         foreach (var p in pairs.Where(p => p.ItemType == "Movie"))
             roots.Add(new ConflictRoot("Movie", p.TitleA, p.YearA ?? p.YearB, p.Provider, p.IdsA, p.ServersA, p.IdsB, p.ServersB, 0, false)
-                { TruncatedOn = TruncatedOn(p.IdsA, p.ServersA, p.IdsB, p.ServersB) });
+                { TruncatedOn = TruncatedOn(p.IdsA, p.ServersA, p.IdsB, p.ServersB), Pairs = new[] { p } });
 
         (int, int) SeriesKey(ConflictPair p) => p.ItemType == "Series"
             ? (p.GroupA, p.GroupB)
@@ -3351,7 +3367,7 @@ public class DatabaseService : IDisposable
             var title = shown.ItemType == "Series" ? shown.TitleA : shown.Series ?? shown.TitleA;
             roots.Add(new ConflictRoot("Series", title, shown.ItemType == "Series" ? shown.YearA ?? shown.YearB : null, shown.Provider,
                 shown.IdsA, shown.ServersA, shown.IdsB, shown.ServersB, series.Count(p => p.ItemType == "Episode"), own != null)
-                { TruncatedOn = TruncatedOn(shown.IdsA, shown.ServersA, shown.IdsB, shown.ServersB) });
+                { TruncatedOn = TruncatedOn(shown.IdsA, shown.ServersA, shown.IdsB, shown.ServersB), Pairs = series.ToList() });
         }
         // Damaged ids first: each is one re-identify on the server that holds it.
         return roots.OrderBy(r => r.TruncatedOn == null ? 1 : 0).ThenBy(r => r.ItemType == "Movie" ? 1 : 0)
@@ -3881,7 +3897,7 @@ public class DatabaseService : IDisposable
 
     private static readonly string SqlGroupIdOfItem = Checked("SELECT group_id FROM cached_items WHERE id = $id AND server_id = $srv;");
 
-    private long? GroupIdOfItem(string serverId, string itemId)
+    internal long? GroupIdOfItem(string serverId, string itemId)
     {
         lock (_dbLock)
         {
@@ -4841,11 +4857,18 @@ public class DatabaseService : IDisposable
     }
 
     // #37: a group the sibling cascade holds back. Its versions disagree on (season, episode), whatever ids they
-    // carry, or it has more versions than the size cap allows for the servers it spans. One seek on ix_items_group.
-    private static readonly string SqlCascadeHeld = Checked(@"
-        SELECT COUNT(DISTINCT CASE WHEN type = 'Episode' THEN COALESCE(parent_index_number, -1) || ':' || COALESCE(index_number, -1) END) > 1
-            OR COUNT(*) > 4 * MAX(2, COUNT(DISTINCT server_id))
-        FROM cached_items WHERE group_id = $gid;");
+    // carry, or it has more versions than the size cap allows for the servers it spans (GroupSizeCap). Shared with
+    // GetHeldGroups. #38: unless every member carries the same release token (ReleaseCascade).
+    private const string HeldRule = "(COUNT(DISTINCT CASE WHEN c.type = 'Episode' THEN COALESCE(c.parent_index_number, -1) || ':' || COALESCE(c.index_number, -1) END) > 1 " +
+                                    "OR COUNT(*) > 4 * MAX(2, COUNT(DISTINCT c.server_id)))";
+    private const string ReleasedRule = "(COUNT(o.value) = COUNT(*) AND COUNT(DISTINCT o.value) = 1)";
+    private const string JoinRelease = "LEFT JOIN item_overrides o ON o.server_id = c.server_id AND o.item_id = c.id AND o.field = '" + ItemOverrides.Cascade + "'";
+
+    // One seek on ix_items_group.
+    private static readonly string SqlCascadeHeld = Checked($@"
+        SELECT {HeldRule} AND NOT {ReleasedRule}
+        FROM cached_items c {JoinRelease}
+        WHERE c.group_id = $gid;");
 
     // Held when the query fails: a group that cannot be checked does not cascade.
     public bool CascadeHeld(long groupId)
@@ -4862,6 +4885,278 @@ public class DatabaseService : IDisposable
             }
             catch (Exception ex) when (QueryFailed(ex, SqlCascadeHeld)) { return true; }
         }
+    }
+
+    // #38: item overrides. Id corrections take effect at the next rebuild; this counts the ones waiting for it.
+    public const string OverridesPendingKey = "item_overrides_pending";
+    private Dictionary<(string ServerId, string ItemId), List<ItemOverride>>? _overrides; // under _dbLock; null: reload
+
+    private static readonly string SqlGetItemOverrides = Checked("SELECT server_id, item_id, field, value, created_utc FROM item_overrides;");
+    private static readonly string SqlUpsertItemOverride = Checked(@"
+        INSERT INTO item_overrides (server_id, item_id, field, value, created_utc) VALUES ($srv, $id, $field, $value, $now)
+        ON CONFLICT(server_id, item_id, field) DO UPDATE SET value = excluded.value, created_utc = excluded.created_utc;");
+    private static readonly string SqlDeleteItemOverride = Checked("DELETE FROM item_overrides WHERE server_id = $srv AND item_id = $id AND field = $field;");
+    private static readonly string SqlGetStoredProviderIds = Checked(
+        "SELECT json_extract(json_data, '$.ProviderIds'), json_extract(json_data, '$.ServerProviderIds') FROM cached_items WHERE server_id = $srv AND id = $id;");
+    private static readonly string SqlSetStoredProviderIds = Checked(@"
+        UPDATE cached_items SET
+            json_data = CASE WHEN $server IS NULL THEN json_set(json_remove(json_data, '$.ServerProviderIds'), '$.ProviderIds', json($ids))
+                             ELSE json_set(json_data, '$.ProviderIds', json($ids), '$.ServerProviderIds', json($server)) END,
+            tmdb_id = $tmdb, imdb_id = $imdb
+        WHERE server_id = $srv AND id = $id;");
+
+    public List<ItemOverride> GetItemOverrides()
+    {
+        lock (_dbLock) return Overrides().Values.SelectMany(v => v).ToList();
+    }
+
+    private Dictionary<(string ServerId, string ItemId), List<ItemOverride>> Overrides()
+    {
+        if (_overrides != null) return _overrides;
+        var map = new Dictionary<(string ServerId, string ItemId), List<ItemOverride>>();
+        if (_connection == null) return map;
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqlGetItemOverrides;
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var o = new ItemOverride(r.GetString(0), r.GetString(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3), r.GetString(4));
+                if (!map.TryGetValue((o.ServerId, o.ItemId), out var list)) map[(o.ServerId, o.ItemId)] = list = new();
+                list.Add(o);
+            }
+        }
+        catch (Exception ex) when (QueryFailed(ex, SqlGetItemOverrides)) { return map; } // not kept: the next call retries
+        return _overrides = map;
+    }
+
+    // Before any key is built and before any row is stored (#38): the ids each item carries under its overrides. An
+    // item fresh from the server has no ServerProviderIds, so its ids are the server's; one read back from the cache
+    // keeps them, so applying again is a no-op.
+    public void ApplyItemOverrides(IEnumerable<EmbyItem> items, string? serverId = null)
+    {
+        lock (_dbLock)
+        {
+            var map = Overrides();
+            foreach (var item in items)
+            {
+                if (string.IsNullOrEmpty(item.Id)) continue;
+                map.TryGetValue((serverId ?? item.ServerId ?? string.Empty, item.Id), out var mine);
+                if (mine == null && item.ServerProviderIds == null) continue;
+                (item.ProviderIds, item.ServerProviderIds) = ItemOverrides.Apply(item.ProviderIds, item.ServerProviderIds, mine ?? new List<ItemOverride>());
+            }
+        }
+    }
+
+    public void SetItemOverrides(IEnumerable<ItemOverride> rows) => WriteItemOverrides(rows.ToList(), remove: false);
+    public void RemoveItemOverrides(IEnumerable<ItemOverride> rows) => WriteItemOverrides(rows.ToList(), remove: true);
+
+    // Adding or removing an id correction rewrites the stored row from its own ServerProviderIds, so nothing is
+    // fetched again, and counts toward OverridesPendingKey: the groups change at the next rebuild, however many
+    // corrections wait for it. A release (Cascade) is read live by CascadeHeld and needs neither.
+    private void WriteItemOverrides(List<ItemOverride> rows, bool remove)
+    {
+        lock (_dbLock)
+        {
+            if (QueueDuringRebuildWrite(() => WriteItemOverrides(rows, remove))) return;
+            if (_connection == null || rows.Count == 0) return;
+            using (var tx = _connection.BeginTransaction())
+            {
+                foreach (var o in rows)
+                {
+                    using var cmd = _connection.CreateCommand();
+                    cmd.Transaction = tx;
+                    cmd.CommandText = remove ? SqlDeleteItemOverride : SqlUpsertItemOverride;
+                    cmd.Parameters.AddWithValue("$srv", o.ServerId);
+                    cmd.Parameters.AddWithValue("$id", o.ItemId);
+                    cmd.Parameters.AddWithValue("$field", o.Field);
+                    if (!remove)
+                    {
+                        cmd.Parameters.AddWithValue("$value", (object?)o.Value ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("$now", o.CreatedUtc);
+                    }
+                    cmd.ExecuteNonQuery();
+                }
+                tx.Commit();
+            }
+            _overrides = null;
+            var corrected = rows.Where(o => ItemOverrides.IsProviderField(o.Field)).Select(o => (o.ServerId, o.ItemId)).Distinct().ToList();
+            if (corrected.Count == 0) return;
+            var map = Overrides();
+            using (var tx = _connection.BeginTransaction())
+            {
+                foreach (var (srv, id) in corrected) RewriteProviderIds(srv, id, map.GetValueOrDefault((srv, id)), tx);
+                tx.Commit();
+            }
+            SetMigrationState(OverridesPendingKey, (OverridesPending() + corrected.Count).ToString());
+        }
+    }
+
+    public int OverridesPending() => int.TryParse(GetMigrationState(OverridesPendingKey), out var n) ? n : 0;
+
+    private void RewriteProviderIds(string serverId, string itemId, List<ItemOverride>? overrides, SqliteTransaction tx)
+    {
+        Dictionary<string, string>? ids, server;
+        using (var read = _connection!.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = SqlGetStoredProviderIds;
+            read.Parameters.AddWithValue("$srv", serverId);
+            read.Parameters.AddWithValue("$id", itemId);
+            using var r = read.ExecuteReader();
+            if (!r.Read()) return; // not cached (yet): applied when it is stored
+            ids = r.IsDBNull(0) ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(r.GetString(0));
+            server = r.IsDBNull(1) ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(r.GetString(1));
+        }
+        (ids, server) = ItemOverrides.Apply(ids, server, overrides ?? new List<ItemOverride>());
+        var columns = new EmbyItem { ProviderIds = ids };
+        using var write = _connection.CreateCommand();
+        write.Transaction = tx;
+        write.CommandText = SqlSetStoredProviderIds;
+        write.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(ids));
+        write.Parameters.AddWithValue("$server", server == null ? DBNull.Value : JsonSerializer.Serialize(server));
+        write.Parameters.AddWithValue("$tmdb", columns.TmdbId);
+        write.Parameters.AddWithValue("$imdb", columns.ImdbId);
+        write.Parameters.AddWithValue("$srv", serverId);
+        write.Parameters.AddWithValue("$id", itemId);
+        write.ExecuteNonQuery();
+    }
+
+    // ClearAllCache: the rows only. A sync into the empty cache applies them as it stores.
+    private void InsertItemOverrides(List<ItemOverride> rows)
+    {
+        if (_connection == null || rows.Count == 0) return;
+        using var tx = _connection.BeginTransaction();
+        foreach (var o in rows)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = SqlUpsertItemOverride;
+            cmd.Parameters.AddWithValue("$srv", o.ServerId);
+            cmd.Parameters.AddWithValue("$id", o.ItemId);
+            cmd.Parameters.AddWithValue("$field", o.Field);
+            cmd.Parameters.AddWithValue("$value", (object?)o.Value ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$now", o.CreatedUtc);
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
+    // "These are the same, cascade anyway": every current member gets one shared token. A newcomer to the group has
+    // none, so the group is held again until it is released again.
+    public void ReleaseCascade(int groupId)
+    {
+        var token = $"{groupId}@{DateTime.UtcNow:O}";
+        SetItemOverrides(GetGroupItemIds(groupId).Select(m => new ItemOverride(m.ServerId, m.ItemId, ItemOverrides.Cascade, token, DateTime.UtcNow.ToString("O"))));
+    }
+
+    // Every override with what it applies to, for Settings. Name is null for an item no longer cached (orphaned).
+    public sealed record OverrideRow(ItemOverride Override, string? Name, string? Series, int? Season, int? Episode, string? ServerIds);
+
+    private static readonly string SqlOverrideRows = Checked(@"
+        SELECT o.server_id, o.item_id, o.field, o.value, o.created_utc, c.name, c.series_name, c.parent_index_number, c.index_number,
+               json_extract(c.json_data, '$.ServerProviderIds')
+        FROM item_overrides o LEFT JOIN cached_items c ON c.server_id = o.server_id AND c.id = o.item_id
+        ORDER BY o.field = 'Cascade', c.series_name, c.name, c.parent_index_number, c.index_number, o.server_id;");
+
+    public List<OverrideRow> GetOverrideRows()
+    {
+        var list = new List<OverrideRow>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return list;
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = SqlOverrideRows;
+                using var r = cmd.ExecuteReader();
+                while (r.Read())
+                    list.Add(new OverrideRow(
+                        new ItemOverride(r.GetString(0), r.GetString(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3), r.GetString(4)),
+                        r.IsDBNull(5) ? null : r.GetString(5), r.IsDBNull(6) ? null : r.GetString(6),
+                        r.IsDBNull(7) ? null : r.GetInt32(7), r.IsDBNull(8) ? null : r.GetInt32(8), r.IsDBNull(9) ? null : r.GetString(9)));
+            }
+            catch (Exception ex) when (QueryFailed(ex, SqlOverrideRows)) { }
+        }
+        return list;
+    }
+
+    // The members of every group CascadeHeld holds, for Settings. Own read-only connection: about 20 s on the live
+    // library. Null on failure.
+    public sealed record HeldVersion(int GroupId, string ServerId, string ItemId, string Type, string? Series, string Name, int? Season, int? Episode, string? Ids);
+
+    private static readonly string SqlHeldGroups = Checked($@"
+        WITH held AS (
+          SELECT c.group_id g FROM cached_items c {JoinRelease}
+          WHERE c.group_id IS NOT NULL AND c.type IN ('Movie', 'Episode')
+          GROUP BY c.group_id HAVING COUNT(*) > 1 AND {HeldRule} AND NOT {ReleasedRule})
+        SELECT c.group_id, c.server_id, c.id, c.type, c.series_name, c.name, c.parent_index_number, c.index_number, json_extract(c.json_data, '$.ProviderIds')
+        FROM held JOIN cached_items c ON c.group_id = held.g
+        ORDER BY c.series_name, c.group_id, c.server_id, c.parent_index_number, c.index_number;");
+
+    public List<HeldVersion>? GetHeldGroups()
+    {
+        try
+        {
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Mode = SqliteOpenMode.ReadOnly }.ToString());
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = SqlHeldGroups;
+            using var r = cmd.ExecuteReader();
+            var list = new List<HeldVersion>();
+            while (r.Read())
+                list.Add(new HeldVersion(r.GetInt32(0), r.GetString(1), r.GetString(2), r.GetString(3), r.IsDBNull(4) ? null : r.GetString(4),
+                    r.IsDBNull(5) ? "" : r.GetString(5), r.IsDBNull(6) ? null : r.GetInt32(6), r.IsDBNull(7) ? null : r.GetInt32(7), r.IsDBNull(8) ? null : r.GetString(8)));
+            return list;
+        }
+        catch (Exception ex) when (QueryFailed(ex, SqlHeldGroups))
+        {
+            return null;
+        }
+    }
+
+    // The provider field a conflict slot reads, and the rows that carry it: "tmdb:movie" -> (Tmdb, Movie); "tvdb:series"
+    // and "ep:tvdb" -> (Tvdb, Series), as a season/episode key holds its series' id; "tvdb:ep" -> (Tvdb, Episode).
+    public static (string Field, string Type) SlotTarget(string slot)
+    {
+        var parts = slot.Split(':');
+        var (provider, kind) = parts[0] == "ep" ? (parts[1], "series") : (parts[0], parts[1]);
+        return (char.ToUpperInvariant(provider[0]) + provider[1..], kind switch { "movie" => "Movie", "series" => "Series", _ => "Episode" });
+    }
+
+    private static readonly string SqlGroupProviderIds = Checked("SELECT server_id, id, json_extract(json_data, '$.ProviderIds') FROM cached_items WHERE group_id = $gid AND type = $type;");
+
+    // The items of a conflict root, on one of servers, that carry one of ids in the root's provider field; with ids
+    // null, each pair's own ids (an episode-level root's pairs each disagree on a different episode).
+    public List<(string ServerId, string ItemId)> GetConflictTargets(ConflictRoot root, IReadOnlySet<string> servers, IReadOnlySet<string>? ids)
+    {
+        var (field, type) = SlotTarget(root.Provider);
+        static HashSet<string> Split(string s) => s.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var targets = new HashSet<(string, string)>();
+        lock (_dbLock)
+        {
+            if (_connection == null) return new();
+            foreach (var p in root.Pairs)
+            {
+                var wanted = ids ?? Split(p.IdsA).Concat(Split(p.IdsB)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var gid in new[] { p.GroupA, p.GroupB, p.SeriesA ?? 0, p.SeriesB ?? 0 }.Where(g => g > 0).Distinct())
+                {
+                    using var cmd = _connection.CreateCommand();
+                    cmd.CommandText = SqlGroupProviderIds;
+                    cmd.Parameters.AddWithValue("$gid", gid);
+                    cmd.Parameters.AddWithValue("$type", type);
+                    using var r = cmd.ExecuteReader();
+                    while (r.Read())
+                    {
+                        if (!servers.Contains(r.GetString(0)) || r.IsDBNull(2)) continue;
+                        var value = ItemOverrides.Read(JsonSerializer.Deserialize<Dictionary<string, string>>(r.GetString(2)), field);
+                        if (value != null && wanted.Contains(value.Trim())) targets.Add((r.GetString(0), r.GetString(1)));
+                    }
+                }
+            }
+        }
+        return targets.ToList();
     }
 
     private static readonly string SqlGetGroupIdForDedupKey = Checked("SELECT group_id FROM dedup_keys WHERE key = $key;");
