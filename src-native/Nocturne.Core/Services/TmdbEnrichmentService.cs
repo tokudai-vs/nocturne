@@ -96,7 +96,7 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         }
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        int processed = 0, enriched = 0, notFound = 0, transportFailures = 0, total = 0;
+        int processed = 0, enriched = 0, withoutArt = 0, transportFailures = 0, total = 0;
         try
         {
             // dedup_groups.tmdb_key in TMDB's form (ProviderKey.TmdbKey): a title, or an episode by show and position.
@@ -122,12 +122,12 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
             {
                 try
                 {
-                    if (await fetch(token) is { } r) { Interlocked.Add(ref enriched, r.Found); Interlocked.Add(ref notFound, r.Missing); }
+                    if (await fetch(token) is { } r) { Interlocked.Add(ref enriched, r.Found); Interlocked.Add(ref withoutArt, r.Missing); }
                     Interlocked.Exchange(ref transportFailures, 0);
                 }
                 catch (HttpRequestException) { Fail(); }
                 catch (TaskCanceledException) when (!token.IsCancellationRequested) { Fail(); } // HttpClient timeout
-                progress.Report(new EnrichProgress(total, Interlocked.Increment(ref processed), enriched, notFound, label));
+                progress.Report(new EnrichProgress(total, Interlocked.Increment(ref processed), enriched, withoutArt, label));
             }
             void Fail()
             {
@@ -136,7 +136,7 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
 
             var options = new ParallelOptions { MaxDegreeOfParallelism = Fetchers, CancellationToken = stop.Token };
             await Parallel.ForEachAsync(titles, options, (key, token) =>
-                new ValueTask(Unit(key.TmdbKey!, async t => await FetchTitleAsync(key, t) is { } m ? (m.NotFound ? (0, 1) : (1, 0)) : null, token)));
+                new ValueTask(Unit(key.TmdbKey!, async t => await FetchTitleAsync(key, t) is { } m ? (m.NotFound || m.PosterPath == null ? (0, 1) : (1, 0)) : null, token)));
             await Parallel.ForEachAsync(seasons, options, (season, token) =>
                 new ValueTask(Unit(season.Key, t => FetchSeasonAsync(season.Key, season.Value, t), token)));
         }
@@ -146,15 +146,15 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
             NocturneLogger.Info("TmdbEnrichmentService", unreachable
                 ? $"TMDB unreachable; enrichment stopped after {processed}/{total}. The next pass resumes."
                 : $"TMDB enrichment paused after {processed}/{total}. The next pass resumes.");
-            progress.Report(new EnrichProgress(total, processed, enriched, notFound, "", unreachable ? "unreachable" : "paused"));
+            progress.Report(new EnrichProgress(total, processed, enriched, withoutArt, "", unreachable ? "unreachable" : "paused"));
             return;
         }
         finally
         {
             _pass.Release();
         }
-        NocturneLogger.Info("TmdbEnrichmentService", $"Enrichment finished. Processed {processed}/{total} (Enriched: {enriched}, Not Found: {notFound}).");
-        progress.Report(new EnrichProgress(total, processed, enriched, notFound, "", "finished"));
+        NocturneLogger.Info("TmdbEnrichmentService", $"Enrichment finished. Processed {processed}/{total} (Enriched: {enriched}, without TMDB art: {withoutArt}).");
+        progress.Report(new EnrichProgress(total, processed, enriched, withoutArt, "", "finished"));
     }
 
     // One title: 404 records not_found (§10.6: never asked again on every pass); any other failure leaves it for the next.
@@ -186,7 +186,7 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
             ? new TmdbMetadata { ProviderKey = e.TmdbKey!, StillPath = ep.StillPath, Overview = ep.Overview, VoteAverage = ep.VoteAverage, FetchedUtc = now }
             : new TmdbMetadata { ProviderKey = e.TmdbKey!, FetchedUtc = now, NotFound = true }).ToList();
         _db.UpsertTmdbMetadataBatch(rows);
-        var found = rows.Count(r => !r.NotFound);
+        var found = rows.Count(r => !r.NotFound && r.StillPath != null); // with art
         return (found, rows.Count - found);
     }
 

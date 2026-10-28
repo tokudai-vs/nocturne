@@ -4586,16 +4586,27 @@ public class DatabaseService : IDisposable
     }
 
     // §10.2 (D11): no version on any server has a poster (A0's election left image_tag empty), the group has a TMDB id
-    // and is not provisional (a fuzzy group's id is not trusted). A title TMDB answered with an image is done; one it
-    // did not know, or knew without an image, is asked again once a month, not on every sync.
+    // and is not provisional (a fuzzy group's id is not trusted). A title TMDB answered with an image is done. One it
+    // did not know is asked again monthly; one it knew without an image, every six months (#36: a missing still is
+    // far less likely to change than an id TMDB lacks; 16,909 season requests against 4,838 on the live library).
+    // A pass fetches episodes a season at a time whatever made them eligible (TmdbEnrichmentService, M3).
     private const string NeedsTmdbArt = @"
                     g.image_tag IS NULL AND g.tmdb_key IS NOT NULL AND g.is_provisional = 0
                       AND NOT EXISTS (
                           SELECT 1 FROM tmdb_metadata t
                           WHERE t.provider_key = g.tmdb_key
-                            AND (t.fetched_utc > $recheckAfter OR (t.not_found = 0 AND COALESCE(t.poster_path, t.still_path) IS NOT NULL)))";
-    public static readonly TimeSpan TmdbRecheckAfter = TimeSpan.FromDays(30);
-    private static long TmdbRecheckCutoff() => DateTimeOffset.UtcNow.Subtract(TmdbRecheckAfter).ToUnixTimeSeconds();
+                            AND ((t.not_found = 0 AND COALESCE(t.poster_path, t.still_path) IS NOT NULL)
+                                 OR (t.not_found = 1 AND t.fetched_utc > $notFoundRecheckAfter)
+                                 OR (t.not_found = 0 AND t.fetched_utc > $noImageRecheckAfter)))";
+    public static readonly TimeSpan TmdbNotFoundRecheckAfter = TimeSpan.FromDays(30);
+    public static readonly TimeSpan TmdbNoImageRecheckAfter = TimeSpan.FromDays(180);
+
+    private static void AddTmdbRecheckCutoffs(SqliteCommand cmd)
+    {
+        var now = DateTimeOffset.UtcNow;
+        cmd.Parameters.AddWithValue("$notFoundRecheckAfter", now.Subtract(TmdbNotFoundRecheckAfter).ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$noImageRecheckAfter", now.Subtract(TmdbNoImageRecheckAfter).ToUnixTimeSeconds());
+    }
 
     private static readonly string SqlGetGroupsNeedingTmdbArt = Checked($@"
                     SELECT g.group_id, g.item_type, g.tmdb_key, g.name, g.year, g.season_number, g.episode_number
@@ -4614,7 +4625,7 @@ public class DatabaseService : IDisposable
             {
                 using var cmd = _connection.CreateCommand();
                 cmd.CommandText = SqlGetGroupsNeedingTmdbArt;
-                cmd.Parameters.AddWithValue("$recheckAfter", TmdbRecheckCutoff());
+                AddTmdbRecheckCutoffs(cmd);
                 cmd.Parameters.AddWithValue("$limit", limit);
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
@@ -4638,8 +4649,9 @@ public class DatabaseService : IDisposable
         return list;
     }
 
-    private static readonly string SqlGetTmdbEnrichmentStats = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 0;");
-    private static readonly string SqlGetTmdbEnrichmentStats2 = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 1;");
+    // Enriched: TMDB supplied art. Without art: TMDB does not know the id, or knows it without an image (#36).
+    private static readonly string SqlGetTmdbEnrichmentStats = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 0 AND COALESCE(poster_path, still_path) IS NOT NULL;");
+    private static readonly string SqlGetTmdbEnrichmentStats2 = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE NOT (not_found = 0 AND COALESCE(poster_path, still_path) IS NOT NULL);");
     // Items, and the requests a pass makes for them: one per title, one per season of episodes. An episode's tmdb_key is
     // ProviderKey.TmdbKey 'tmdb:tv:{show}:sNNeNN', so its season is the key up to the 'e' (the first in the key).
     private static readonly string SqlGetTmdbEnrichmentStats3 = Checked($@"
@@ -4661,7 +4673,7 @@ public class DatabaseService : IDisposable
                 }
                 using var pending = _connection.CreateCommand();
                 pending.CommandText = SqlGetTmdbEnrichmentStats3;
-                pending.Parameters.AddWithValue("$recheckAfter", TmdbRecheckCutoff());
+                AddTmdbRecheckCutoffs(pending);
                 using var r = pending.ExecuteReader();
                 r.Read();
                 var (items, requests) = (r.GetInt32(0), r.GetInt32(1));

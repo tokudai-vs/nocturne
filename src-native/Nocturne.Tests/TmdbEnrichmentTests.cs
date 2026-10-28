@@ -119,7 +119,7 @@ public class TmdbEnrichmentTests : IDisposable
         await Run(service);
         await Run(service);
         Assert.Equal(new[] { "/3/movie/999" }, _tmdb.Paths);
-        Assert.Equal(1, service.GetStats().NotFound);
+        Assert.Equal(1, service.GetStats().WithoutArt);
         Assert.Equal(0, service.GetStats().PendingItems);
 
         _db.ExecuteSql($"UPDATE tmdb_metadata SET fetched_utc = {DateTimeOffset.UtcNow.AddDays(-31).ToUnixTimeSeconds()};");
@@ -206,7 +206,37 @@ public class TmdbEnrichmentTests : IDisposable
         _db.AttachGroupArtwork(cards);
         Assert.Equal("https://image.tmdb.org/t/p/w300/s7.jpg", Artwork.Poster(cards[6], Servers, 320));
         Assert.Equal(20, cards.Count(c => Artwork.Poster(c, Servers, 320) != null));
-        Assert.Equal((0, 1), (service.GetStats().PendingItems, service.GetStats().NotFound));
+        Assert.Equal((0, 1), (service.GetStats().PendingItems, service.GetStats().WithoutArt));
+    }
+
+    // #36: episodes TMDB knows without a still are asked again every six months, not monthly, and a re-check is one
+    // request per season like the first pass (live: 194,927 such episodes in 16,909 seasons).
+    [Fact]
+    public async Task ASeasonWithoutStills_IsAskedAgainEverySixMonths_InOneRequest()
+    {
+        var episodes = Enumerable.Range(1, 20).Select(n => new EmbyItem
+        {
+            Id = $"e{n}", ServerId = "a", Name = $"Episode {n}", Type = "Episode", SeriesName = "Old Show", SeriesId = "old",
+            ParentIndexNumber = 1, IndexNumber = n, SeriesProviderIds = new() { ["Tmdb"] = "777" },
+        }).ToArray();
+        Index(episodes);
+        var listed = string.Join(",", Enumerable.Range(1, 20).Select(n => $"{{\"episode_number\":{n}}}")); // known, no still
+        _tmdb.Route = path => path == "/3/tv/777/season/1" ? Json($"{{\"episodes\":[{listed}]}}") : null;
+        var service = Service();
+
+        await Run(service);
+        Assert.Single(_tmdb.Paths);
+
+        void Age(int days) => _db.ExecuteSql($"UPDATE tmdb_metadata SET fetched_utc = {DateTimeOffset.UtcNow.AddDays(-days).ToUnixTimeSeconds()};");
+        Age(31);
+        await Run(service);
+        Assert.Single(_tmdb.Paths);                                       // not monthly
+        Assert.Equal(new TmdbStats(0, 20, 0, 0), service.GetStats());    // known to TMDB without art: not "enriched"
+
+        Age(181);
+        Assert.Equal(new TmdbStats(0, 20, 20, 1), service.GetStats());   // 20 episodes due, one request
+        await Run(service);
+        Assert.Equal(new[] { "/3/tv/777/season/1", "/3/tv/777/season/1" }, _tmdb.Paths);
     }
 
     // #34: a v4 Read Access Token (a JWT) goes in Authorization: Bearer and never in the URL; a v3 key goes in api_key.

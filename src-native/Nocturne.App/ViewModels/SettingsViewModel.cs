@@ -1762,7 +1762,7 @@ public class SettingsViewModel : BaseViewModel
     private DateTime _tmdbStatsAt = DateTime.MinValue;
     private int _tmdbStatsRefreshing;
     public string TmdbEnrichedCount => _tmdbStats.Enriched.ToString("N0");
-    public string TmdbNotFoundCount => _tmdbStats.NotFound.ToString("N0");
+    public string TmdbNotFoundCount => _tmdbStats.WithoutArt.ToString("N0");
     public string TmdbPendingCount => $"{_tmdbStats.PendingItems:N0} items";
     public string TmdbPendingRequests => _tmdbStats.PendingRequests == 0 ? string.Empty
         : $"{_tmdbStats.PendingRequests:N0} requests · about {Math.Max(1, (int)Math.Ceiling(_tmdbStats.PendingRequests / 20.0 / 60)):N0} min at 20/s";
@@ -1789,9 +1789,9 @@ public class SettingsViewModel : BaseViewModel
         IsTmdbEnriching = p.Outcome == null;
         TmdbEnrichStatus = p.Outcome switch
         {
-            null => $"Enriching: {p.Processed:N0} of {p.Total:N0} requests · {p.Enriched:N0} enriched · {p.NotFound:N0} not on TMDB",
+            null => $"Enriching: {p.Processed:N0} of {p.Total:N0} requests · {p.Enriched:N0} enriched · {p.WithoutArt:N0} without TMDB art",
             "finished" when p.Total == 0 => p.CurrentTitle,
-            "finished" => $"Finished: {p.Total:N0} requests · {p.Enriched:N0} enriched · {p.NotFound:N0} not on TMDB",
+            "finished" => $"Finished: {p.Total:N0} requests · {p.Enriched:N0} enriched · {p.WithoutArt:N0} without TMDB art",
             "unreachable" => $"TMDB unreachable after {p.Processed:N0} of {p.Total:N0} requests; the next pass resumes.",
             _ => _enrichmentGate.WaitingFor is { } what
                 ? $"Paused for {what} after {p.Processed:N0} of {p.Total:N0} requests; it resumes when that ends."

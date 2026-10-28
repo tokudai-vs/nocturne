@@ -1181,7 +1181,7 @@
                                     <TextBlock Text="{Binding TmdbPendingRequests}" FontSize="10" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
-                                    <TextBlock Text="NOT FOUND" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="NO ART ON TMDB" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                     <TextBlock Text="{Binding TmdbNotFoundCount}" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
                                 </StackPanel>
                             </Grid>
