@@ -69,7 +69,9 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         return ProviderKey.TryParseTmdbKey(providerKey, out var key) && key.Kind is KeyKind.Movie or KeyKind.Series
             ? await FetchTitleAsync(key, ct) : null;
     }
-    private const int Fetchers = 4;                // enough in flight to use the 20 req/s budget at TMDB's latency
+    // Measured live (2026-10-28): 4 fetchers ran at 10.5 req/s (about 380 ms a request, write included) with no 429s, so
+    // concurrency, not the budget, was the limit; 8 let the 20 req/s token bucket be the limit, as §10.6 intends.
+    private const int Fetchers = 8;
     private const int TransportFailuresToStop = 10; // TMDB unreachable: stop the pass; the next one resumes
     private readonly SemaphoreSlim _pass = new(1, 1);
 
