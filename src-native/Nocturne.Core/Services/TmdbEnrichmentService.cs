@@ -30,9 +30,7 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
     private double _bucketCapacity = 20.0;
     private DateTime _lastTokenRefill = DateTime.UtcNow;
 
-    public int EnrichedCount => _db.GetTmdbEnrichmentStats().EnrichedCount;
-    public int PendingCount => _db.GetTmdbEnrichmentStats().PendingCount;
-    public int NotFoundCount => _db.GetTmdbEnrichmentStats().NotFoundCount;
+    public TmdbStats GetStats() => _db.GetTmdbEnrichmentStats();
 
     public TmdbEnrichmentService(DatabaseService db, HttpClient? httpClient = null)
     {
@@ -85,10 +83,15 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         if (string.IsNullOrWhiteSpace(GetActiveApiKey()))
         {
             NocturneLogger.Info("TmdbEnrichmentService", "TMDB enrichment skipped: No TMDB API key configured.");
+            progress.Report(new EnrichProgress(0, 0, 0, 0, "No TMDB key: enrichment is off until one is set.", "finished"));
             return;
         }
         try { await _pass.WaitAsync(ct); }
-        catch (OperationCanceledException) { return; }
+        catch (OperationCanceledException)
+        {
+            progress.Report(new EnrichProgress(0, 0, 0, 0, "", "paused"));
+            return;
+        }
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         int processed = 0, enriched = 0, notFound = 0, transportFailures = 0, total = 0;
@@ -107,10 +110,11 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
             total = titles.Count + seasons.Count;
             if (total == 0)
             {
-                progress.Report(new EnrichProgress(0, 0, 0, 0, "All artwork up to date."));
+                progress.Report(new EnrichProgress(0, 0, 0, 0, "All artwork up to date.", "finished"));
                 return;
             }
-            NocturneLogger.Info("TmdbEnrichmentService", $"TMDB enrichment: {titles.Count} title(s), {seasons.Count} season(s) to fetch.");
+            NocturneLogger.Info("TmdbEnrichmentService", $"TMDB enrichment: {titles.Count} title(s), {seasons.Count} season(s) to fetch; " +
+                (IsReadAccessToken(GetActiveApiKey()) ? "auth: v4 Read Access Token (Authorization: Bearer)." : "auth: v3 API key (api_key query parameter)."));
 
             async Task Unit(string label, Func<CancellationToken, Task<(int Found, int Missing)?>> fetch, CancellationToken token)
             {
@@ -136,9 +140,11 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         }
         catch (OperationCanceledException)
         {
-            NocturneLogger.Info("TmdbEnrichmentService", transportFailures >= TransportFailuresToStop
+            var unreachable = transportFailures >= TransportFailuresToStop;
+            NocturneLogger.Info("TmdbEnrichmentService", unreachable
                 ? $"TMDB unreachable; enrichment stopped after {processed}/{total}. The next pass resumes."
                 : $"TMDB enrichment paused after {processed}/{total}. The next pass resumes.");
+            progress.Report(new EnrichProgress(total, processed, enriched, notFound, "", unreachable ? "unreachable" : "paused"));
             return;
         }
         finally
@@ -146,6 +152,7 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
             _pass.Release();
         }
         NocturneLogger.Info("TmdbEnrichmentService", $"Enrichment finished. Processed {processed}/{total} (Enriched: {enriched}, Not Found: {notFound}).");
+        progress.Report(new EnrichProgress(total, processed, enriched, notFound, "", "finished"));
     }
 
     // One title: 404 records not_found (§10.6: never asked again on every pass); any other failure leaves it for the next.
@@ -205,8 +212,7 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         var uri = $"/3{endpoint}";
 
         var req = new HttpRequestMessage(HttpMethod.Get, uri);
-        // If API key is a v4 Read Access Token (starts with eyJ... / JWT), use Bearer
-        if (apiKey.Length > 40 && apiKey.Contains('.'))
+        if (IsReadAccessToken(apiKey))
         {
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         }
@@ -218,6 +224,10 @@ public class TmdbEnrichmentService : ITmdbEnrichmentService
         }
         return req;
     }
+
+    // A v4 Read Access Token is a JWT (header.payload.signature) and goes in Authorization: Bearer; a v3 API key is 32
+    // hex characters and goes in the api_key query parameter.
+    internal static bool IsReadAccessToken(string key) => key.Split('.').Length == 3;
 
     private async Task WaitForRateLimitAsync(CancellationToken ct)
     {

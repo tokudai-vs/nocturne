@@ -4640,37 +4640,34 @@ public class DatabaseService : IDisposable
 
     private static readonly string SqlGetTmdbEnrichmentStats = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 0;");
     private static readonly string SqlGetTmdbEnrichmentStats2 = Checked("SELECT COUNT(*) FROM tmdb_metadata WHERE not_found = 1;");
-    private static readonly string SqlGetTmdbEnrichmentStats3 = Checked($"SELECT COUNT(*) FROM dedup_groups g WHERE {NeedsTmdbArt};");
+    // Items, and the requests a pass makes for them: one per title, one per season of episodes. An episode's tmdb_key is
+    // ProviderKey.TmdbKey 'tmdb:tv:{show}:sNNeNN', so its season is the key up to the 'e' (the first in the key).
+    private static readonly string SqlGetTmdbEnrichmentStats3 = Checked($@"
+                    SELECT COUNT(*), COUNT(DISTINCT CASE WHEN g.item_type = 'Episode' THEN substr(g.tmdb_key, 1, instr(g.tmdb_key, 'e') - 1) ELSE g.tmdb_key END)
+                    FROM dedup_groups g WHERE {NeedsTmdbArt};");
 
-    public (int EnrichedCount, int PendingCount, int NotFoundCount) GetTmdbEnrichmentStats()
+    public TmdbStats GetTmdbEnrichmentStats()
     {
         lock (_dbLock)
         {
-            if (_connection == null) return (0, 0, 0);
+            if (_connection == null) return new TmdbStats(0, 0, 0, 0);
             try
             {
-                int enriched = 0;
-                int notFound = 0;
-                using (var cmd = _connection.CreateCommand())
+                int Scalar(string sql)
                 {
-                    cmd.CommandText = SqlGetTmdbEnrichmentStats;
-                    enriched = Convert.ToInt32(cmd.ExecuteScalar());
+                    using var cmd = _connection.CreateCommand();
+                    cmd.CommandText = sql;
+                    return Convert.ToInt32(cmd.ExecuteScalar());
                 }
-                using (var cmd = _connection.CreateCommand())
-                {
-                    cmd.CommandText = SqlGetTmdbEnrichmentStats2;
-                    notFound = Convert.ToInt32(cmd.ExecuteScalar());
-                }
-                int pending = 0;
-                using (var cmd = _connection.CreateCommand())
-                {
-                    cmd.CommandText = SqlGetTmdbEnrichmentStats3;
-                    cmd.Parameters.AddWithValue("$recheckAfter", TmdbRecheckCutoff());
-                    pending = Convert.ToInt32(cmd.ExecuteScalar());
-                }
-                return (enriched, pending, notFound);
+                using var pending = _connection.CreateCommand();
+                pending.CommandText = SqlGetTmdbEnrichmentStats3;
+                pending.Parameters.AddWithValue("$recheckAfter", TmdbRecheckCutoff());
+                using var r = pending.ExecuteReader();
+                r.Read();
+                var (items, requests) = (r.GetInt32(0), r.GetInt32(1));
+                return new TmdbStats(Scalar(SqlGetTmdbEnrichmentStats), Scalar(SqlGetTmdbEnrichmentStats2), items, requests);
             }
-            catch (Exception ex) when (QueryFailed(ex, SqlGetTmdbEnrichmentStats)) { return (0, 0, 0); }
+            catch (Exception ex) when (QueryFailed(ex, SqlGetTmdbEnrichmentStats3)) { return new TmdbStats(0, 0, 0, 0); }
         }
     }
 

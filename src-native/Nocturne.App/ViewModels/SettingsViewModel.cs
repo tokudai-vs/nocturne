@@ -378,6 +378,7 @@ public class SettingsViewModel : BaseViewModel
         _traktSync = traktSync;
         _tmdbEnrichment = tmdbEnrichment;
         _enrichmentGate = enrichmentGate;
+        _enrichmentGate.ReportTo(new Progress<EnrichProgress>(OnEnrichProgress));
         _traktDrain = traktDrain;
 
         _traktAuth.StateChanged += (s, e) =>
@@ -656,6 +657,7 @@ public class SettingsViewModel : BaseViewModel
             RefreshDriftText();
             OnPropertyChanged(nameof(TraktQueueDepth));
             OnPropertyChanged(nameof(TraktLastPullText));
+            _ = RefreshTmdbStatsAsync();
         }
         catch { }
     }
@@ -1754,10 +1756,49 @@ public class SettingsViewModel : BaseViewModel
         }
     }
 
-    // TMDB Properties
-    public int TmdbEnrichedCount => _tmdbEnrichment.EnrichedCount;
-    public int TmdbPendingCount => _tmdbEnrichment.PendingCount;
-    public int TmdbNotFoundCount => _tmdbEnrichment.NotFoundCount;
+    // TMDB counters, read once per refresh and off the UI thread: the pending count takes seconds on a large library,
+    // and it used to run three times on the UI thread for every progress report, so the page never updated (#34).
+    private TmdbStats _tmdbStats = new(0, 0, 0, 0);
+    private DateTime _tmdbStatsAt = DateTime.MinValue;
+    private int _tmdbStatsRefreshing;
+    public string TmdbEnrichedCount => _tmdbStats.Enriched.ToString("N0");
+    public string TmdbNotFoundCount => _tmdbStats.NotFound.ToString("N0");
+    public string TmdbPendingCount => $"{_tmdbStats.PendingItems:N0} items";
+    public string TmdbPendingRequests => _tmdbStats.PendingRequests == 0 ? string.Empty
+        : $"{_tmdbStats.PendingRequests:N0} requests · about {Math.Max(1, (int)Math.Ceiling(_tmdbStats.PendingRequests / 20.0 / 60)):N0} min at 20/s";
+
+    public async Task RefreshTmdbStatsAsync()
+    {
+        if (Interlocked.Exchange(ref _tmdbStatsRefreshing, 1) == 1) return;
+        try
+        {
+            _tmdbStatsAt = DateTime.UtcNow;
+            _tmdbStats = await Task.Run(_tmdbEnrichment.GetStats);
+            OnPropertyChanged(nameof(TmdbEnrichedCount));
+            OnPropertyChanged(nameof(TmdbNotFoundCount));
+            OnPropertyChanged(nameof(TmdbPendingCount));
+            OnPropertyChanged(nameof(TmdbPendingRequests));
+        }
+        finally { Interlocked.Exchange(ref _tmdbStatsRefreshing, 0); }
+    }
+
+    // Every pass reports here, the automatic ones after a sync too (EnrichmentGate.ReportTo). The status line comes from
+    // the pass itself; the counters refresh at most every 30 s while it runs, and when it ends.
+    private void OnEnrichProgress(EnrichProgress p)
+    {
+        IsTmdbEnriching = p.Outcome == null;
+        TmdbEnrichStatus = p.Outcome switch
+        {
+            null => $"Enriching: {p.Processed:N0} of {p.Total:N0} requests · {p.Enriched:N0} enriched · {p.NotFound:N0} not on TMDB",
+            "finished" when p.Total == 0 => p.CurrentTitle,
+            "finished" => $"Finished: {p.Total:N0} requests · {p.Enriched:N0} enriched · {p.NotFound:N0} not on TMDB",
+            "unreachable" => $"TMDB unreachable after {p.Processed:N0} of {p.Total:N0} requests; the next pass resumes.",
+            _ => _enrichmentGate.WaitingFor is { } what
+                ? $"Paused for {what} after {p.Processed:N0} of {p.Total:N0} requests; it resumes when that ends."
+                : $"Paused after {p.Processed:N0} of {p.Total:N0} requests.",
+        };
+        if (p.Outcome != null || DateTime.UtcNow - _tmdbStatsAt > TimeSpan.FromSeconds(30)) _ = RefreshTmdbStatsAsync();
+    }
 
     // The user's own key only: the box used to show the active key, which would put a bundled key on screen.
     public string TmdbApiKey
@@ -1795,31 +1836,20 @@ public class SettingsViewModel : BaseViewModel
     {
         if (IsTmdbEnriching) return;
         IsTmdbEnriching = true;
-        TmdbEnrichStatus = "Starting TMDB enrichment...";
+        TmdbEnrichStatus = "Starting: finding what is missing...";
         try
         {
-            var p = new Progress<EnrichProgress>(prog =>
+            await _enrichmentGate.RunAsync(); // the same gate as the automatic pass: held back by playback or a sync (#30)
+            if (_enrichmentGate.WaitingFor is { } what)
             {
-                TmdbEnrichStatus = $"Enriched {prog.Enriched}/{prog.Total} items ({prog.CurrentTitle})...";
-                OnPropertyChanged(nameof(TmdbEnrichedCount));
-                OnPropertyChanged(nameof(TmdbPendingCount));
-                OnPropertyChanged(nameof(TmdbNotFoundCount));
-            });
-            await _enrichmentGate.RunAsync(p); // the same gate as the automatic pass: paused by playback or a sync (#30)
-            TmdbEnrichStatus = _enrichmentGate.IsDeferred
-                ? "TMDB enrichment paused for playback or a sync; it resumes when that ends."
-                : "TMDB enrichment finished.";
+                TmdbEnrichStatus = $"Waiting for {what} to finish; enrichment starts then.";
+                IsTmdbEnriching = false;
+            }
         }
         catch (Exception ex)
         {
             TmdbEnrichStatus = $"TMDB enrichment error: {ex.Message}";
-        }
-        finally
-        {
             IsTmdbEnriching = false;
-            OnPropertyChanged(nameof(TmdbEnrichedCount));
-            OnPropertyChanged(nameof(TmdbPendingCount));
-            OnPropertyChanged(nameof(TmdbNotFoundCount));
         }
     }
 

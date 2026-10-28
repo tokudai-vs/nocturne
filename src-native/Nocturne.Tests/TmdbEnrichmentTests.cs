@@ -66,6 +66,14 @@ public class TmdbEnrichmentTests : IDisposable
 
     private Task Run(TmdbEnrichmentService service) => service.RunAsync(new Progress<EnrichProgress>(), CancellationToken.None);
 
+    // Synchronous, so a test sees every report the moment the pass makes it (Progress<T> posts them later).
+    private sealed class Reports : IProgress<EnrichProgress>
+    {
+        public readonly List<EnrichProgress> All = new();
+        public void Report(EnrichProgress value) { lock (All) All.Add(value); }
+        public EnrichProgress Last { get { lock (All) return All[^1]; } }
+    }
+
     private static EmbyItem Movie(string id, string srv, string name, string? tmdb, bool poster = false) => new()
     {
         Id = id, ServerId = srv, Name = name, Type = "Movie", ProductionYear = 2016,
@@ -111,11 +119,11 @@ public class TmdbEnrichmentTests : IDisposable
         await Run(service);
         await Run(service);
         Assert.Equal(new[] { "/3/movie/999" }, _tmdb.Paths);
-        Assert.Equal(1, service.NotFoundCount);
-        Assert.Equal(0, service.PendingCount);
+        Assert.Equal(1, service.GetStats().NotFound);
+        Assert.Equal(0, service.GetStats().PendingItems);
 
         _db.ExecuteSql($"UPDATE tmdb_metadata SET fetched_utc = {DateTimeOffset.UtcNow.AddDays(-31).ToUnixTimeSeconds()};");
-        Assert.Equal(1, service.PendingCount);
+        Assert.Equal(1, service.GetStats().PendingItems);
         await Run(service);
         Assert.Equal(2, _tmdb.Paths.Count);
     }
@@ -131,12 +139,15 @@ public class TmdbEnrichmentTests : IDisposable
         Index(FortyMovies());
         (_tmdb.Route, _tmdb.DelayMs) = (Poster, 30);
         var service = Service();
+        Assert.Equal(new TmdbStats(0, 0, 40, 40), service.GetStats()); // 40 titles, 40 requests
 
         var clock = Stopwatch.StartNew();
-        await Run(service);
+        var reports = new Reports();
+        await service.RunAsync(reports, CancellationToken.None);
+        Assert.Equal(("finished", 40, 40), (reports.Last.Outcome, reports.Last.Total, reports.Last.Processed));
 
         Assert.Equal(40, _tmdb.Paths.Distinct().Count());
-        Assert.Equal(0, service.PendingCount);
+        Assert.Equal(0, service.GetStats().PendingItems);
         Assert.True(clock.Elapsed >= TimeSpan.FromSeconds(0.9), $"40 requests took {clock.Elapsed.TotalSeconds:F2}s");
         Assert.True(_tmdb.MaxInFlight > 1, "fetchers ran one at a time");
     }
@@ -154,10 +165,12 @@ public class TmdbEnrichmentTests : IDisposable
         };
         var service = Service();
 
-        await Run(service);
+        var reports = new Reports();
+        await service.RunAsync(reports, CancellationToken.None);
+        Assert.Equal("unreachable", reports.Last.Outcome);
         var first = _tmdb.Paths.ToList();
         Assert.True(first.Count < 40, "the pass kept going with TMDB unreachable");
-        Assert.Equal(15, 40 - service.PendingCount);
+        Assert.Equal(15, 40 - service.GetStats().PendingItems);
         var library = _db.GetCombinedLibraryItems(new[] { "lib" });
         Assert.Equal(40, library.Count);
         Assert.Equal(15, library.Count(i => Artwork.Poster(i, Servers, 320)?.StartsWith(Artwork.TmdbImageBase) == true));
@@ -165,7 +178,7 @@ public class TmdbEnrichmentTests : IDisposable
         down = false;
         _tmdb.Paths.Clear();
         await Run(service);
-        Assert.Equal(0, service.PendingCount);
+        Assert.Equal(0, service.GetStats().PendingItems);
         Assert.Equal(25, _tmdb.Paths.Count);                                    // only what was missing
         Assert.Empty(_tmdb.Paths.Intersect(first.Take(15)));
     }
@@ -184,6 +197,7 @@ public class TmdbEnrichmentTests : IDisposable
         var listed = string.Join(",", Enumerable.Range(1, 20).Select(n => $"{{\"episode_number\":{n},\"still_path\":\"/s{n}.jpg\"}}"));
         _tmdb.Route = path => path == "/3/tv/1396/season/1" ? Json($"{{\"episodes\":[{listed}]}}") : null;
         var service = Service();
+        Assert.Equal(new TmdbStats(0, 0, 21, 1), service.GetStats()); // 21 episodes, one request
 
         await Run(service);
 
@@ -192,7 +206,26 @@ public class TmdbEnrichmentTests : IDisposable
         _db.AttachGroupArtwork(cards);
         Assert.Equal("https://image.tmdb.org/t/p/w300/s7.jpg", Artwork.Poster(cards[6], Servers, 320));
         Assert.Equal(20, cards.Count(c => Artwork.Poster(c, Servers, 320) != null));
-        Assert.Equal((0, 1), (service.PendingCount, service.NotFoundCount));
+        Assert.Equal((0, 1), (service.GetStats().PendingItems, service.GetStats().NotFound));
+    }
+
+    // #34: a v4 Read Access Token (a JWT) goes in Authorization: Bearer and never in the URL; a v3 key goes in api_key.
+    [Theory]
+    [InlineData("eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJ0ZXN0In0.c2lnbmF0dXJlLW5vdC1hLXNlY3JldA", true)]
+    [InlineData("0123456789abcdef0123456789abcdef", false)]
+    public async Task AReadAccessToken_GoesInTheBearerHeader_AV3KeyInTheQuery(string key, bool bearer)
+    {
+        HttpRequestMessage? sent = null;
+        var http = new HttpClient(new DelegatingHandlerStub((req, _) => { sent = req; return new HttpResponseMessage(HttpStatusCode.NotFound); }))
+            { BaseAddress = new Uri("https://api.themoviedb.org") };
+        var service = new TmdbEnrichmentService(_db, http);
+        service.SetCustomApiKey(key);
+
+        await service.GetAsync("tmdb:movie:550", CancellationToken.None);
+
+        Assert.Equal(bearer ? ("Bearer", key) : (null, null), (sent!.Headers.Authorization?.Scheme, sent.Headers.Authorization?.Parameter));
+        Assert.Equal(!bearer, sent.RequestUri!.Query.Contains("api_key="));
+        if (bearer) Assert.DoesNotContain(key, sent.RequestUri.ToString());
     }
 
     private class MockTmdbHandler : HttpMessageHandler

@@ -25,9 +25,7 @@ public class EnrichmentGateTests
         public string? CustomApiKey => "k";
         public bool HasBundledKey => false;
         public void SetCustomApiKey(string? apiKey) { }
-        public int EnrichedCount => 0;
-        public int PendingCount => 0;
-        public int NotFoundCount => 0;
+        public TmdbStats GetStats() => new(0, 0, 0, 0);
     }
 
     private static async Task Until(Func<bool> condition)
@@ -67,12 +65,15 @@ public class EnrichmentGateTests
         gate.SetSyncing(true);
 
         await gate.RunAsync();
+        Assert.Equal("playback and the sync", gate.WaitingFor);
         gate.SetPlaying(false);
+        Assert.Equal("the sync", gate.WaitingFor);
         await Task.Delay(50);
         Assert.Equal(0, tmdb.RunCount);
 
         gate.SetSyncing(false);
         await Until(() => tmdb.RunCount == 1);
+        Assert.Null(gate.WaitingFor);
     }
 
     [Fact]

@@ -17,6 +17,18 @@ public sealed class EnrichmentGate
 
     public bool IsDeferred { get { lock (_lock) return _deferred; } }
 
+    // What a deferred pass waits for, for Settings: "playback", "the sync", or null when nothing is waiting.
+    public string? WaitingFor
+    {
+        get { lock (_lock) return !_deferred ? null : _playing && _syncing ? "playback and the sync" : _playing ? "playback" : _syncing ? "the sync" : null; }
+    }
+
+    // Where every pass reports (automatic ones too), until another progress is given to RunAsync.
+    public void ReportTo(IProgress<EnrichProgress> progress)
+    {
+        lock (_lock) _progress = progress;
+    }
+
     // Starts a pass now, or once playback and any sync have ended; returns the pass (already complete when deferred).
     // A progress given here keeps receiving the passes that follow, resumed ones included.
     public Task RunAsync(IProgress<EnrichProgress>? progress = null)

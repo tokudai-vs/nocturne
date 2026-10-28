@@ -103,7 +103,12 @@ public class TmdbMetadata
     public bool NotFound { get; set; }
 }
 
-public record EnrichProgress(int Total, int Processed, int Enriched, int NotFound, string CurrentTitle);
+// Total and Processed count requests (a title, or a whole season of episodes); Enriched and NotFound count the titles
+// and episodes those requests settled. Outcome is set on a pass's last report: "finished", "paused" or "unreachable".
+public record EnrichProgress(int Total, int Processed, int Enriched, int NotFound, string CurrentTitle, string? Outcome = null);
+
+// PendingItems: titles and episodes still to fill; PendingRequests: the requests a pass would make for them (§10.3).
+public record TmdbStats(int Enriched, int NotFound, int PendingItems, int PendingRequests);
 
 public interface ITraktAuthService
 {
@@ -154,9 +159,7 @@ public interface ITmdbEnrichmentService
     string? CustomApiKey { get; }   // the user's own key only; the bundled one is never shown
     bool HasBundledKey { get; }
     void SetCustomApiKey(string? apiKey);
-    int EnrichedCount { get; }
-    int PendingCount { get; }
-    int NotFoundCount { get; }
+    TmdbStats GetStats(); // seconds on a large library: call off the UI thread
 }
 
 public interface IQueueDrainWorker

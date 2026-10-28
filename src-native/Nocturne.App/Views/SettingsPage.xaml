@@ -1176,8 +1176,9 @@
                                     <TextBlock Text="{Binding TmdbEnrichedCount}" FontSize="18" FontWeight="Bold" Foreground="#2EA043" Margin="0,2,0,0" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="PENDING ENRICHMENT" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="PENDING" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                     <TextBlock Text="{Binding TmdbPendingCount}" FontSize="18" FontWeight="Bold" Foreground="{DynamicResource NocturneAmberBrush}" Margin="0,2,0,0" />
+                                    <TextBlock Text="{Binding TmdbPendingRequests}" FontSize="10" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,2,0,0" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
                                     <TextBlock Text="NOT FOUND" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
