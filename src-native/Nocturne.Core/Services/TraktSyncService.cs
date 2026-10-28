@@ -171,6 +171,8 @@ public class TraktSyncService : ITraktSyncService
 
         var movies = await resp.Content.ReadFromJsonAsync<List<TraktWatchedMovieDto>>(cancellationToken: ct);
         if (movies == null) return false;
+        int inLibrary = 0, marked = 0;
+        _loggedMarks = 0;
 
         foreach (var m in movies)
         {
@@ -184,8 +186,10 @@ public class TraktSyncService : ITraktSyncService
             var gid = GroupOf(TitleKeys(KeyKind.Movie, m.Movie.Ids));
             if (!gid.HasValue) continue; // Not in library (§8.2 step 2)
 
-            ApplyWatchedStateToGroup(gid.Value, watchedAtSec);
+            inLibrary++;
+            marked += ApplyWatchedStateToGroup(gid.Value, watchedAtSec);
         }
+        NocturneLogger.Info("TraktSyncService", $"Trakt watched movies: {movies.Count} listed, {inLibrary} in the library, {marked} version(s) marked.");
         return !ct.IsCancellationRequested;
     }
 
@@ -200,6 +204,8 @@ public class TraktSyncService : ITraktSyncService
 
         var shows = await resp.Content.ReadFromJsonAsync<List<TraktWatchedShowDto>>(cancellationToken: ct);
         if (shows == null) return false;
+        int inLibrary = 0, marked = 0;
+        _loggedMarks = 0;
 
         foreach (var show in shows)
         {
@@ -226,10 +232,12 @@ public class TraktSyncService : ITraktSyncService
                     });
                     if (!epGid.HasValue) continue;
 
-                    ApplyWatchedStateToGroup(epGid.Value, epWatchedAtSec);
+                    inLibrary++;
+                    marked += ApplyWatchedStateToGroup(epGid.Value, epWatchedAtSec);
                 }
             }
         }
+        NocturneLogger.Info("TraktSyncService", $"Trakt watched episodes: {inLibrary} in the library, {marked} version(s) marked.");
         return !ct.IsCancellationRequested;
     }
 
@@ -307,17 +315,24 @@ public class TraktSyncService : ITraktSyncService
         return false;
     }
 
-    private void ApplyWatchedStateToGroup(int groupId, long watchedAtSec)
+    // Returns how many versions it marked. Each marking is logged (up to MaxLoggedMarks a pull): a later Emby sync may
+    // overwrite the row's origin, and live verification needs to see what the pull itself did (#29).
+    private const int MaxLoggedMarks = 25;
+    private int _loggedMarks;
+
+    private int ApplyWatchedStateToGroup(int groupId, long watchedAtSec)
     {
         // Group-wide marking is the sibling cascade: until the groups were built by the conflict-guarded engine
         // (FeatureFlags.SiblingCascade) only the primary version is marked, as an over-merged group would mark
         // unrelated titles watched.
+        var cascade = FeatureFlags.SiblingCascade(_db);
         IEnumerable<(string ServerId, string ItemId)> items = _db.GetGroupItemIds(groupId);
-        if (!FeatureFlags.SiblingCascade(_db))
+        if (!cascade)
         {
             var group = _db.GetDedupGroup(groupId);
             items = group == null ? Array.Empty<(string, string)>() : new[] { (group.PrimaryServerId, group.PrimaryItemId) };
         }
+        var marked = new List<(string, string)>();
         foreach (var (srv, id) in items)
         {
             var existing = _db.GetUserData(srv, id);
@@ -334,7 +349,12 @@ public class TraktSyncService : ITraktSyncService
 
             // Enqueue touched version to sibling_write_queue (safe under D7 because origin is 'trakt')
             _db.EnqueueSiblingWrite(srv, id, positionTicks: 0, markPlayed: true, Origin.Trakt);
+            marked.Add((srv, id));
         }
+        if (marked.Count > 0 && _loggedMarks++ < MaxLoggedMarks)
+            NocturneLogger.Info("TraktSyncService", $"Trakt watch applied: group {groupId} '{_db.GetDedupGroup(groupId)?.Name}', " +
+                $"watched {DateTimeOffset.FromUnixTimeSeconds(watchedAtSec):u}, cascade {(cascade ? "on" : "off")}: marked {string.Join(", ", marked.Select(m => $"{m.Item1[..Math.Min(8, m.Item1.Length)]}/{m.Item2}"))}");
+        return marked.Count;
     }
 
     // DTOs for Trakt Sync API
