@@ -28,6 +28,8 @@ public class TraktWiringTests : IDisposable
     {
         public readonly List<(string Method, string Path, string? ApiKey, string? Bearer, string Body, string Agent, string? Version)> Requests = new();
         public Func<string, HttpResponseMessage?> Route { get; set; } = _ => null;
+        public Func<Uri, HttpResponseMessage?>? RouteUri { get; set; } // #42: page, limit and extended are in the query
+        public readonly List<string> Uris = new(); // path and query
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -37,7 +39,8 @@ public class TraktWiringTests : IDisposable
                 request.Headers.TryGetValues("trakt-api-key", out var k) ? k.First() : null,
                 request.Headers.Authorization?.Parameter, body, request.Headers.UserAgent.ToString(),
                 request.Headers.TryGetValues("trakt-api-version", out var v) ? v.First() : null));
-            return Route(path) ?? Json(HttpStatusCode.OK, "[]");
+            Uris.Add(request.RequestUri.PathAndQuery);
+            return RouteUri?.Invoke(request.RequestUri) ?? Route(path) ?? Json(HttpStatusCode.OK, "[]");
         }
     }
 
@@ -257,6 +260,119 @@ public class TraktWiringTests : IDisposable
         Assert.True(_db.GetUserData("s2", "pilot_s2")?.Played);
         Assert.True(_db.GetUserData("s1", "cat_s1")?.Played);
         Assert.NotEqual(true, _db.GetUserData("s2", "cat_s2")?.Played);
+    }
+
+    // #42: Trakt pages /sync/watched since 2026-07-03, and shows carry seasons only with extended=progress.
+    private const string BothChanged = "{\"movies\":{\"watched_at\":\"2026-10-21T05:00:00.000Z\"},\"episodes\":{\"watched_at\":\"2026-10-21T05:00:00.000Z\"}}";
+
+    private static HttpResponseMessage Page(string json, int pages, int total)
+    {
+        var r = Json(HttpStatusCode.OK, json);
+        r.Headers.Add("X-Pagination-Page-Count", pages.ToString());
+        r.Headers.Add("X-Pagination-Item-Count", total.ToString());
+        return r;
+    }
+
+    private static string WatchedMovie(string title, int tmdb) =>
+        $"[{{\"plays\":1,\"last_watched_at\":\"2026-10-20T00:00:00.000Z\",\"movie\":{{\"title\":\"{title}\",\"ids\":{{\"tmdb\":{tmdb}}}}}}}]";
+
+    private static string WatchedShow(string title, int tvdb, bool seasons) =>
+        $"[{{\"show\":{{\"title\":\"{title}\",\"ids\":{{\"tvdb\":{tvdb}}}}}" +
+        (seasons ? ",\"seasons\":[{\"number\":1,\"episodes\":[{\"number\":1,\"plays\":1,\"last_watched_at\":\"2026-10-20T00:00:00.000Z\"}]}]" : "") + "}]";
+
+    private void Library(params EmbyItem[] items)
+    {
+        foreach (var item in items) _db.UpsertItem(item, item.ServerId!);
+        var index = new ConcurrentDedupIndex();
+        index.SetServerPriority(new List<string> { "s1", "s2" });
+        index.ProcessBatch(items.ToList(), _db);
+        _db.SetMigrationState(ConcurrentDedupIndex.EngineMarkerKey, ConcurrentDedupIndex.EngineVersion);
+    }
+
+    private static EmbyItem Film(string id, string name, string tmdb) =>
+        new() { Id = id, ServerId = "s1", Name = name, Type = "Movie", ProviderIds = new() { ["Tmdb"] = tmdb } };
+
+    private static EmbyItem[] Pilot(string show, string tvdb) => new[]
+    {
+        new EmbyItem { Id = $"{show}_series", ServerId = "s1", Name = show, Type = "Series", ProviderIds = new() { ["Tvdb"] = tvdb } },
+        new EmbyItem { Id = $"{show}_101", ServerId = "s1", Name = "Pilot", Type = "Episode", SeriesId = $"{show}_series", SeriesName = show, ParentIndexNumber = 1, IndexNumber = 1 },
+    };
+
+    [Fact]
+    public async Task WatchedMovies_AreReadPageByPage()
+    {
+        Library(Film("arr", "Arrival", "329865"), Film("dune", "Dune", "438631"));
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var trakt = new Trakt
+        {
+            RouteUri = uri => uri.AbsolutePath switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, BothChanged),
+                "/sync/watched/movies" when uri.Query.Contains("page=1&") => Page(WatchedMovie("Arrival", 329865), pages: 2, total: 2),
+                "/sync/watched/movies" when uri.Query.Contains("page=2&") => Page(WatchedMovie("Dune", 438631), pages: 2, total: 2),
+                _ => null
+            }
+        };
+
+        await new TraktSyncService(_db, new TraktAuthService(_db, Client(trakt)), Client(trakt)).PullWatchedAsync(CancellationToken.None);
+
+        Assert.True(_db.GetUserData("s1", "arr")?.Played);
+        Assert.True(_db.GetUserData("s1", "dune")?.Played); // page 2: a single request used to stop at Trakt's first 100
+        Assert.Contains(trakt.Uris, u => u.StartsWith("/sync/watched/movies?page=1&limit=250"));
+    }
+
+    [Fact]
+    public async Task WatchedShows_AskForSeasons_AndAreReadPageByPage()
+    {
+        Library(Pilot("bb", "81189").Concat(Pilot("dm", "292174")).ToArray());
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var trakt = new Trakt
+        {
+            RouteUri = uri => uri.AbsolutePath switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, BothChanged),
+                // Trakt's default since July 2026: shows without seasons
+                "/sync/watched/shows" when !uri.Query.Contains("extended=progress") => Page(WatchedShow("Breaking Bad", 81189, seasons: false), 1, 1),
+                "/sync/watched/shows" when uri.Query.Contains("page=1&") => Page(WatchedShow("Breaking Bad", 81189, seasons: true), pages: 2, total: 2),
+                "/sync/watched/shows" when uri.Query.Contains("page=2&") => Page(WatchedShow("Dark Matter", 292174, seasons: true), pages: 2, total: 2),
+                _ => null
+            }
+        };
+
+        await new TraktSyncService(_db, new TraktAuthService(_db, Client(trakt)), Client(trakt)).PullWatchedAsync(CancellationToken.None);
+
+        Assert.True(_db.GetUserData("s1", "bb_101")?.Played);
+        Assert.True(_db.GetUserData("s1", "dm_101")?.Played);
+        Assert.Contains(trakt.Uris, u => u.StartsWith("/sync/watched/shows?extended=progress&page=1&limit=100"));
+    }
+
+    // Pulls before the paginated format advanced the activity markers on partial lists: the first pull after it
+    // fetches everything once, then only changes again.
+    [Fact]
+    public async Task AfterThePullFormatChange_OnePullFetchesEverything_ThenOnlyChanges()
+    {
+        Library(Film("arr", "Arrival", "329865"));
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        _db.SetIntegrationState("trakt", "last_movies_watched_at", "2026-10-21T05:00:00.000Z"); // as an old pull left them
+        _db.SetIntegrationState("trakt", "last_episodes_watched_at", "2026-10-21T05:00:00.000Z");
+        var trakt = new Trakt
+        {
+            RouteUri = uri => uri.AbsolutePath switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, BothChanged),
+                "/sync/watched/movies" => Page(WatchedMovie("Arrival", 329865), 1, 1),
+                _ => null
+            }
+        };
+        var sync = new TraktSyncService(_db, new TraktAuthService(_db, Client(trakt)), Client(trakt));
+        int WatchedRequests() => trakt.Uris.Count(u => u.StartsWith("/sync/watched/"));
+
+        await sync.PullWatchedAsync(CancellationToken.None);
+        Assert.Equal(2, WatchedRequests());
+        Assert.True(_db.GetUserData("s1", "arr")?.Played);
+
+        await sync.PullWatchedAsync(CancellationToken.None);
+        Assert.Equal(2, WatchedRequests());
     }
 
     private void ArrivalOnTwoServers(bool cascadeOn)

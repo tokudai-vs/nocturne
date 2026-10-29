@@ -53,9 +53,11 @@ public class TraktSyncService : ITraktSyncService
             var storedEpWatched = _db.GetIntegrationState("trakt", "last_episodes_watched_at") ?? "";
             var storedWatchlistUpdated = _db.GetIntegrationState("trakt", "last_watchlist_updated_at") ?? "";
 
-            bool needMovies = string.IsNullOrEmpty(storedMovieWatched) ||
+            // #42: pulls before the paginated format read page 1 only; the first pull after it fetches both lists in full.
+            bool fullPull = _db.GetIntegrationState("trakt", PullFormatKey) != PullFormat;
+            bool needMovies = fullPull || string.IsNullOrEmpty(storedMovieWatched) ||
                               string.Compare(activities.Movies.WatchedAt, storedMovieWatched, StringComparison.Ordinal) > 0;
-            bool needEpisodes = string.IsNullOrEmpty(storedEpWatched) ||
+            bool needEpisodes = fullPull || string.IsNullOrEmpty(storedEpWatched) ||
                                 string.Compare(activities.Episodes.WatchedAt, storedEpWatched, StringComparison.Ordinal) > 0;
             bool needWatchlist = string.IsNullOrEmpty(storedWatchlistUpdated) ||
                                  string.Compare(activities.Watchlist.UpdatedAt, storedWatchlistUpdated, StringComparison.Ordinal) > 0;
@@ -84,6 +86,7 @@ public class TraktSyncService : ITraktSyncService
             }
 
             if (!ok) return;
+            if (fullPull) _db.SetIntegrationState("trakt", PullFormatKey, PullFormat);
             _lastPullTime = DateTime.UtcNow;
             _db.SetIntegrationState("trakt", "last_pull_utc", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
         }
@@ -160,16 +163,39 @@ public class TraktSyncService : ITraktSyncService
         return null;
     }
 
+    // #42: Trakt pages /sync/watched/{type} since 2026-07-03 (trakt-api discussion #775): page 1 of up to 100 items
+    // unless asked, X-Pagination-Page-Count for the rest, 250 a page at most. Shows carry seasons only with
+    // extended=progress, 100 a page at most. Reading page 1 only gave "100 listed" and, for shows, no episodes at all.
+    public const string PullFormatKey = "watched_pull_format";
+    public const string PullFormat = "2";
+    private const int MaxPages = 200; // a bad page count cannot run the pull forever: 50,000 movies or 20,000 shows
+
+    private async Task<(List<T>? Items, int Pages, string? Total)> GetAllPagesAsync<T>(string path, int limit, string token, string clientId, string what, CancellationToken ct)
+    {
+        var all = new List<T>();
+        string? total = null;
+        for (var page = 1; ; page++)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{path}{(path.Contains('?') ? '&' : '?')}page={page}&limit={limit}");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Headers.Add("trakt-api-key", clientId);
+            using var resp = await _http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode) { Fail(what, resp); return (null, page, null); }
+            var items = await resp.Content.ReadFromJsonAsync<List<T>>(cancellationToken: ct);
+            if (items == null) return (null, page, null);
+            all.AddRange(items);
+            total ??= Header(resp, "X-Pagination-Item-Count");
+            var pages = int.TryParse(Header(resp, "X-Pagination-Page-Count"), out var n) ? n : 1;
+            if (page >= Math.Min(pages, MaxPages) || items.Count == 0 || ct.IsCancellationRequested) return (all, page, total);
+        }
+    }
+
+    private static string? Header(HttpResponseMessage resp, string name) =>
+        resp.Headers.TryGetValues(name, out var v) ? v.FirstOrDefault() : null;
+
     private async Task<bool> PullWatchedMoviesInternalAsync(string token, string clientId, CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, "/sync/watched/movies?extended=noseasons");
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        req.Headers.Add("trakt-api-key", clientId);
-
-        using var resp = await _http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode) return Fail("watched movies", resp);
-
-        var movies = await resp.Content.ReadFromJsonAsync<List<TraktWatchedMovieDto>>(cancellationToken: ct);
+        var (movies, pages, total) = await GetAllPagesAsync<TraktWatchedMovieDto>("/sync/watched/movies", 250, token, clientId, "watched movies", ct);
         if (movies == null) return false;
         int inLibrary = 0, marked = 0;
         _loggedMarks = 0;
@@ -189,20 +215,13 @@ public class TraktSyncService : ITraktSyncService
             inLibrary++;
             marked += ApplyWatchedStateToGroup(gid.Value, watchedAtSec);
         }
-        NocturneLogger.Info("TraktSyncService", $"Trakt watched movies: {movies.Count} listed, {inLibrary} in the library, {marked} version(s) marked.");
+        NocturneLogger.Info("TraktSyncService", $"Trakt watched movies: {movies.Count} listed ({pages} page(s), Trakt counts {total ?? "?"}), {inLibrary} in the library, {marked} version(s) marked.");
         return !ct.IsCancellationRequested;
     }
 
     private async Task<bool> PullWatchedShowsInternalAsync(string token, string clientId, CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, "/sync/watched/shows");
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        req.Headers.Add("trakt-api-key", clientId);
-
-        using var resp = await _http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode) return Fail("watched shows", resp);
-
-        var shows = await resp.Content.ReadFromJsonAsync<List<TraktWatchedShowDto>>(cancellationToken: ct);
+        var (shows, pages, total) = await GetAllPagesAsync<TraktWatchedShowDto>("/sync/watched/shows?extended=progress", 100, token, clientId, "watched shows", ct);
         if (shows == null) return false;
         int inLibrary = 0, marked = 0, listed = 0;
         _loggedMarks = 0;
@@ -238,7 +257,9 @@ public class TraktSyncService : ITraktSyncService
                 }
             }
         }
-        NocturneLogger.Info("TraktSyncService", $"Trakt watched episodes: {shows.Count} show(s), {listed} episode(s) listed, {inLibrary} in the library, {marked} version(s) marked.");
+        NocturneLogger.Info("TraktSyncService", $"Trakt watched episodes: {shows.Count} show(s) ({pages} page(s), Trakt counts {total ?? "?"}), {listed} episode(s) listed, {inLibrary} in the library, {marked} version(s) marked.");
+        if (shows.Count(sh => sh.Seasons == null) is var bare and > 0)
+            NocturneLogger.Warn("TraktSyncService", $"Trakt sent {bare} of {shows.Count} show(s) without season data: their episodes were not applied.");
         return !ct.IsCancellationRequested;
     }
 
