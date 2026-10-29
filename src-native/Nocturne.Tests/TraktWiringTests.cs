@@ -421,6 +421,55 @@ public class TraktWiringTests : IDisposable
         Assert.Equal(queued, _db.GetPendingTraktEvents(10).Count);
     }
 
+    // #44: the dry run decides like the pull and writes nothing. A cascading pair is marked on both servers; a held pair
+    // (one episode id under two numberings on one server, as Raptor's Daryl Dixon S03E06/E07) only on its primary;
+    // specials are counted; a show that arrives without seasons is reported with the shape it came in.
+    [Fact]
+    public async Task Preview_DecidesLikeThePull_AndWritesNothing()
+    {
+        EmbyItem Ep(string id, string name, int season, int episode, string? imdb) => new()
+        {
+            Id = id, ServerId = "s1", Name = name, Type = "Episode", SeriesId = "dd", SeriesName = "Daryl Dixon",
+            ParentIndexNumber = season, IndexNumber = episode, ProviderIds = imdb == null ? new() : new() { ["Imdb"] = imdb }
+        };
+        Library(Film("arr", "Arrival", "329865"),
+            new EmbyItem { Id = "arr_b", ServerId = "s2", Name = "Arrival", Type = "Movie", ProviderIds = new() { ["Tmdb"] = "329865" } },
+            new EmbyItem { Id = "dd", ServerId = "s1", Name = "Daryl Dixon", Type = "Series", ProviderIds = new() { ["Tvdb"] = "427464" } },
+            Ep("e306", "Contrabando", 3, 6, "tt37728475"), Ep("e307", "Solaz del Mar", 3, 7, "tt37728475"), Ep("e001", "Special", 0, 1, null));
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var shows = "[{\"show\":{\"title\":\"Daryl Dixon\",\"ids\":{\"tvdb\":427464}},\"seasons\":[" +
+                    "{\"number\":0,\"episodes\":[{\"number\":1,\"plays\":1,\"last_watched_at\":\"2026-10-20T00:00:00.000Z\"}]}," +
+                    "{\"number\":3,\"episodes\":[{\"number\":6,\"plays\":1,\"last_watched_at\":\"2026-10-20T00:00:00.000Z\"}]}]}," +
+                    "{\"plays\":1,\"show\":{\"title\":\"Wainy Days\",\"ids\":{\"tvdb\":251785},\"aired_episodes\":30}}]";
+        var trakt = new Trakt
+        {
+            RouteUri = uri => uri.AbsolutePath switch
+            {
+                "/sync/watched/movies" => Page(WatchedMovie("Arrival", 329865), 1, 1),
+                "/sync/watched/shows" => Page(shows, 1, 2),
+                _ => null
+            }
+        };
+
+        var preview = await new TraktSyncService(_db, new TraktAuthService(_db, Client(trakt)), Client(trakt)).PreviewWatchedAsync(CancellationToken.None);
+
+        Assert.NotNull(preview);
+        Assert.Equal(new[] { "arr", "arr_b" }, preview!.Rows.Where(r => r.Kind == "movie").Select(r => r.ItemId).OrderBy(i => i));
+        var held = Assert.Single(preview.HeldGroups);
+        Assert.Equal(new[] { "e306", "e307" }, held.Marked.Concat(held.NotMarked).Select(v => v.ItemId).OrderBy(i => i));
+        Assert.Single(held.Marked);
+        Assert.Equal(held.Marked.Single().ItemId, Assert.Single(preview.Rows, r => r.Season == 3).ItemId); // only the primary
+        Assert.Contains(preview.Rows, r => r.Season == 0 && r.ItemId == "e001");
+        Assert.Equal((1, 1), (preview.SpecialsListed, preview.SpecialsInLibrary));
+        Assert.Equal(1, preview.ShowsWithoutSeasons);
+        Assert.Equal("plays, show {title, ids, aired_episodes}", preview.ShapeWithoutSeasons);
+        Assert.Contains("Nothing was written", preview.Report(id => id));
+
+        foreach (var (srv, id) in new[] { ("s1", "arr"), ("s2", "arr_b"), ("s1", "e306"), ("s1", "e307"), ("s1", "e001") })
+            Assert.NotEqual(true, _db.GetUserData(srv, id)?.Played);
+        Assert.Empty(_db.GetPendingSiblingWrites(10));
+    }
+
     private void ArrivalOnTwoServers(bool cascadeOn)
     {
         var a = new EmbyItem { Id = "arr_a", ServerId = "s1", Name = "Arrival", Type = "Movie", ProviderIds = new() { { "Tmdb", "329865" } } };

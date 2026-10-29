@@ -139,6 +139,7 @@ public interface ITraktSyncService
     Task PullWatchedAsync(CancellationToken ct);
     Task PullWatchlistAsync(CancellationToken ct);
     Task FullReconcileAsync(IProgress<int> p, CancellationToken ct);
+    Task<TraktPullPreview?> PreviewWatchedAsync(CancellationToken ct); // #44: what a pull would mark, nothing written
     DateTime? LastPullTime { get; }
 }
 

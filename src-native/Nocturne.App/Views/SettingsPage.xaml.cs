@@ -232,6 +232,14 @@ public partial class SettingsPage : UserControl
 
     private void OnCorrectionsClick(object sender, RoutedEventArgs e) => ViewModel?.LoadCorrections();
 
+    private async void OnPreviewTraktPullClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel != null)
+        {
+            await ViewModel.PreviewTraktPullAsync();
+        }
+    }
+
     // #38: a correction offered on a diagnostic row (conflicting ids, held groups, corrections).
     private async void OnRowActionClick(object sender, RoutedEventArgs e)
     {

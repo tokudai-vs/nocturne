@@ -1173,6 +1173,15 @@
                             <TextBlock Text="Sync Watched State with Trakt" VerticalAlignment="Center" FontWeight="SemiBold" />
                         </DockPanel>
 
+                        <!-- #44: what a pull would mark, decided by the pull's own code; nothing is written. -->
+                        <StackPanel Margin="0,4,0,8">
+                            <Button Content="Preview Trakt Pull (writes nothing)" Click="OnPreviewTraktPullClick" HorizontalAlignment="Left"
+                                    AutomationProperties.AutomationId="PreviewTraktPull"
+                                    ToolTip="Fetches your full Trakt watched history and reports what a pull would mark on each server, without marking anything" />
+                            <TextBlock Text="{Binding TraktPreviewText}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+
                         <DockPanel Margin="0,4,0,0">
                             <ui:ToggleSwitch DockPanel.Dock="Right" Width="44" Height="22" VerticalAlignment="Center" Margin="16,0,0,0"
                                             IsChecked="{Binding TraktShowWatchlistInSidebar, Mode=TwoWay}" />

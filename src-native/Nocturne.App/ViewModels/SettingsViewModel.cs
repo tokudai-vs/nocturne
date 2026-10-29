@@ -1396,6 +1396,30 @@ public class SettingsViewModel : BaseViewModel
         RefreshCorrectionsText();
     }
 
+    // #44: the Trakt pull's decisions without its writes; the full report is saved beside the log.
+    private string _traktPreviewText = string.Empty;
+    public string TraktPreviewText
+    {
+        get => _traktPreviewText;
+        set => SetProperty(ref _traktPreviewText, value);
+    }
+
+    public async Task PreviewTraktPullAsync()
+    {
+        TraktPreviewText = "Fetching your full Trakt watched history and deciding what a pull would mark. Nothing is written...";
+        var preview = await Task.Run(() => _traktSync.PreviewWatchedAsync(CancellationToken.None));
+        if (preview == null)
+        {
+            TraktPreviewText = "Preview failed: Trakt is not connected, or a page could not be fetched (see the log).";
+            return;
+        }
+        var report = preview.Report(ServerName);
+        var path = Path.Combine(AppPaths.DataDirectory, "trakt-pull-preview.txt");
+        await File.WriteAllTextAsync(path, report);
+        NocturneLogger.Info("SettingsViewModel", $"Trakt pull preview: {preview.Rows.Count:N0} version(s) would be marked, {preview.HeldGroups.Count:N0} held group(s); report at {path}");
+        TraktPreviewText = string.Join("\n", report.Split('\n').Take(12)).TrimEnd() + $"\n\nFull report: {path}";
+    }
+
     // #38: corrections waiting for a rebuild, and what the last one did.
     private string _correctionsStatus = string.Empty;
     private string _correctionsText = string.Empty;

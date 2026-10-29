@@ -357,40 +357,115 @@ public class TraktSyncService : ITraktSyncService
     private const int MaxLoggedMarks = 25;
     private int _loggedMarks;
 
-    private int ApplyWatchedStateToGroup(int groupId, long watchedAtSec)
+    // The versions a Trakt watch at watchedAtSec marks in a group, decided without writing (#44: the preview reports
+    // exactly what the pull applies). Group-wide marking is the sibling cascade: in a group it holds back
+    // (FeatureFlags.SiblingCascade) only the primary is marked, as an over-merged group would mark unrelated titles
+    // watched; HeldBack lists the versions left alone. A version played at or after the watch is skipped (§8.2 step 3).
+    private (List<(string ServerId, string ItemId)> Marks, bool Cascade, List<(string ServerId, string ItemId)> HeldBack) Decide(int groupId, long watchedAtSec)
     {
-        // Group-wide marking is the sibling cascade: in a group it holds back (FeatureFlags.SiblingCascade) only the
-        // primary version is marked, as an over-merged group would mark unrelated titles watched.
         var cascade = FeatureFlags.SiblingCascade(_db, groupId);
-        IEnumerable<(string ServerId, string ItemId)> items = _db.GetGroupItemIds(groupId);
+        var all = _db.GetGroupItemIds(groupId);
+        var targets = all;
+        var heldBack = new List<(string ServerId, string ItemId)>();
         if (!cascade)
         {
             var group = _db.GetDedupGroup(groupId);
-            items = group == null ? Array.Empty<(string, string)>() : new[] { (group.PrimaryServerId, group.PrimaryItemId) };
+            targets = group == null ? new() : new() { (group.PrimaryServerId, group.PrimaryItemId) };
+            heldBack = all.Where(v => !targets.Contains(v)).ToList();
         }
-        var marked = new List<(string, string)>();
-        foreach (var (srv, id) in items)
+        var marks = targets.Where(v =>
         {
-            var existing = _db.GetUserData(srv, id);
-            // Idempotence (§8.2 step 3): anything at or after Trakt's watch, played or a later partial play, wins.
-            if (existing?.LastPlayedDate != null)
-            {
-                long existingSec = ((DateTimeOffset)existing.LastPlayedDate.Value).ToUnixTimeSeconds();
-                if (watchedAtSec <= existingSec)
-                    continue;
-            }
+            var existing = _db.GetUserData(v.ServerId, v.ItemId);
+            // Idempotence: anything at or after Trakt's watch, played or a later partial play, wins.
+            return existing?.LastPlayedDate == null || watchedAtSec > ((DateTimeOffset)existing.LastPlayedDate.Value).ToUnixTimeSeconds();
+        }).ToList();
+        return (marks, cascade, heldBack);
+    }
 
+    private int ApplyWatchedStateToGroup(int groupId, long watchedAtSec)
+    {
+        var (marked, cascade, _) = Decide(groupId, watchedAtSec);
+        foreach (var (srv, id) in marked)
+        {
             // Upsert user_data with origin = 'trakt' and source timestamp (D8)
             _db.UpdateUserDataState(srv, id, positionTicks: 0, runtimeTicks: null, played: true, lastPlayedUtc: watchedAtSec, origin: "trakt");
 
             // Enqueue touched version to sibling_write_queue (safe under D7 because origin is 'trakt')
             _db.EnqueueSiblingWrite(srv, id, positionTicks: 0, markPlayed: true, Origin.Trakt);
-            marked.Add((srv, id));
         }
         if (marked.Count > 0 && _loggedMarks++ < MaxLoggedMarks)
             NocturneLogger.Info("TraktSyncService", $"Trakt watch applied: group {groupId} '{_db.GetDedupGroup(groupId)?.Name}', " +
                 $"watched {DateTimeOffset.FromUnixTimeSeconds(watchedAtSec):u}, cascade {(cascade ? "on" : "off")}: marked {string.Join(", ", marked.Select(m => $"{m.Item1[..Math.Min(8, m.Item1.Length)]}/{m.Item2}"))}");
         return marked.Count;
+    }
+
+    // #44: the full watched lists fetched and decided as the pull would, nothing written: what a person checks before
+    // accepting the pull's writes (and, later, the first-run guard's preview). Reads Trakt whatever "Sync watched
+    // state" says. Null when Trakt is not connected or a page fails.
+    public async Task<TraktPullPreview?> PreviewWatchedAsync(CancellationToken ct)
+    {
+        if (_auth.State != TraktConnectionState.Connected) return null;
+        var token = _auth.GetAccessToken();
+        var clientId = _auth.GetActiveClientId();
+        if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(clientId)) return null;
+
+        var (movies, moviePages, moviesTrakt) = await GetAllPagesAsync<TraktWatchedMovieDto>("/sync/watched/movies", 250, token, clientId, "watched movies", ct);
+        var (shows, showPages, showsTrakt) = await GetAllPagesAsync<JsonElement>("/sync/watched/shows?extended=progress", 100, token, clientId, "watched shows", ct);
+        if (movies == null || shows == null) return null;
+
+        var preview = new TraktPullPreview
+        {
+            MoviesListed = movies.Count, MoviePages = moviePages, MoviesTrakt = moviesTrakt,
+            ShowsListed = shows.Count, ShowPages = showPages, ShowsTrakt = showsTrakt,
+        };
+        void Record(int gid, string kind, string title, int? season, int? episode, long watchedAtSec)
+        {
+            var (marks, cascade, heldBack) = Decide(gid, watchedAtSec);
+            preview.Rows.AddRange(marks.Select(m => new TraktPullPreview.Row(kind, title, season, episode, m.ServerId, m.ItemId)));
+            if (!cascade && heldBack.Count > 0)
+                preview.HeldGroups.Add(new TraktPullPreview.Held(gid, _db.GetDedupGroup(gid)?.Name ?? title, marks, heldBack));
+        }
+        static long Seconds(string at) => DateTimeOffset.TryParse(at, out var d) ? d.ToUnixTimeSeconds() : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        foreach (var m in movies)
+        {
+            if (m.Movie?.Ids == null || string.IsNullOrEmpty(m.LastWatchedAt)) continue;
+            if (GroupOf(TitleKeys(KeyKind.Movie, m.Movie.Ids)) is not { } gid) continue;
+            preview.MoviesInLibrary++;
+            Record(gid, "movie", m.Movie.Title, null, null, Seconds(m.LastWatchedAt));
+        }
+
+        foreach (var element in shows)
+        {
+            var show = element.Deserialize<TraktWatchedShowDto>();
+            if (show?.Show?.Ids == null) continue;
+            if (show.Seasons == null)
+            {
+                preview.ShowsWithoutSeasons++;
+                preview.ShapeWithoutSeasons ??= string.Join(", ", element.EnumerateObject().Select(p =>
+                    p.Value.ValueKind == JsonValueKind.Object ? $"{p.Name} {{{string.Join(", ", p.Value.EnumerateObject().Select(q => q.Name))}}}" : p.Name));
+                continue;
+            }
+            var ids = show.Show.Ids;
+            foreach (var s in show.Seasons)
+                foreach (var ep in s.Episodes ?? new())
+                {
+                    if (string.IsNullOrEmpty(ep.LastWatchedAt)) continue;
+                    preview.EpisodesListed++;
+                    if (s.Number == 0) preview.SpecialsListed++;
+                    var gid = GroupOf(new[]
+                    {
+                        ProviderKey.SeasonEpisode(Provider.Tvdb, ids.Tvdb?.ToString(), s.Number, ep.Number),
+                        ProviderKey.SeasonEpisode(Provider.Tmdb, ids.Tmdb?.ToString(), s.Number, ep.Number),
+                        ProviderKey.SeasonEpisode(Provider.Imdb, ids.Imdb, s.Number, ep.Number),
+                    });
+                    if (gid == null) continue;
+                    preview.EpisodesInLibrary++;
+                    if (s.Number == 0) preview.SpecialsInLibrary++;
+                    Record(gid.Value, "episode", show.Show.Title, s.Number, ep.Number, Seconds(ep.LastWatchedAt));
+                }
+        }
+        return preview;
     }
 
     // DTOs for Trakt Sync API
