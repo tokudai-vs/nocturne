@@ -63,3 +63,6 @@ CLAUDE.md
 
 # Audit log + memory artifacts
 /docs/AUDIT-*.md.bak
+
+# Isolated profile for scripts/smoke-native.ps1: a database snapshot plus settings with credentials blanked (AGENTS.md)
+.smoke/
