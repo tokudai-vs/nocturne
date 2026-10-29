@@ -10,14 +10,16 @@ public class TraktScrobbleService : ITraktScrobbleService
 {
     private readonly DatabaseService _db;
     private readonly ITraktAuthService _auth;
+    private readonly SettingsService? _settings;
     private int _skippedProvisionalCount = 0;
 
     public int SkippedProvisionalCount => _skippedProvisionalCount;
 
-    public TraktScrobbleService(DatabaseService db, ITraktAuthService auth)
+    public TraktScrobbleService(DatabaseService db, ITraktAuthService auth, SettingsService? settings = null)
     {
         _db = db;
         _auth = auth;
+        _settings = settings;
     }
 
     public void Start(long groupId, double progress) => EnqueueScrobble(groupId, "start", progress);
@@ -28,6 +30,10 @@ public class TraktScrobbleService : ITraktScrobbleService
     {
         // Must be authenticated or connecting to Trakt
         if (_auth.State == TraktConnectionState.Disconnected)
+            return;
+
+        // #43: "Auto scrobble" off in Settings: playback is not sent to Trakt.
+        if (_settings?.Current.TraktAutoScrobble == false)
             return;
 
         var group = _db.GetDedupGroup(groupId);

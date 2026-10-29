@@ -18,15 +18,17 @@ public class TraktSyncService : ITraktSyncService
     private const string TraktApiBase = "https://api.trakt.tv";
     private readonly DatabaseService _db;
     private readonly ITraktAuthService _auth;
+    private readonly SettingsService? _settings;
     private readonly HttpClient _http;
     private DateTime? _lastPullTime;
 
     public DateTime? LastPullTime => _lastPullTime;
 
-    public TraktSyncService(DatabaseService db, ITraktAuthService auth, HttpClient? httpClient = null)
+    public TraktSyncService(DatabaseService db, ITraktAuthService auth, HttpClient? httpClient = null, SettingsService? settings = null)
     {
         _db = db;
         _auth = auth;
+        _settings = settings;
         _http = (httpClient ?? new HttpClient { BaseAddress = new Uri(TraktApiBase), Timeout = TimeSpan.FromSeconds(30) }).Identify();
         _http.DefaultRequestHeaders.Accept.Clear();
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -62,6 +64,14 @@ public class TraktSyncService : ITraktSyncService
             bool needWatchlist = string.IsNullOrEmpty(storedWatchlistUpdated) ||
                                  string.Compare(activities.Watchlist.UpdatedAt, storedWatchlistUpdated, StringComparison.Ordinal) > 0;
 
+            // #43: "Sync watched state" off: no watched pull, so no played marks are written; the watchlist still syncs.
+            var syncWatched = SyncWatchedState;
+            if (!syncWatched && (needMovies || needEpisodes))
+            {
+                NocturneLogger.Info("TraktSyncService", "Sync watched state is off in Settings: watched movies and episodes not pulled.");
+                needMovies = needEpisodes = false;
+            }
+
             // A stored timestamp advances only when its pull succeeded; a failed GET is retried next cycle.
             var ok = true;
             if (needMovies)
@@ -86,7 +96,7 @@ public class TraktSyncService : ITraktSyncService
             }
 
             if (!ok) return;
-            if (fullPull) _db.SetIntegrationState("trakt", PullFormatKey, PullFormat);
+            if (fullPull && syncWatched) _db.SetIntegrationState("trakt", PullFormatKey, PullFormat);
             _lastPullTime = DateTime.UtcNow;
             _db.SetIntegrationState("trakt", "last_pull_utc", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
         }
@@ -130,10 +140,13 @@ public class TraktSyncService : ITraktSyncService
         NocturneLogger.Info("TraktSyncService", "Starting full Trakt reconcile...");
         progress.Report(10);
 
-        await PullWatchedMoviesInternalAsync(token, clientId, ct);
-        progress.Report(45);
+        if (SyncWatchedState)
+        {
+            await PullWatchedMoviesInternalAsync(token, clientId, ct);
+            progress.Report(45);
 
-        await PullWatchedShowsInternalAsync(token, clientId, ct);
+            await PullWatchedShowsInternalAsync(token, clientId, ct);
+        }
         progress.Report(80);
 
         await PullWatchlistInternalAsync(token, clientId, ct);
@@ -142,6 +155,8 @@ public class TraktSyncService : ITraktSyncService
         _lastPullTime = DateTime.UtcNow;
         NocturneLogger.Info("TraktSyncService", "Full Trakt reconcile complete.");
     }
+
+    private bool SyncWatchedState => _settings?.Current.TraktSyncWatchedState ?? true;
 
     private void Advance(string key, string value)
     {

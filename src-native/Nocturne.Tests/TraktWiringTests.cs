@@ -298,6 +298,13 @@ public class TraktWiringTests : IDisposable
         new EmbyItem { Id = $"{show}_101", ServerId = "s1", Name = "Pilot", Type = "Episode", SeriesId = $"{show}_series", SeriesName = show, ParentIndexNumber = 1, IndexNumber = 1 },
     };
 
+    private SettingsService Settings(Action<NocturneSettings> change)
+    {
+        var settings = new SettingsService(Path.Combine(Path.GetTempPath(), $"nocturne_settings_{Guid.NewGuid():N}.json"));
+        settings.Update(change);
+        return settings;
+    }
+
     [Fact]
     public async Task WatchedMovies_AreReadPageByPage()
     {
@@ -373,6 +380,45 @@ public class TraktWiringTests : IDisposable
 
         await sync.PullWatchedAsync(CancellationToken.None);
         Assert.Equal(2, WatchedRequests());
+    }
+
+    // #43: "Sync watched state" off: no watched pull and no played marks; the watchlist still syncs.
+    [Fact]
+    public async Task SyncWatchedStateOff_PullsNoWatchedState()
+    {
+        Library(Film("arr", "Arrival", "329865"));
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var trakt = new Trakt
+        {
+            RouteUri = uri => uri.AbsolutePath switch
+            {
+                "/sync/last_activities" => Json(HttpStatusCode.OK, BothChanged.Replace("}}", "},\"watchlist\":{\"updated_at\":\"2026-10-21T05:00:00.000Z\"}}")),
+                "/sync/watched/movies" => Page(WatchedMovie("Arrival", 329865), 1, 1),
+                _ => null
+            }
+        };
+
+        await new TraktSyncService(_db, new TraktAuthService(_db, Client(trakt)), Client(trakt), Settings(s => s.TraktSyncWatchedState = false))
+            .PullWatchedAsync(CancellationToken.None);
+
+        Assert.DoesNotContain(trakt.Uris, u => u.StartsWith("/sync/watched/"));
+        Assert.NotEqual(true, _db.GetUserData("s1", "arr")?.Played);
+        Assert.Contains(trakt.Uris, u => u.StartsWith("/sync/watchlist/"));
+        Assert.Null(_db.GetIntegrationState("trakt", TraktSyncService.PullFormatKey)); // the full pull still waits for it
+    }
+
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 0)]
+    public void AutoScrobble_DecidesWhetherPlaybackIsQueued(bool on, int queued)
+    {
+        Library(Film("arr", "Arrival", "329865"));
+        SeedConnected("c1", expiresInSec: 30 * 86400);
+        var gid = _db.GetGroupIdForDedupKey("tmdb:movie:329865")!.Value;
+
+        new TraktScrobbleService(_db, new TraktAuthService(_db, Client(new Trakt())), Settings(s => s.TraktAutoScrobble = on)).Start(gid, 10);
+
+        Assert.Equal(queued, _db.GetPendingTraktEvents(10).Count);
     }
 
     private void ArrivalOnTwoServers(bool cascadeOn)
