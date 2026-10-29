@@ -204,7 +204,7 @@ public class TraktSyncService : ITraktSyncService
 
         var shows = await resp.Content.ReadFromJsonAsync<List<TraktWatchedShowDto>>(cancellationToken: ct);
         if (shows == null) return false;
-        int inLibrary = 0, marked = 0;
+        int inLibrary = 0, marked = 0, listed = 0;
         _loggedMarks = 0;
 
         foreach (var show in shows)
@@ -218,6 +218,7 @@ public class TraktSyncService : ITraktSyncService
                 foreach (var ep in s.Episodes)
                 {
                     if (string.IsNullOrEmpty(ep.LastWatchedAt)) continue;
+                    listed++;
 
                     long epWatchedAtSec = DateTimeOffset.TryParse(ep.LastWatchedAt, out var dt)
                         ? dt.ToUnixTimeSeconds()
@@ -237,7 +238,7 @@ public class TraktSyncService : ITraktSyncService
                 }
             }
         }
-        NocturneLogger.Info("TraktSyncService", $"Trakt watched episodes: {inLibrary} in the library, {marked} version(s) marked.");
+        NocturneLogger.Info("TraktSyncService", $"Trakt watched episodes: {shows.Count} show(s), {listed} episode(s) listed, {inLibrary} in the library, {marked} version(s) marked.");
         return !ct.IsCancellationRequested;
     }
 
