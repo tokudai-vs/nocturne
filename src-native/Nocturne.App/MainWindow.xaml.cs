@@ -271,6 +271,13 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    // #40: a launch that failed used to leave the player open on an empty surface.
+    private async Task PlaybackFailedAsync(Nocturne.Core.Models.EmbyItem item, string why)
+    {
+        try { await _viewModel.StopPlaybackAsync(); } catch (Exception ex) { NocturneLogger.Warn("MainWindow", $"Closing the failed player: {ex.Message}"); }
+        System.Windows.MessageBox.Show(this, $"{item.Name} could not be played: {why}", "Playback failed", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+    }
+
     private PlayerOverlayWindow GetOrCreatePlayerOverlay()
     {
         if (_playerOverlay == null)
@@ -413,11 +420,13 @@ public partial class MainWindow : FluentWindow
                 else
                 {
                     NocturneLogger.Error("MainWindow", "PlayerHwndHost.Hwnd was not created after waiting!");
+                    await PlaybackFailedAsync(item, "the video surface was not created");
                 }
             }
             catch (Exception ex)
             {
                 NocturneLogger.Error("MainWindow", "Embedded playback launch failed", ex);
+                await PlaybackFailedAsync(item, ex.Message);
             }
         };
 

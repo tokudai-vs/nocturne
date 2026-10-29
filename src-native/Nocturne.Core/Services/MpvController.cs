@@ -51,11 +51,10 @@ public class MpvController : IDisposable
     {
         if (_mpvProcess != null && !_mpvProcess.HasExited) return;
 
-        var mpvExe = FindMpvExecutable();
-        if (string.IsNullOrEmpty(mpvExe) || !File.Exists(mpvExe))
+        if (FindMpvExecutable() is not { } mpvExe)
         {
-            NocturneLogger.Error("MpvController", $"mpv.exe not found at '{mpvExe}'");
-            ErrorOccurred?.Invoke($"mpv.exe not found at '{mpvExe}'");
+            NocturneLogger.Error("MpvController", MpvMissing);
+            ErrorOccurred?.Invoke(MpvMissing);
             return;
         }
 
@@ -167,12 +166,11 @@ public class MpvController : IDisposable
     {
         await StopAsync(notifyEnded: false);
 
-        var mpvExe = FindMpvExecutable();
-        if (string.IsNullOrEmpty(mpvExe) || !File.Exists(mpvExe))
+        // #40: thrown, not just raised: the caller treated a return as started and left a dead player open.
+        if (FindMpvExecutable() is not { } mpvExe)
         {
-            NocturneLogger.Error("MpvController", $"mpv.exe not found at '{mpvExe}'");
-            ErrorOccurred?.Invoke($"mpv.exe not found at '{mpvExe}'");
-            return;
+            NocturneLogger.Error("MpvController", MpvMissing);
+            throw new FileNotFoundException(MpvMissing);
         }
 
         var mpvDir = Path.GetDirectoryName(mpvExe)!;
@@ -777,16 +775,19 @@ public class MpvController : IDisposable
         }
     }
 
-    private static string FindMpvExecutable()
+    private const string MpvMissing = "mpv.exe not found: no resources\\mpv\\mpv.exe beside Nocturne or in a folder above it";
+
+    // #40: the first resources\mpv\mpv.exe at or above the exe: beside it in a package (bin\native-win), at the repo
+    // root for a build output (src-native\Nocturne.App\bin\<config>\net8.0-windows). Null when there is none; logged
+    // at startup.
+    public static string? FindMpvExecutable()
     {
-        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        var localMpv = Path.Combine(baseDir, "resources", "mpv", "mpv.exe");
-        if (File.Exists(localMpv)) return localMpv;
-
-        var siblingMpv = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "resources", "mpv", "mpv.exe"));
-        if (File.Exists(siblingMpv)) return siblingMpv;
-
-        return "mpv.exe";
+        for (var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory); dir != null; dir = dir.Parent)
+        {
+            var mpv = Path.Combine(dir.FullName, "resources", "mpv", "mpv.exe");
+            if (File.Exists(mpv)) return mpv;
+        }
+        return null;
     }
 
     public void Dispose()
