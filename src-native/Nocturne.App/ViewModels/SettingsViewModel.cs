@@ -1301,9 +1301,11 @@ public class SettingsViewModel : BaseViewModel
     public void RefreshDriftText()
     {
         var measured = DateTime.TryParse(_db.GetMigrationState(DedupEngine.DriftMeasuredKey), null, System.Globalization.DateTimeStyles.RoundtripKind, out var at)
-            ? $"{_db.GetMigrationState(DedupEngine.DriftItemsKey)} item(s) in {_db.GetMigrationState(DedupEngine.DriftGroupsKey)} group(s) grouped otherwise than a rebuild would (measured {at.ToLocalTime():g}; again after an incomplete or resumed sync, or monthly)."
-            : "Drift not measured yet (measured after an incomplete or resumed sync, or monthly).";
+            ? $"{_db.GetMigrationState(DedupEngine.DriftItemsKey)} item(s) in {_db.GetMigrationState(DedupEngine.DriftGroupsKey)} group(s) grouped otherwise than a rebuild would (measured {at.ToLocalTime():g})."
+            : "Drift not measured yet.";
         var over = _db.GetMigrationState(DedupEngine.OverCapKey);
+        var due = _db.GetMigrationState(SyncEngine.DriftDueKey);
+        if (!string.IsNullOrEmpty(due)) measured += $" Measurement recommended: {due}.";
         DriftText = $"Drift: {measured}" + (over == null ? "" :
                     $"\nGroups over the size cap of {ConcurrentDedupIndex.GroupSizeCap(_settings.Current.Servers.Count)}: {(over == "0" ? "none" : $"{over}: {_db.GetMigrationState(DedupEngine.OverCapNamesKey)}")}.");
         RefreshCorrectionsText();

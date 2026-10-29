@@ -5,7 +5,8 @@ using Xunit;
 
 namespace Nocturne.Tests;
 
-// #22 item 4: drift is measured after an abnormal sync (partial, failed, interrupted, resumed) and monthly, not weekly.
+// #22 item 4: drift is due after an abnormal sync (partial, failed, interrupted, resumed) and monthly, not weekly.
+// #39: due means recommended in Settings; a sync never measures it (190 s and 4 GB on the startup path).
 public class DriftTriggerTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), $"nocturne_test_{Guid.NewGuid():N}");
@@ -37,38 +38,53 @@ public class DriftTriggerTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    private bool Measured() => _db.GetMigrationState(DedupEngine.DriftMeasuredKey) != null;
+    private bool Recommended() => !string.IsNullOrEmpty(_db.GetMigrationState(SyncEngine.DriftDueKey));
     private Func<string?> _settingsStatus = () => null;
     private Task Sync() => _sync.RunFullSyncAsync().WaitAsync(TimeSpan.FromSeconds(60));
 
     [Fact]
-    public async Task CleanSyncs_DoNotMeasure_TheBackstopDoesAfterAMonth()
+    public async Task CleanSyncs_RecommendNothing_TheBackstopDoesAfterAMonth()
     {
         await Sync();
         await Sync();
-        Assert.False(Measured());
+        Assert.False(Recommended());
         Assert.NotNull(_db.GetMigrationState(SyncEngine.DriftClockKey)); // the backstop's clock started
 
         _db.SetMigrationState(SyncEngine.DriftClockKey, DateTime.UtcNow.AddDays(-31).ToString("o"));
         await Sync();
-        Assert.True(Measured());
+        Assert.True(Recommended());
     }
 
     [Fact]
-    public async Task APartialSync_IsMeasured()
+    public async Task APartialSync_RecommendsAMeasurement()
     {
         _fake.Fail = uri => uri.Host == "raptor.test" && uri.AbsolutePath.EndsWith("/Views");
         await Sync();
-        Assert.True(Measured());
+        Assert.True(Recommended());
     }
 
+    // The 2026-10-29 startup: the previous launch was ended mid-sync. The sync recommends a measurement, runs none,
+    // and clears its flag, so the next launch is not interrupted-again.
     [Fact]
-    public async Task ASyncAfterAnInterruptedOne_IsMeasured()
+    public async Task ASyncAfterAnInterruptedOne_RecommendsAMeasurement_ButNeverRunsIt()
     {
         _db.SetMigrationState(SyncEngine.SyncRunningKey, "1"); // as a run killed mid-way leaves it
         await Sync();
-        Assert.True(Measured());
+        Assert.True(Recommended());
+        Assert.Null(_db.GetMigrationState(DedupEngine.DriftMeasuredKey));
         Assert.Equal("0", _db.GetMigrationState(SyncEngine.SyncRunningKey));
+    }
+
+    [Fact]
+    public async Task MeasuringFromSettings_ClearsTheRecommendation()
+    {
+        _db.SetMigrationState(SyncEngine.SyncRunningKey, "1");
+        await Sync();
+        Assert.True(Recommended());
+
+        new DedupEngine().MeasureDrift(_db, null, 2);
+
+        Assert.False(Recommended());
     }
 
     // Closing the app mid-sync closes the database under it: stopped, not failed, and no drift run on a closed database.
@@ -81,10 +97,10 @@ public class DriftTriggerTests : IDisposable
     }
 
     [Fact]
-    public async Task ASyncResumedFromACheckpoint_IsMeasured()
+    public async Task ASyncResumedFromACheckpoint_RecommendsAMeasurement()
     {
         _db.SaveSyncCheckpoint("raptor", "lib", 1, 3, isCompleted: false);
         await Sync();
-        Assert.True(Measured());
+        Assert.True(Recommended());
     }
 }

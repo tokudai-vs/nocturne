@@ -382,6 +382,7 @@ public class DedupEngine
             var overCap = stored.Where(g => g.Members.Count > cap && g.GroupId != null).OrderByDescending(g => g.Members.Count).ToList();
             var drift = new Drift(divergence.OnlyInA.Sum(g => g.Members.Count), divergence.OnlyInA.Count, overCap.Count);
             db.SetMigrationState(DriftItemsKey, drift.Items.ToString());
+            db.SetMigrationState(SyncEngine.DriftDueKey, ""); // #39: measured; nothing recommended until the next abnormal sync
             db.SetMigrationState(DriftGroupsKey, drift.Groups.ToString());
             db.SetMigrationState(OverCapKey, drift.OverCap.ToString());
             db.SetMigrationState(OverCapNamesKey, string.Join("; ", overCap.Take(5).Select(g => $"{db.GetDedupGroup(g.GroupId!.Value)?.Name} ({g.Members.Count})")));

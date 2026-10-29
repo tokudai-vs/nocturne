@@ -129,12 +129,14 @@ public class SyncEngine
             {
                 var status = _settings.Current.SyncStatus;
                 if (status != "failed" && DeletionSweepDue()) await DeletionSweepCoreAsync(ct);
+                _db.SetMigrationState(SyncRunningKey, "0");
                 if (DriftReason(interrupted, status) is { } why)
                 {
-                    NocturneLogger.Info("SyncEngine", $"Measuring drift: {why}.");
-                    await Task.Run(() => DedupEngine.MeasureDriftCore(_db, _settings.Current.PreferredServerPriority, _settings.Current.Servers.Count), CancellationToken.None);
+                    // #39: recommended, never run here. On the startup sync it cost 190 s and 4 GB, and a launch closed
+                    // before it ended left sync_running set, so the next launch measured again.
+                    _db.SetMigrationState(DriftDueKey, why);
+                    NocturneLogger.Info("SyncEngine", $"Drift check recommended: {why}. Measure Drift in Settings.");
                 }
-                _db.SetMigrationState(SyncRunningKey, "0");
                 await Task.Run(() => FeatureFlags.MeasureCascadeGate(_db), CancellationToken.None);
                 if (FeatureFlags.DedupAlert(_db) is { } alert) DedupAlertRaised?.Invoke(alert);
                 await Task.Run(() => _db.CheckpointWal("a sync"), CancellationToken.None);
@@ -147,10 +149,11 @@ public class SyncEngine
     }
 
     // #22 item 4: drift (DedupEngine.MeasureDrift: 190 s, 4 GB on the live library) only accrues from a sync that did
-    // not complete cleanly, since a clean pass groups like a rebuild (#20 item 2). Measured after a partial or failed
-    // sync, after one that resumed from a checkpoint or follows an interrupted run, monthly as a backstop (its clock
-    // starts at the first sync), and from Settings.
+    // not complete cleanly, since a clean pass groups like a rebuild (#20 item 2). A measurement is recommended after a
+    // partial or failed sync, after one that resumed from a checkpoint or follows an interrupted run, and monthly as a
+    // backstop (its clock starts at the first sync). #39: it runs only from Settings; DriftDueKey says why it is due.
     public const string SyncRunningKey = "sync_running";
+    public const string DriftDueKey = "dedup_drift_due";
     public const string DriftClockKey = "dedup_drift_clock_utc";
     public static readonly TimeSpan DriftBackstop = TimeSpan.FromDays(30);
     private bool _resumedFromCheckpoint;
