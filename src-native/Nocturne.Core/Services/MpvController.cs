@@ -777,15 +777,21 @@ public class MpvController : IDisposable
 
     private const string MpvMissing = "mpv.exe not found: no resources\\mpv\\mpv.exe beside Nocturne or in a folder above it";
 
-    // #40: the first resources\mpv\mpv.exe at or above the exe: beside it in a package (bin\native-win), at the repo
-    // root for a build output (src-native\Nocturne.App\bin\<config>\net8.0-windows). Null when there is none; logged
-    // at startup.
+    // #40: resources\mpv\mpv.exe beside the exe (a package: bin\native-win), else, for a build output inside the repo
+    // (src-native\Nocturne.App\bin\<config>\...), the repo root's copy, the root found from the exe's own path. No other
+    // folder above the exe is searched: one another user can write to (a drive root) could plant an mpv.exe there.
+    // Null when there is none; logged at startup.
     public static string? FindMpvExecutable()
     {
-        for (var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory); dir != null; dir = dir.Parent)
+        var exeDir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+        var beside = Path.Combine(exeDir.FullName, "resources", "mpv", "mpv.exe");
+        if (File.Exists(beside)) return beside;
+        for (var dir = exeDir; dir?.Parent?.Parent != null; dir = dir.Parent)
         {
-            var mpv = Path.Combine(dir.FullName, "resources", "mpv", "mpv.exe");
-            if (File.Exists(mpv)) return mpv;
+            if (!dir.Name.Equals("Nocturne.App", StringComparison.OrdinalIgnoreCase) ||
+                !dir.Parent.Name.Equals("src-native", StringComparison.OrdinalIgnoreCase)) continue;
+            var repo = Path.Combine(dir.Parent.Parent.FullName, "resources", "mpv", "mpv.exe");
+            return File.Exists(repo) ? repo : null;
         }
         return null;
     }
